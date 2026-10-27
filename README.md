@@ -37,6 +37,8 @@ make install
   только если конфига ещё нет (существующий не трогается);
 - выполняет `systemctl --user daemon-reload`, включает `aq.service` и
   (пере)запускает его — повторный `make install` обновляет работающий демон;
+- копирует скилл `deploy/skills/aq` в `~/.claude/skills/aq` и `~/.codex/skills/aq`
+  (пути меняются через `SKILLDIRS`); хуки подключаются отдельно;
 - если linger выключен, печатает подсказку: без `loginctl enable-linger $USER`
   демон и все задачи останавливаются при выходе из последней сессии.
 
@@ -45,7 +47,7 @@ make install
 не запустится (`CONFIG_INVALID`).
 
 Каталоги переопределяются переменными make: `BINDIR`, `UNITDIR`, `CONFDIR`,
-`STATEDIR`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
+`STATEDIR`, `SKILLDIRS`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
 `make install SYSTEMCTL=true` только раскладывает файлы.
 
 Проверка после установки:
@@ -308,9 +310,119 @@ aq release --force "$id"   # стенд убран вручную: освобо�
 | 5 | `REJECTED` |
 | 6 | резерв больше не удерживается: `RELEASED`, `TEARING_DOWN`, `TORN_DOWN`, `TEARDOWN_FAILED`, `TEARDOWN_UNKNOWN` |
 
-Уведомления (выдача из очереди, скорое истечение, удержание срока задачами,
-итог снятия, превышение заявленного стендом) пока только записываются в БД
-демона: доставка сессии-владельцу и оператору появится в следующем плане.
+Уведомления о выдаче из очереди, истечении и превышении заявки идут владельцу;
+истечение, удержание задачами, итог и принудительное снятие — оператору (см. ниже).
+
+## Уведомления
+
+Клиент обнаруживает сессию по первому настроенному адаптеру с непустой
+`identity_env`: по умолчанию Codex (`CODEX_THREAD_ID`, push через `codex queue`),
+затем Claude (`CLAUDE_CODE_SESSION_ID`, client-wait через фоновый `aq wait`).
+`--client NAME --session S` задают их явно; `--no-notify` у submit/reserve
+отключает только уведомления сессии. Без обнаруженной сессии CLI работает как
+`cli`. Указанный push-адаптер без сессии — ошибка; отсутствующая в PATH демона
+команда доставки отклоняет заявку до сохранения. PATH сервиса включает
+`%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
+
+Новый push-клиент добавляется без правки ядра:
+
+```toml
+[[agents]]
+name = "pi"
+identity_env = "PI_SESSION"
+delivery = "push"
+command = ["pi", "send", "{session}", "{text}"]
+```
+
+Если есть хотя бы один `[[agents]]`, список **заменяет** умолчания целиком.
+Команда — argv без shell; также поддерживаются `{event_id}`, `{item_id}`,
+`{kind}`. `delivery = "client-wait"` требует пустую command.
+
+После submit/reserve Claude запускает `aq wait ID` с `run_in_background` и
+заканчивает ход; Codex получает пинг автоматически. `aq wait RES_ID --until
+expiring` ждёт предупреждения об истечении или превышении заявки стенда.
+Если он вернулся с `GRANTED`/`stand_over_declared`, обработайте и подтвердите
+событие, затем запустите этот waiter снова фоном для будущего истечения.
+
+```sh
+aq list --mine             # свои активные + завершённые с неподтверждёнными событиями
+aq list --session SESSION  # явный фильтр
+aq result ITEM_ID
+aq ack EVENT_ID            # после записи результата в чек-пойнт
+```
+
+Событие атомарно сохраняется вместе с изменением состояния. Push/webhook
+повторяются с backoff и jitter до успешной доставки (sent); sent без ack
+повторно не будит сессию. Падение демона может дать дубль с тем же event_id:
+сверяйте квитанцию и пропускайте уже обработанные события. Ack до захвата
+события отменяет доставку, после захвата пинг ещё может прийти. `aq wait`
+показывает доставленные event IDs; прерванный waiter можно запустить снова.
+
+Операторские тревоги включаются через конфиг:
+
+```toml
+[webhook]
+url = "https://hooks.example.org/aq"
+token_file = "/absolute/path/to/token"
+timeout = "10s"
+```
+
+POST с `Content-Type: application/json`, `Idempotency-Key: EVENT_ID`, при токене
+`Authorization: Bearer TOKEN`. Токен читается заново при каждой попытке.
+Тело содержит `event_id, kind, audience, item_id, item_kind, item_name, state,
+reason, project, session_id, client_type, detail, text, created_at` (RFC3339).
+Значений env, скрипта снятия и логов в уведомлениях нет; текст ограничен 8 KiB.
+Без URL операторские события сохраняются skipped. Через `give_up_after`
+неудачная доставка становится failed; сбой session-доставки создаёт
+`delivery_failed` оператору, сбой операторской — только логируется.
+Пороги и таймауты — в `[notify]` примера конфига. `aq doctor` показывает
+`ADAPTER_UNAVAILABLE`, `WEBHOOK_FAILING`, а также отключённый webhook.
+
+## MCP
+
+Один бинарник работает как stdio MCP-сервер; демон должен быть запущен отдельно.
+Примеры подключения (выполните самостоятельно):
+
+```sh
+claude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
+```
+
+В конфиге Codex:
+
+```toml
+[mcp_servers.aq]
+command = "/home/USER/.local/bin/aq"
+args = ["mcp"]
+env_vars = ["XDG_RUNTIME_DIR"]
+```
+
+Либо задайте `[mcp_servers.aq.env] AQ_RUNTIME_DIR = "/run/user/1000/agent-queue"`
+(для своего UID), при нестандартных путях также AQ_STATE_DIR и AQ_CONFIG.
+Codex 0.164 фильтрует окружение MCP: сессия автоматически не передаётся.
+Для `queue_submit`/`queue_reserve` передавайте **client и session_id** текущей
+сессии явно, либо осознанно `no_notify: true`. Неизвестная идентичность —
+ошибка, а не молчаливое отключение уведомлений. Если launcher передал правильную
+переменную сессии в MCP env явно, aq обнаружит её.
+[Матрица клиентов и фактические проверки](docs/notes/aq-clients.md).
+
+Инструменты: queue_submit, queue_reserve, queue_extend, queue_release,
+queue_cancel, queue_status, queue_result, queue_list, queue_ack, queue_logs.
+`cwd` и `teardown_file` абсолютные; queue_logs: tail 1..2000 (по умолчанию 200),
+без follow. MCP не будит простаивающую сессию: Claude всё ещё запускает
+`aq wait ID` фоном после постановки через MCP; Codex получает daemon push.
+
+## Хук
+
+`aq hook pretooluse` мягко напоминает о тяжёлой команде вне aq: pytest с `-n`,
+compose up/run, docker run. Он не обращается к демону, не блокирует и при ошибке
+молчит. Шаблоны — `[hook].patterns`. В счётчик hook-hits.jsonl пишутся только
+время, индекс шаблона и клиент, без текста команды; ротация после 1 MiB.
+
+Установка не меняет настройки хуков. Вручную объедините нужный фрагмент
+[Claude](deploy/hooks/claude-settings.json) или [Codex](deploy/hooks/codex-hooks.json)
+с настройками клиента (не перезаписывайте существующие hooks). В обоих matcher
+`Bash`; Codex требует доверить новое определение через `/hooks`.
+Скилл [aq](deploy/skills/aq/SKILL.md) описывает квитанции, ack и снятие резервов.
 
 ## Восстановление
 
@@ -325,11 +437,10 @@ aq release --force "$id"   # стенд убран вручную: освобо�
 
 - Нет backfill: если задача или резерв в голове очереди не помещается, всё
   за ним тоже ждёт.
-- Нет доставки уведомлений: о завершении задачи узнают только через `aq wait`
-  или `aq logs --follow`, а события резервов только записываются в БД; смерть
-  сессии-владельца резерва не отслеживается.
+- Смерть сессии-владельца резерва не определяется; автоматического снятия по
+  этому признаку нет.
 - Нет ретенции логов: старые `jobs/<id>/` не удаляются автоматически.
-- Уведомления, скиллы и ретенция появятся в следующих планах (3–4).
+- Профили, backfill, оценки, статистика и ретенция — следующий план (4).
 - Только Linux с systemd и cgroup v2, только пользовательский режим.
 
 ## Разработка

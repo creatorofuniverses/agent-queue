@@ -19,7 +19,7 @@ import (
 // usageError is a command line mistake; it exits with 64.
 type usageError = client.UsageError
 
-func usagef(format string, a ...any) error { return &usageError{fmt.Sprintf(format, a...)} }
+func usagef(format string, a ...any) error { return &usageError{Message: fmt.Sprintf(format, a...)} }
 
 // exitError carries a specific exit code with an optional message.
 type exitError struct {
@@ -134,7 +134,7 @@ func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 			if errors.Is(err, flag.ErrHelp) {
 				return nil, err
 			}
-			return nil, &usageError{err.Error()}
+			return nil, &usageError{Message: err.Error()}
 		}
 		rest := fs.Args()
 		if len(rest) == 0 {
