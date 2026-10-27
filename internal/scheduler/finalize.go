@@ -58,9 +58,16 @@ const lingerMsg = "processes did not exit within 2x cancel_grace after the comma
 // result, continuously for cancel_grace, means the unit is gone without recording a
 // result: FAILED/LOST. Alive is read before the result: the unit writes result.json
 // before its cgroup empties, so "not alive, then no result" is never a result in flight.
+// A TEARING_DOWN reservation goes to reapTeardownLocked once its Launch has returned.
 func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) {
 	now := s.d.Now()
 	for _, it := range items {
+		if it.IsReservation() {
+			if it.State == model.StateTearingDown && !s.teardownLaunching[it.ID] {
+				s.reapTeardownLocked(ctx, it, now)
+			}
+			continue
+		}
 		if it.State != model.StateRunning && it.State != model.StateCleaning {
 			continue
 		}

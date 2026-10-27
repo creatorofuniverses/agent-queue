@@ -176,7 +176,8 @@ func (s *Scheduler) insertNestedLocked(ctx context.Context, it *model.Item) (*mo
 }
 
 // nestedRejectionLocked is why it may not run within its parent, or "" if it may: the
-// parent is a GRANTED or EXPIRING reservation not held past its TTL, the limit fits the
+// parent is a GRANTED or EXPIRING reservation neither held past its TTL nor due (a due
+// one may be waiting for a teardown slot; new tasks would hold it), the limit fits the
 // task memory, and its expected memory and cpus plus those of the reservation's other
 // non-terminal nested tasks fit the task budget.
 func (s *Scheduler) nestedRejectionLocked(ctx context.Context, it *model.Item) (string, error) {
@@ -193,6 +194,8 @@ func (s *Scheduler) nestedRejectionLocked(ctx context.Context, it *model.Item) (
 		return fmt.Sprintf("reservation %s is %s, not granted", pid, parent.State), nil
 	case parent.TTLHeld:
 		return fmt.Sprintf("reservation %s is held past its TTL; extend it first", pid), nil
+	case !s.d.Now().Before(parent.ExpiresAt):
+		return fmt.Sprintf("reservation %s is past its TTL; extend it first", pid), nil
 	case it.Limit > parent.TaskMemory:
 		return fmt.Sprintf("task budget: memory limit %s exceeds task memory %s of reservation %s",
 			units.FormatSize(it.Limit), units.FormatSize(parent.TaskMemory), pid), nil
@@ -315,10 +318,10 @@ func (s *Scheduler) grantLocked(ctx context.Context, it *model.Item, now time.Ti
 
 // Release ends a reservation without running its teardown script: GRANTED or EXPIRING
 // with no unfinished nested task becomes RELEASED, QUEUED becomes CANCELLED and a
-// terminal one is returned unchanged; anything else is ErrBadState, item unchanged.
-// The nested check and the change share one critical section, so a concurrent
-// --within submit cannot slip in between. force does not lift these rules (its way out
-// of TEARDOWN_FAILED and TEARDOWN_UNKNOWN comes with teardown).
+// terminal one is returned unchanged; with force, TEARDOWN_FAILED and TEARDOWN_UNKNOWN
+// also become RELEASED ("released by operator (--force)"). Anything else (TEARING_DOWN
+// included, force or not) is ErrBadState, item unchanged. The nested check and the
+// change share one critical section, so a concurrent --within submit cannot slip in.
 func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*model.Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -334,7 +337,8 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 		return it, nil
 	case it.State == model.StateQueued:
 		s.endLocked(it, model.StateCancelled, model.ReasonCancelled, "")
-	case it.State == model.StateGranted || it.State == model.StateExpiring:
+	case it.State == model.StateGranted || it.State == model.StateExpiring,
+		force && (it.State == model.StateTeardownFailed || it.State == model.StateTeardownUnknown):
 		active, err := s.d.Store.ListActive(ctx)
 		if err != nil {
 			return nil, err
@@ -343,7 +347,11 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 			return it, fmt.Errorf("%w: reservation %s has %d unfinished nested task(s); wait for them or cancel them first",
 				ErrBadState, id, n)
 		}
-		s.endLocked(it, model.StateReleased, model.ReasonNone, "")
+		diag := ""
+		if it.State == model.StateTeardownFailed || it.State == model.StateTeardownUnknown {
+			diag = "released by operator (--force)"
+		}
+		s.endLocked(it, model.StateReleased, model.ReasonNone, diag)
 	default:
 		return it, fmt.Errorf("%w: reservation %s is %s", ErrBadState, id, it.State)
 	}

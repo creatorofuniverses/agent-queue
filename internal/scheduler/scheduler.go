@@ -96,6 +96,9 @@ type Scheduler struct {
 	waiters        map[model.ItemID]chan struct{} // closed once waitDone
 	passDone       chan struct{}                  // closed and replaced at the end of every pass
 	standUsage     map[model.ItemID]uint64        // fresh stand measurements seen by the last pass
+	// teardownLaunching holds reservations whose teardown Launch is in flight; the
+	// reaper leaves them alone, as it does tasks in STARTING.
+	teardownLaunching map[model.ItemID]bool
 }
 
 // New returns a scheduler that admits nothing (BlockRecovering) until Recover succeeds.
@@ -120,6 +123,8 @@ func New(d Deps) *Scheduler {
 		waiters:      map[model.ItemID]chan struct{}{},
 		passDone:     make(chan struct{}),
 		standUsage:   map[model.ItemID]uint64{},
+
+		teardownLaunching: map[model.ItemID]bool{},
 	}
 }
 
@@ -319,9 +324,10 @@ func (s *Scheduler) stopAsyncLocked(id model.ItemID) {
 	})
 }
 
-// Tick runs one scheduling pass: reap finished or vanished units, warn about and hold
-// expiring reservations, update the pressure gate, admit queue heads while they fit
-// (granting reservations at once), then launch the admitted tasks outside the lock.
+// Tick runs one scheduling pass: reap finished or vanished units (tasks and teardowns),
+// warn about and hold expiring reservations, give free teardown slots to the due ones,
+// update the pressure gate, admit queue heads while they fit (granting reservations at
+// once), then launch the claimed teardowns and the admitted tasks outside the lock.
 func (s *Scheduler) Tick(ctx context.Context) error {
 	s.mu.Lock()
 	items, err := s.d.Store.ListActive(ctx)
@@ -331,11 +337,15 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		return err
 	}
 	s.reapLocked(ctx, items)
-	s.expireLocked(ctx, items, s.d.Now()) // reservations due for teardown stay as they are for now
+	due := s.expireLocked(ctx, items, s.d.Now())
+	teardowns := s.claimTeardownsLocked(ctx, items, due)
 	admitted, err := s.admitLocked(ctx, items)
 	s.endPassLocked()
 	s.mu.Unlock()
 
+	for _, it := range teardowns {
+		s.launchTeardown(ctx, it)
+	}
 	for _, it := range admitted {
 		s.start(ctx, it)
 	}
@@ -412,7 +422,8 @@ func (s *Scheduler) admitTaskLocked(ctx context.Context, it *model.Item, now tim
 // Committed(). Unconsumed: a task's max(0, expected - memory.current) while
 // STARTING/RUNNING; a held reservation's budget max(0, task_memory - Σ memory.current
 // of its STARTING/RUNNING nested tasks) plus its stand, which is max(0, memory -
-// measured) with a fresh measurement of its docker project and memory otherwise.
+// measured) with a fresh measurement of its docker project and memory otherwise, plus
+// while TEARING_DOWN the unused part of its teardown memory (teardownUnconsumedLocked).
 // Nested tasks count only towards their parent's sum. It also hands the meter the
 // held projects and records stand_over_declared once per reservation.
 func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem platform.MemInfo, disk uint64) (admission.Snapshot, []*model.Item, []*model.Item) {
@@ -449,7 +460,8 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			if !it.State.Held() {
 				continue // terminal in this pass
 			}
-			snap.Unconsumed += satSub(it.TaskMemory, nestedCur[it.ID]) + s.standUnconsumedLocked(ctx, it)
+			snap.Unconsumed += satSub(it.TaskMemory, nestedCur[it.ID]) + s.standUnconsumedLocked(ctx, it) +
+				s.teardownUnconsumedLocked(it)
 			if it.DockerProject != "" {
 				projects = append(projects, it.DockerProject)
 			}

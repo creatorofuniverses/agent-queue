@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"resource-dispatcher/internal/admission"
+	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
 	"resource-dispatcher/internal/platform/fake"
@@ -372,4 +373,25 @@ func TestRequestHashCompatibleWithPlan1(t *testing.T) {
 	if active, _ := e.st.ListActive(e.ctx); len(active) != 1 || !slices.ContainsFunc(active, func(it *model.Item) bool { return it.ID == stored.ID }) {
 		t.Fatalf("active %v", active)
 	}
+}
+
+// Ruling T5a: a reservation past its TTL (here waiting for a teardown slot) takes no new
+// nested tasks, or a busy teardown queue would let them hold it forever.
+func TestWithinRefusedWhenDue(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.Reservations.TeardownConcurrency = 1 })
+	busy := e.grantBudget(t, 100*mib, 0, 0)      // expires first and takes the only slot
+	res := e.grantBudget(t, 100*mib, 200*mib, 1) // TTL 2h
+	e.tickAt(t, e.get(t, res.ID).ExpiresAt)
+	e.wantState(t, busy.ID, model.StateTearingDown, model.ReasonNone)
+	if it := e.wantState(t, res.ID, model.StateExpiring, model.ReasonNone); it.TTLHeld {
+		t.Fatal("due reservation without nested tasks is held")
+	}
+	e.wantRejected(t, e.within(res.ID, 100*mib), "reservation "+string(res.ID)+" is past its TTL; extend it first")
+
+	if _, err := e.s.Extend(e.ctx, res.ID, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	nested := e.submit(t, e.within(res.ID, 100*mib))
+	e.tick(t)
+	e.wantState(t, nested.ID, model.StateRunning, model.ReasonNone)
 }

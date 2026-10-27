@@ -279,7 +279,7 @@ func TestReservationCPUsCount(t *testing.T) {
 }
 
 // standScenario grants A (2 GiB, docker project p unless empty) with 4.5 GiB available,
-// lets a day pass and queues B (2 GiB).
+// lets almost a day pass (A's TTL is a day: it must not expire) and queues B (2 GiB).
 func standScenario(t *testing.T, e *env, project string) (a, b *model.Item) {
 	t.Helper()
 	e.available(9 * gib / 2)
@@ -288,7 +288,7 @@ func standScenario(t *testing.T, e *env, project string) (a, b *model.Item) {
 	a = e.reserve(t, ra)
 	e.tick(t)
 	e.wantState(t, a.ID, model.StateGranted, model.ReasonNone)
-	e.clk.Advance(24 * time.Hour)
+	e.clk.Advance(24*time.Hour - time.Minute)
 	b = e.reserve(t, e.rreq(2*gib))
 	e.tick(t)
 	return a, b
