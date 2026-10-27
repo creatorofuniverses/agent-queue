@@ -16,6 +16,7 @@ import (
 
 type ExecArgs struct {
 	JobDir, TmpDir       string
+	Cwd                  string // the command's working directory; empty keeps ours
 	MaxStdout, MaxStderr uint64
 	Argv                 []string
 }
@@ -24,7 +25,7 @@ type execMeta struct {
 	LogsTruncated bool `json:"logs_truncated"`
 }
 
-// ParseExecArgs parses: --job-dir D --tmp-dir T --max-stdout N --max-stderr N -- argv...
+// ParseExecArgs parses: --job-dir D --tmp-dir T [--cwd C] --max-stdout N --max-stderr N -- argv...
 func ParseExecArgs(args []string) (ExecArgs, error) {
 	var a ExecArgs
 	var haveJob, haveTmp, haveOut, haveErr bool
@@ -43,6 +44,8 @@ func ParseExecArgs(args []string) (ExecArgs, error) {
 			a.JobDir, haveJob = v, true
 		case "--tmp-dir":
 			a.TmpDir, haveTmp = v, true
+		case "--cwd":
+			a.Cwd = v
 		case "--max-stdout", "--max-stderr":
 			n, err := strconv.ParseUint(v, 10, 64)
 			if err != nil {
@@ -92,6 +95,7 @@ func Exec(a ExecArgs) int {
 	errW := newCapWriter(errF, a.MaxStderr)
 
 	cmd := exec.Command(a.Argv[0], a.Argv[1:]...)
+	cmd.Dir = a.Cwd
 	cmd.Env = append(os.Environ(), "TMPDIR="+a.TmpDir, "TMP="+a.TmpDir, "TEMP="+a.TmpDir)
 	cmd.Stdout = outW
 	cmd.Stderr = errW

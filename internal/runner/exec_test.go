@@ -84,8 +84,8 @@ func TestExecLaunchError(t *testing.T) {
 }
 
 func TestParseExecArgs(t *testing.T) {
-	a, err := ParseExecArgs([]string{"--job-dir", "J", "--tmp-dir", "T", "--max-stdout", "5", "--max-stderr", "6", "--", "echo", "--x"})
-	if err != nil || a.JobDir != "J" || a.TmpDir != "T" || a.MaxStdout != 5 || a.MaxStderr != 6 || len(a.Argv) != 2 || a.Argv[1] != "--x" {
+	a, err := ParseExecArgs([]string{"--job-dir", "J", "--tmp-dir", "T", "--cwd", "C", "--max-stdout", "5", "--max-stderr", "6", "--", "echo", "--x"})
+	if err != nil || a.JobDir != "J" || a.TmpDir != "T" || a.Cwd != "C" || a.MaxStdout != 5 || a.MaxStderr != 6 || len(a.Argv) != 2 || a.Argv[1] != "--x" {
 		t.Fatalf("%+v %v", a, err)
 	}
 	if _, err := ParseExecArgs([]string{"--job-dir", "J"}); err == nil {
@@ -104,5 +104,23 @@ func TestExecDescendantHoldsPipe(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Exec hung on inherited pipe")
+	}
+}
+
+// The command runs in Cwd; the supervisor itself does not change directory.
+func TestExecRunsInCwd(t *testing.T) {
+	d, cwd := t.TempDir(), t.TempDir()
+	before, _ := os.Getwd()
+	a := ExecArgs{JobDir: filepath.Join(d, "job"), TmpDir: filepath.Join(d, "tmp"), Cwd: cwd,
+		MaxStdout: 1 << 20, MaxStderr: 1 << 20, Argv: []string{"sh", "-c", "pwd; rmdir \"$PWD\""}}
+	if code := Exec(a); code != 0 {
+		t.Fatalf("code %d", code)
+	}
+	b, _ := os.ReadFile(filepath.Join(a.JobDir, "stdout.log"))
+	if strings.TrimSpace(string(b)) != cwd {
+		t.Fatalf("pwd %q, want %q", b, cwd)
+	}
+	if after, _ := os.Getwd(); after != before {
+		t.Fatalf("supervisor cwd changed to %q", after)
 	}
 }

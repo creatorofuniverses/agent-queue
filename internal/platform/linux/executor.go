@@ -111,9 +111,6 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 	for _, p := range append(props, cfg.ExtraProperties...) {
 		args = append(args, "-p", p)
 	}
-	if spec.Cwd != "" {
-		args = append(args, "--working-directory", spec.Cwd)
-	}
 	keys := make([]string, 0, len(spec.Env))
 	for k := range spec.Env {
 		keys = append(keys, k)
@@ -122,8 +119,10 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 	for _, k := range keys {
 		args = append(args, "--setenv", k+"="+spec.Env[k])
 	}
+	// The cwd goes to _exec, not to the unit: WorkingDirectory= also applies to
+	// ExecStopPost, which would fail (200/CHDIR) if the job deleted its cwd.
 	args = append(args, "--", cfg.AqBinary, "_exec",
-		"--job-dir", spec.JobDir, "--tmp-dir", spec.TmpDir,
+		"--job-dir", spec.JobDir, "--tmp-dir", spec.TmpDir, "--cwd", spec.Cwd,
 		"--max-stdout", strconv.FormatUint(spec.MaxStdout, 10),
 		"--max-stderr", strconv.FormatUint(spec.MaxStderr, 10), "--")
 	return append(args, spec.Argv...)

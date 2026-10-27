@@ -15,6 +15,7 @@ import (
 
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
+	"resource-dispatcher/internal/scheduler"
 )
 
 const testPool = 1 << 30
@@ -47,9 +48,13 @@ func newTestExecutor(t *testing.T, extra ...string) *Executor {
 func launch(t *testing.T, e *Executor, limit uint64, timeout time.Duration, argv ...string) (platform.LaunchSpec, error) {
 	t.Helper()
 	d := t.TempDir()
+	cwd := filepath.Join(d, "cwd")
+	if err := os.Mkdir(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	id := model.NewID()
 	spec := platform.LaunchSpec{
-		ID: id, Argv: argv, Cwd: d,
+		ID: id, Argv: argv, Cwd: cwd,
 		Env:   map[string]string{"PATH": os.Getenv("PATH"), "HOME": os.Getenv("HOME")},
 		Limit: limit, MemoryHigh: limit, CPUs: 1,
 		Timeout: timeout, KillGrace: 2 * time.Second,
@@ -243,5 +248,21 @@ func TestIntegLaunchFailsWhenPropertyRejected(t *testing.T) {
 		"aqtest-"+string(spec.ID)+".service").Output()
 	if s := strings.TrimSpace(string(out)); s != "not-found" {
 		t.Fatalf("unit LoadState %q", s)
+	}
+}
+
+// A job may delete its own working directory; ExecStopPost must still record the result.
+func TestIntegJobDeletesItsCwd(t *testing.T) {
+	e := newTestExecutor(t)
+	spec, err := launch(t, e, 64<<20, time.Minute, "sh", "-c", `rm -rf "$PWD"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := waitResult(t, spec.JobDir, 30*time.Second)
+	if st, r := scheduler.MapOutcome(*info, false, false); st != model.StateSucceeded {
+		t.Fatalf("outcome %s/%s for %+v", st, r, info)
+	}
+	if _, err := os.Stat(spec.Cwd); !os.IsNotExist(err) {
+		t.Fatalf("cwd not deleted by the job: %v", err)
 	}
 }

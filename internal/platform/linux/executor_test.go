@@ -51,7 +51,7 @@ func TestSystemdRunArgs(t *testing.T) {
 		}
 	}
 	for _, p := range [][2]string{
-		{"--unit", "aq-abc"}, {"--slice", "aq.slice"}, {"--working-directory", "/work"},
+		{"--unit", "aq-abc"}, {"--slice", "aq.slice"},
 		{"--setenv", "PATH=/usr/bin"}, {"--setenv", "AQ_JOB_ID=abc"},
 		{"-p", "MemoryMax=4294967296"}, {"-p", "MemoryHigh=3865470566"}, {"-p", "MemorySwapMax=0"},
 		{"-p", "CPUQuota=200%"}, {"-p", "KillMode=control-group"}, {"-p", "OOMPolicy=kill"},
@@ -62,6 +62,12 @@ func TestSystemdRunArgs(t *testing.T) {
 			t.Errorf("missing %s %s in %q", p[0], p[1], args)
 		}
 	}
+	// The unit (and so ExecStopPost) must not depend on the job's cwd still existing.
+	if slices.Contains(args, "--working-directory") || slices.ContainsFunc(args, func(a string) bool {
+		return strings.HasPrefix(a, "WorkingDirectory=")
+	}) {
+		t.Errorf("unit gets the job cwd as its working directory: %q", args)
+	}
 	for _, a := range args {
 		if strings.HasPrefix(a, "Memory") && strings.Contains(a, "%") {
 			t.Errorf("percent in %s", a)
@@ -71,7 +77,7 @@ func TestSystemdRunArgs(t *testing.T) {
 	if i < 0 {
 		t.Fatalf("no -- in %q", args)
 	}
-	want := []string{"/bin/aq", "_exec", "--job-dir", "/state/jobs/abc", "--tmp-dir", "/state/tmp/abc",
+	want := []string{"/bin/aq", "_exec", "--job-dir", "/state/jobs/abc", "--tmp-dir", "/state/tmp/abc", "--cwd", "/work",
 		"--max-stdout", "100", "--max-stderr", "200", "--", "python3", "-m", "pytest", "a b"}
 	if !slices.Equal(args[i+1:], want) {
 		t.Fatalf("tail %q", args[i+1:])
