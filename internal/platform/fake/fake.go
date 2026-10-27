@@ -68,12 +68,12 @@ func (e *Executor) Launch(_ context.Context, spec platform.LaunchSpec) (string, 
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.jobDir[spec.ID] = spec.JobDir // a failed launch may still leave a unit that finishes
 	if e.failErr != nil {
 		return "", e.failErr
 	}
 	e.launched = append(e.launched, spec)
 	e.alive[spec.ID] = true
-	e.jobDir[spec.ID] = spec.JobDir
 	return "aq-" + string(spec.ID) + ".service", nil
 }
 

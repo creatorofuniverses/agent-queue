@@ -487,6 +487,66 @@ func TestLaunchFailure(t *testing.T) {
 	e.wantState(t, next.ID, model.StateRunning, model.ReasonNone)
 }
 
+// systemd-run failed after a cancel arrived: the user asked for the end, so CANCELLED.
+func TestLaunchErrorAfterCancelIsCancelled(t *testing.T) {
+	e := newEnv(t, nil)
+	e.ex.FailLaunch(errors.New("systemd-run exploded"))
+	it := e.submit(t, e.req(gib))
+	e.ex.SetBeforeLaunch(func(sp platform.LaunchSpec) {
+		if _, err := e.s.Cancel(e.ctx, sp.ID, "user"); err != nil {
+			t.Error(err)
+		}
+	})
+	e.tick(t)
+	got := e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
+	if !strings.Contains(got.Diagnostic, "exploded") {
+		t.Fatalf("diagnostic %q", got.Diagnostic)
+	}
+}
+
+// Launch failed but its cleanup Stop did not end the unit: the item must not go
+// terminal (that would free resources still in use). It stays RUNNING with a cancel
+// that the reaper keeps enforcing, and settles as LAUNCH_FAILED once the unit ends.
+func TestLaunchErrorWithLiveUnitStaysRunning(t *testing.T) {
+	for _, userCancel := range []bool{false, true} {
+		e := newEnv(t, nil)
+		e.ex.FailLaunch(errors.New("memory.max not applied; stop failed"))
+		it := e.submit(t, e.req(gib))
+		e.ex.SetBeforeLaunch(func(sp platform.LaunchSpec) {
+			e.ex.SetAlive(sp.ID, true)
+			if userCancel {
+				if _, err := e.s.Cancel(e.ctx, sp.ID, "user"); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+		e.tick(t)
+		e.ex.SetBeforeLaunch(nil)
+		e.settle()
+		got := e.wantState(t, it.ID, model.StateRunning, model.ReasonNone)
+		if !got.CancelRequested || !strings.Contains(got.Diagnostic, "stop failed") {
+			t.Fatalf("running item %+v", got)
+		}
+		if !contains(e.ex.Stopped(), it.ID) {
+			t.Fatalf("unit not stopped again")
+		}
+		e.ex.FailLaunch(nil)
+		next := e.submit(t, e.req(gib))
+		e.tick(t)
+		e.wantState(t, next.ID, model.StateQueued, model.ReasonNone) // resources still held
+
+		e.finish(it.ID, platform.ExitInfo{ServiceResult: "exit-code", ExitStatus: "143"})
+		e.tick(t)
+		if userCancel {
+			e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
+		} else {
+			e.wantState(t, it.ID, model.StateFailed, model.ReasonLaunchFailed)
+		}
+		e.tick(t)
+		e.wantState(t, next.ID, model.StateRunning, model.ReasonNone)
+	}
+}
+
 func TestCleaningHoldsResources(t *testing.T) {
 	e := newEnv(t, nil)
 	a := e.submit(t, e.req(gib))

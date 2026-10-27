@@ -30,6 +30,10 @@ import (
 // ErrRejected: the request failed validation; the item is stored as REJECTED.
 var ErrRejected = errors.New("request rejected")
 
+// launchFailedCancel is the CancelReason of a unit stopped because its launch
+// failed; such an item settles as LAUNCH_FAILED rather than CANCELLED.
+const launchFailedCancel = "launch failed"
+
 // minMemory keeps room for the unit's ExecStopPost recorder under MemoryMax (R9).
 const minMemory = 64 << 20
 
@@ -376,6 +380,15 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 	s.mu.Unlock()
 
 	unit, lerr := s.d.Exec.Launch(ctx, s.launchSpec(cur))
+	unitAlive := false
+	if lerr != nil {
+		// Launch stops the unit on failure, but that Stop may itself have failed.
+		alive, aerr := s.d.Exec.Alive(pctx, it.ID)
+		if aerr != nil {
+			slog.Warn("scheduler: read unit liveness after failed launch", "id", it.ID, "err", aerr)
+		}
+		unitAlive = alive || aerr != nil
+	}
 
 	s.mu.Lock()
 	cur, err = s.d.Store.Get(pctx, it.ID)
@@ -385,9 +398,19 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 		slog.Error("scheduler: load launched item", "id", it.ID, "launched", lerr == nil, "err", err)
 		return
 	}
-	if lerr != nil {
+	switch {
+	case lerr != nil && unitAlive:
+		// Not terminal while processes may run: stay RUNNING (resources counted) with a
+		// cancel that the reaper enforces; it settles the item once the unit is gone.
+		cur.State, cur.StartedAt, cur.Diagnostic = model.StateRunning, s.d.Now(), lerr.Error()
+		if !cur.CancelRequested {
+			cur.CancelRequested, cur.CancelReason = true, launchFailedCancel
+		}
+	case lerr != nil && cur.CancelRequested:
+		s.endLocked(cur, model.StateCancelled, model.ReasonCancelled, lerr.Error())
+	case lerr != nil:
 		s.endLocked(cur, model.StateFailed, model.ReasonLaunchFailed, lerr.Error())
-	} else {
+	default:
 		cur.State, cur.StartedAt, cur.UnitName = model.StateRunning, s.d.Now(), unit
 		if gitOK {
 			cur.GitRev, cur.GitDirty = rev, dirty
@@ -397,7 +420,7 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 		// The item stays STARTING in the store; Recover settles it from the unit.
 		slog.Error("scheduler: record launch outcome", "id", cur.ID, "state", cur.State, "err", err)
 	}
-	if lerr == nil && cur.CancelRequested { // cancelled while Launch was in flight
+	if cur.State == model.StateRunning && cur.CancelRequested { // cancelled while Launch was in flight, or launch failed
 		s.stopAsyncLocked(it.ID)
 	}
 	s.mu.Unlock()
