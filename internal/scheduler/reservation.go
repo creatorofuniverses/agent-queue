@@ -456,7 +456,9 @@ func (s *Scheduler) expireLocked(ctx context.Context, items []*model.Item, now t
 				it.State = model.StateGranted // not persisted: warn again next pass
 			}
 		}
-		if now.Before(it.ExpiresAt) {
+		// A reservation held past its TTL is due once its last nested task ends,
+		// not at the held deadline.
+		if now.Before(it.ExpiresAt) && !(it.TTLHeld && nested[it.ID] == 0) {
 			continue
 		}
 		if n := nested[it.ID]; n > 0 {

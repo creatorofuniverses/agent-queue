@@ -303,9 +303,8 @@ func TestExpiryHeldByNestedTasks(t *testing.T) {
 	}
 	e.wantRejected(t, e.within(res.ID, 100*mib), "held past its TTL")
 
-	e.finish(nested.ID, success)
-	e.tick(t)
-	e.wantState(t, nested.ID, model.StateSucceeded, model.ReasonNone)
+	// Extending while the nested task still runs lifts the hold (once it ends,
+	// a held reservation is torn down at once: TestHeldReservationTornDownWhenTasksEnd).
 	got, err := e.s.Extend(e.ctx, res.ID, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -349,5 +348,51 @@ func TestHoldExtendsAgainWhenDeadlineMoves(t *testing.T) {
 	}
 	if n := len(e.events(t, res.ID, model.EventReservationHeldByTask)); n != 2 {
 		t.Fatalf("%d held events, want 2 (one per extension)", n)
+	}
+}
+
+// A reservation held past its TTL is torn down as soon as its last nested task
+// ends, not at the held deadline (owner decision 2026-10-28).
+func TestHeldReservationTornDownWhenTasksEnd(t *testing.T) {
+	e := newEnv(t, nil)
+	res, t0 := e.grantTTL(t, time.Hour, "sess-1")
+	e.clk.Advance(t0.Add(50 * time.Minute).Sub(e.clk.Now()))
+	r := e.within(res.ID, 100*mib)
+	r.Timeout = 2 * time.Hour
+	nested, err := e.s.Submit(e.ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.tick(t)
+	e.tickAt(t, t0.Add(time.Hour))
+	if it := e.wantState(t, res.ID, model.StateExpiring, model.ReasonNone); !it.TTLHeld {
+		t.Fatal("reservation not held by its running nested task")
+	}
+
+	e.clk.Advance(5 * time.Minute)
+	e.finish(nested.ID, success)
+	e.tick(t)
+	e.wantState(t, nested.ID, model.StateSucceeded, model.ReasonNone)
+	e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone)
+	if n := len(teardownSpecs(e)); n != 1 {
+		t.Fatalf("%d teardown launches, want 1 right after the nested task ended", n)
+	}
+}
+
+// An unheld reservation is still kept until its TTL even with no nested tasks.
+func TestUnheldReservationWaitsForTTL(t *testing.T) {
+	e := newEnv(t, nil)
+	res, t0 := e.grantTTL(t, time.Hour, "sess-1")
+	r := e.within(res.ID, 100*mib)
+	nested, err := e.s.Submit(e.ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.tick(t)
+	e.finish(nested.ID, success)
+	e.tickAt(t, t0.Add(30*time.Minute))
+	e.wantState(t, res.ID, model.StateGranted, model.ReasonNone)
+	if n := len(teardownSpecs(e)); n != 0 {
+		t.Fatalf("%d teardown launches before the TTL", n)
 	}
 }
