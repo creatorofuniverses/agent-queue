@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/protocol"
@@ -74,6 +75,18 @@ teardown_timeout = "20s"
 teardown_memory = "64M"
 `
 
+const testAgents = `
+[[agents]]
+name = "fakecodex"
+identity_env = "FAKE_SESSION"
+delivery = "push"
+command = ["/usr/bin/false", "{session}", "{text}"]
+[[agents]]
+name = "claude"
+identity_env = "CLAUDE_CODE_SESSION_ID"
+delivery = "client-wait"
+`
+
 // newHarness writes the config (base plus extra TOML) and starts the daemon.
 func newHarness(t *testing.T, extra string) *harness {
 	t.Helper()
@@ -84,11 +97,25 @@ func newHarness(t *testing.T, extra string) *harness {
 	}
 	h := &harness{t: t, dir: dir}
 	cfg := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(cfg, []byte(baseConfig+extra), 0o600); err != nil {
+	body := baseConfig + extra
+	if !strings.Contains(extra, "[[agents]]") {
+		body += testAgents
+	}
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	loaded, err := config.Load(cfg)
+	if err != nil {
+		os.RemoveAll(dir)
+		t.Fatal(err)
+	}
+	identities := map[string]bool{"CODEX_THREAD_ID": true, "CLAUDE_CODE_SESSION_ID": true}
+	for _, a := range loaded.Agents {
+		identities[a.IdentityEnv] = true
+	}
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "AQ_") {
+		key, _, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(key, "AQ_") && !identities[key] {
 			h.env = append(h.env, kv)
 		}
 	}
@@ -200,15 +227,29 @@ func (h *harness) cleanup() {
 // aq runs the client and returns stdout, stderr and the exit code (-1 if it
 // could not run). Safe to call from any goroutine.
 func (h *harness) aq(args ...string) (string, string, int) {
-	return h.aqIn(h.dir, args...)
+	return h.aqEnv(nil, args...)
 }
 
 // aqIn is aq run from directory dir.
+func (h *harness) aqEnv(vars map[string]string, args ...string) (string, string, int) {
+	return h.aqWithEnvIn(h.dir, vars, args...)
+}
 func (h *harness) aqIn(dir string, args ...string) (string, string, int) {
+	return h.aqWithEnvIn(dir, nil, args...)
+}
+func (h *harness) aqWithEnvIn(dir string, vars map[string]string, args ...string) (string, string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, aqBin, args...)
-	cmd.Env = h.env
+	for _, kv := range h.env {
+		key, _, _ := strings.Cut(kv, "=")
+		if _, overridden := vars[key]; !overridden {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	for k, v := range vars {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
