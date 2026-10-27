@@ -161,3 +161,48 @@ func TestPathsDefaults(t *testing.T) {
 		t.Fatal("missing XDG_RUNTIME_DIR must error (nothing in /tmp)")
 	}
 }
+
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	body := "pool_memroy = \"1G\"\npool_cpus = 2\n[pressure]\nclose_aftr = \"1s\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "pool_memroy") || !strings.Contains(err.Error(), "pressure.close_aftr") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestValidateSliceAndPrefix(t *testing.T) {
+	for _, s := range []string{"aq.slice", "aqtest.slice", "aq-test.slice", "my_pool.slice"} {
+		c := Default()
+		c.SliceName = s
+		if err := c.Validate(64*gib, 20); err != nil {
+			t.Errorf("slice %q: %v", s, err)
+		}
+	}
+	for _, s := range []string{"", "aq", "aq.service", ".slice", "-.slice", "-aq.slice", "aq-.slice", "a--b.slice",
+		"a/b.slice", "a b.slice", "app.slice", "background.slice", "session.slice", "user.slice", "system.slice",
+		"init.scope", "init.slice"} {
+		c := Default()
+		c.SliceName = s
+		if err := c.Validate(64*gib, 20); err == nil || !strings.Contains(err.Error(), "slice_name") {
+			t.Errorf("slice %q: got %v", s, err)
+		}
+	}
+	for _, p := range []string{"aq-", "aqtest-", "a_b-", "A1-"} {
+		c := Default()
+		c.UnitPrefix = p
+		if err := c.Validate(64*gib, 20); err != nil {
+			t.Errorf("prefix %q: %v", p, err)
+		}
+	}
+	for _, p := range []string{"", "-", "aq", "a q-", "aq/-", "aq.-", "aq@-"} {
+		c := Default()
+		c.UnitPrefix = p
+		if err := c.Validate(64*gib, 20); err == nil || !strings.Contains(err.Error(), "unit_prefix") {
+			t.Errorf("prefix %q: got %v", p, err)
+		}
+	}
+}

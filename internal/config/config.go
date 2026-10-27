@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -84,11 +85,19 @@ type rawConfig struct {
 func Load(path string) (Config, error) {
 	c := Default()
 	var raw rawConfig
-	if _, err := toml.DecodeFile(path, &raw); err != nil {
+	md, err := toml.DecodeFile(path, &raw)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return c, nil
 		}
 		return Config{}, fmt.Errorf("config %s: %w", path, err)
+	}
+	if und := md.Undecoded(); len(und) > 0 {
+		keys := make([]string, len(und))
+		for i, k := range und {
+			keys[i] = k.String()
+		}
+		return Config{}, fmt.Errorf("config %s: unknown keys: %s", path, strings.Join(keys, ", "))
 	}
 	var errs []error
 	size := func(key string, src *string, dst *uint64) {
@@ -167,5 +176,45 @@ func (c Config) Validate(memTotal uint64, numCPU int) error {
 	if !(c.MemoryHighRatio > 0 && c.MemoryHighRatio <= 1) {
 		return fmt.Errorf("memory_high_ratio %v must be in (0, 1]", c.MemoryHighRatio)
 	}
+	if err := validateSliceName(c.SliceName); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(c.UnitPrefix, "-") || !unitWord(strings.TrimSuffix(c.UnitPrefix, "-")) {
+		return fmt.Errorf("unit_prefix %q must be [A-Za-z0-9_-] ending in \"-\", not starting with \"-\"", c.UnitPrefix)
+	}
 	return nil
+}
+
+// reservedSlices are the user manager's own slices (and init.scope): the daemon
+// stops every unit in its slice it does not know, and sets the slice's memory.max.
+var reservedSlices = []string{"app", "background", "session", "user", "system", "machine", "init"}
+
+func validateSliceName(s string) error {
+	name, ok := strings.CutSuffix(s, ".slice")
+	switch {
+	case !ok:
+		return fmt.Errorf("slice_name %q must end in .slice", s)
+	case !unitWord(name) || strings.HasSuffix(name, "-") || strings.Contains(name, "--"):
+		// "-.slice" is the root slice; a dash nests ("a-b.slice" is inside "a.slice")
+		return fmt.Errorf("slice_name %q must be [A-Za-z0-9_-] with no leading, trailing or double \"-\"", s)
+	}
+	for _, r := range reservedSlices {
+		if name == r {
+			return fmt.Errorf("slice_name %q is a system slice", s)
+		}
+	}
+	return nil
+}
+
+// unitWord reports whether s is non-empty, [A-Za-z0-9_-] only, and does not start with "-".
+func unitWord(s string) bool {
+	if s == "" || s[0] == '-' {
+		return false
+	}
+	for _, c := range s {
+		if !(c == '_' || c == '-' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
