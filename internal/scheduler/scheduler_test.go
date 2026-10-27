@@ -1,0 +1,634 @@
+package scheduler
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"resource-dispatcher/internal/admission"
+	"resource-dispatcher/internal/config"
+	"resource-dispatcher/internal/model"
+	"resource-dispatcher/internal/platform"
+	"resource-dispatcher/internal/platform/fake"
+	"resource-dispatcher/internal/store"
+)
+
+const (
+	mib = uint64(1) << 20
+	gib = uint64(1) << 30
+)
+
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+type env struct {
+	s     *Scheduler
+	st    *store.Store
+	ex    *fake.Executor
+	host  *fake.Host
+	clk   *clock
+	paths config.Paths
+	cwd   string
+	ctx   context.Context
+}
+
+// newEnv builds a scheduler over a real store, fake platform and a manual clock.
+// Defaults: pool 1 GiB / 16 CPUs, a roomy host (64 GiB, floor 6.4 GiB), no pressure.
+func newEnv(t *testing.T, mutate func(*config.Config)) *env {
+	t.Helper()
+	cfg := config.Default()
+	cfg.PoolMemory = gib
+	cfg.PoolCPUs = 16
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "aq.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	e := &env{
+		st:    st,
+		ex:    fake.NewExecutor(),
+		host:  fake.NewHost(),
+		clk:   &clock{t: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)},
+		paths: config.Paths{StateDir: filepath.Join(dir, "state"), RuntimeDir: filepath.Join(dir, "run")},
+		cwd:   t.TempDir(),
+		ctx:   context.Background(),
+	}
+	e.host.Set(platform.MemInfo{Total: 64 * gib, Available: 64 * gib})
+	e.host.SetDisk(100 * gib)
+	e.s = New(Deps{Store: st, Exec: e.ex, Host: e.host, Cfg: cfg, Paths: e.paths, Now: e.clk.Now})
+	return e
+}
+
+func (e *env) req(mem uint64) SubmitRequest {
+	return SubmitRequest{Argv: []string{"true"}, Cwd: e.cwd, Limit: mem, CPUs: 1, Timeout: time.Hour}
+}
+
+func (e *env) submit(t *testing.T, r SubmitRequest) *model.Item {
+	t.Helper()
+	e.clk.Advance(time.Millisecond) // distinct created_at for FIFO
+	it, err := e.s.Submit(e.ctx, r)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if it.State != model.StateQueued {
+		t.Fatalf("submitted state %s", it.State)
+	}
+	return it
+}
+
+func (e *env) tick(t *testing.T) {
+	t.Helper()
+	if err := e.s.Tick(e.ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+}
+
+func (e *env) get(t *testing.T, id model.ItemID) *model.Item {
+	t.Helper()
+	it, err := e.st.Get(e.ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return it
+}
+
+func (e *env) wantState(t *testing.T, id model.ItemID, st model.State, r model.Reason) *model.Item {
+	t.Helper()
+	it := e.get(t, id)
+	if it.State != st || it.Reason != r {
+		t.Fatalf("item %s: state %s/%s, want %s/%s (diag %q)", id, it.State, it.Reason, st, r, it.Diagnostic)
+	}
+	return it
+}
+
+func launchedIDs(ex *fake.Executor) []model.ItemID {
+	var out []model.ItemID
+	for _, s := range ex.Launched() {
+		out = append(out, s.ID)
+	}
+	return out
+}
+
+func contains(ids []model.ItemID, id model.ItemID) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+// finish makes the fake unit report a result and empties its cgroup.
+func (e *env) finish(id model.ItemID, info platform.ExitInfo) {
+	e.ex.Finish(id, info)
+	e.ex.SetAlive(id, false)
+}
+
+var success = platform.ExitInfo{ServiceResult: "success", ExitCode: "exited", ExitStatus: "0"}
+
+func TestPriorityOrder(t *testing.T) {
+	e := newEnv(t, nil)
+	first := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.wantState(t, first.ID, model.StateRunning, model.ReasonNone)
+
+	low := e.req(gib)
+	low.Priority = model.PriorityLow
+	lowIt := e.submit(t, low)
+	high := e.req(gib)
+	high.Priority = model.PriorityHigh
+	highIt := e.submit(t, high)
+	e.tick(t)
+	if n := len(e.ex.Launched()); n != 1 {
+		t.Fatalf("launched %d while pool is full", n)
+	}
+
+	e.finish(first.ID, success)
+	e.tick(t)
+	e.wantState(t, first.ID, model.StateSucceeded, model.ReasonNone)
+	e.wantState(t, highIt.ID, model.StateRunning, model.ReasonNone)
+	e.wantState(t, lowIt.ID, model.StateQueued, model.ReasonNone)
+	if got := launchedIDs(e.ex); len(got) != 2 || got[1] != highIt.ID {
+		t.Fatalf("launch order %v, want high second", got)
+	}
+}
+
+func TestHeadOfLineNoBackfill(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.PoolMemory = 16 * gib })
+	running := e.submit(t, e.req(8*gib))
+	e.tick(t)
+	e.wantState(t, running.ID, model.StateRunning, model.ReasonNone)
+
+	head := e.submit(t, e.req(10*gib))
+	small := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.wantState(t, head.ID, model.StateQueued, model.ReasonNone)
+	e.wantState(t, small.ID, model.StateQueued, model.ReasonNone)
+	id, dec := e.s.HeadDecision()
+	if id != head.ID || dec.Admit || dec.Blocker != admission.BlockPoolMemory {
+		t.Fatalf("head decision %s %+v, want %s pool_memory", id, dec, head.ID)
+	}
+}
+
+func TestHeadDecisionEmptyQueue(t *testing.T) {
+	e := newEnv(t, nil)
+	e.tick(t)
+	if id, dec := e.s.HeadDecision(); id != "" || !dec.Admit {
+		t.Fatalf("empty queue: %q %+v", id, dec)
+	}
+}
+
+func TestPoolNeverExceeded(t *testing.T) {
+	e := newEnv(t, nil)
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := e.s.Submit(e.ctx, e.req(300*mib)); err != nil {
+				errs <- err
+			}
+			if err := e.s.Tick(e.ctx); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	e.tick(t)
+
+	all, err := e.st.List(e.ctx, store.ListFilter{IncludeTerminal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var running int
+	var sum uint64
+	for _, it := range all {
+		switch it.State {
+		case model.StateRunning:
+			running++
+			sum += it.Expected
+		case model.StateQueued:
+		default:
+			t.Fatalf("unexpected state %s", it.State)
+		}
+	}
+	if running != 3 || sum > gib || len(e.ex.Launched()) != 3 {
+		t.Fatalf("running %d (sum %d, launched %d), want 3 within 1 GiB", running, sum, len(e.ex.Launched()))
+	}
+}
+
+func TestRejectTooLargeAndInvalid(t *testing.T) {
+	e := newEnv(t, nil)
+	cases := map[string]func(r *SubmitRequest){
+		"too large":        func(r *SubmitRequest) { r.Limit = 2 * gib },
+		"zero memory":      func(r *SubmitRequest) { r.Limit = 0 },
+		"below 64 MiB":     func(r *SubmitRequest) { r.Limit = 63 * mib },
+		"relative cwd":     func(r *SubmitRequest) { r.Cwd = "rel/dir" },
+		"missing cwd":      func(r *SubmitRequest) { r.Cwd = filepath.Join(e.cwd, "nope") },
+		"empty argv":       func(r *SubmitRequest) { r.Argv = nil },
+		"zero timeout":     func(r *SubmitRequest) { r.Timeout = 0 },
+		"zero cpus":        func(r *SubmitRequest) { r.CPUs = 0 },
+		"expected > limit": func(r *SubmitRequest) { r.Expected = r.Limit + 1 },
+		"cpus exceed pool": func(r *SubmitRequest) { r.CPUs = 17 },
+	}
+	for name, mut := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := e.req(256 * mib)
+			mut(&r)
+			it, err := e.s.Submit(e.ctx, r)
+			if !errors.Is(err, ErrRejected) {
+				t.Fatalf("err %v, want ErrRejected", err)
+			}
+			if it == nil || it.State != model.StateRejected || it.Diagnostic == "" {
+				t.Fatalf("item %+v, want REJECTED with diagnostic", it)
+			}
+			e.wantState(t, it.ID, model.StateRejected, model.ReasonNone)
+		})
+	}
+	e.tick(t)
+	if n := len(e.ex.Launched()); n != 0 {
+		t.Fatalf("launched %d rejected items", n)
+	}
+}
+
+func TestSubmitDefaultsAndIdempotency(t *testing.T) {
+	e := newEnv(t, nil)
+	r := e.req(512 * mib)
+	r.IdemKey = "k"
+	a := e.submit(t, r)
+	if a.Expected != a.Limit || a.RequestHash == "" {
+		t.Fatalf("expected %d limit %d hash %q", a.Expected, a.Limit, a.RequestHash)
+	}
+	b, err := e.s.Submit(e.ctx, r)
+	if err != nil || b.ID != a.ID {
+		t.Fatalf("same key: %v %v", b, err)
+	}
+	r.Argv = []string{"false"}
+	if _, err := e.s.Submit(e.ctx, r); !errors.Is(err, store.ErrIdempotencyConflict) {
+		t.Fatalf("different request: %v", err)
+	}
+}
+
+func TestLaunchSpec(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) {
+		c.PoolMemory = 8 * gib
+		c.MemoryHighRatio = 0.9
+	})
+	r := e.req(4 * gib)
+	r.CPUs = 2
+	r.Env = map[string]string{"FOO": "bar"}
+	it := e.submit(t, r)
+	e.tick(t)
+	l := e.ex.Launched()
+	if len(l) != 1 {
+		t.Fatalf("launched %d", len(l))
+	}
+	sp := l[0]
+	if sp.MemoryHigh != 3865470566 || sp.Limit != 4*gib || sp.CPUs != 2 || sp.KillGrace != 10*time.Second {
+		t.Fatalf("spec %+v", sp)
+	}
+	if sp.JobDir != e.paths.JobDir(it.ID) || sp.TmpDir != e.paths.TmpDir(it.ID) || sp.Cwd != e.cwd {
+		t.Fatalf("dirs %q %q %q", sp.JobDir, sp.TmpDir, sp.Cwd)
+	}
+	if sp.Env["FOO"] != "bar" || sp.Env["AQ_JOB_ID"] != string(it.ID) || sp.Env["AQ_CPUS"] != "2" {
+		t.Fatalf("env %v", sp.Env)
+	}
+	got := e.wantState(t, it.ID, model.StateRunning, model.ReasonNone)
+	if !got.StartedAt.Equal(e.clk.Now()) || got.UnitName == "" || len(got.Env) != 1 {
+		t.Fatalf("running item %+v", got)
+	}
+}
+
+func TestCancelQueued(t *testing.T) {
+	e := newEnv(t, nil)
+	it := e.submit(t, e.req(gib))
+	got, err := e.s.Cancel(e.ctx, it.ID, "changed my mind")
+	if err != nil || got.State != model.StateCancelled || got.Reason != model.ReasonCancelled {
+		t.Fatalf("cancel: %+v %v", got, err)
+	}
+	e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
+	e.tick(t)
+	if n := len(e.ex.Launched()); n != 0 {
+		t.Fatalf("cancelled item launched")
+	}
+}
+
+func TestCancelRunning(t *testing.T) {
+	e := newEnv(t, nil)
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+	got, err := e.s.Cancel(e.ctx, it.ID, "stop")
+	if err != nil || got.State != model.StateRunning || !got.CancelRequested || got.CancelReason != "stop" {
+		t.Fatalf("cancel: %+v %v", got, err)
+	}
+	if !contains(e.ex.Stopped(), it.ID) {
+		t.Fatalf("Stop not called")
+	}
+	e.finish(it.ID, platform.ExitInfo{ServiceResult: "exit-code", ExitCode: "exited", ExitStatus: "143"})
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
+}
+
+func TestCancelIdempotent(t *testing.T) {
+	e := newEnv(t, nil)
+	q := e.submit(t, e.req(gib))
+	for range 2 {
+		got, err := e.s.Cancel(e.ctx, q.ID, "x")
+		if err != nil || got.State != model.StateCancelled {
+			t.Fatalf("cancel queued: %+v %v", got, err)
+		}
+	}
+
+	done := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.finish(done.ID, success)
+	e.tick(t)
+	before := e.wantState(t, done.ID, model.StateSucceeded, model.ReasonNone)
+	got, err := e.s.Cancel(e.ctx, done.ID, "late")
+	if err != nil || got.State != model.StateSucceeded || got.CancelRequested {
+		t.Fatalf("cancel terminal: %+v %v", got, err)
+	}
+	if after := e.get(t, done.ID); after.CancelRequested || !after.EndedAt.Equal(before.EndedAt) {
+		t.Fatalf("terminal item changed: %+v", after)
+	}
+
+	run := e.submit(t, e.req(gib))
+	e.tick(t)
+	for range 2 {
+		got, err := e.s.Cancel(e.ctx, run.ID, "x")
+		if err != nil || got.State != model.StateRunning || !got.CancelRequested {
+			t.Fatalf("cancel running: %+v %v", got, err)
+		}
+	}
+	if _, err := e.s.Cancel(e.ctx, "missing", "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cancel missing: %v", err)
+	}
+}
+
+// The hook runs inside the first item's Launch, i.e. after both items were admitted
+// (STARTING) but before the second one is launched. It also proves Launch is called
+// without the scheduler mutex held: Cancel would deadlock otherwise.
+func TestCancelBetweenAdmitAndLaunch(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.submit(t, e.req(256*mib))
+	b := e.submit(t, e.req(256*mib))
+	var hookErr error
+	e.ex.SetBeforeLaunch(func(sp platform.LaunchSpec) {
+		if sp.ID == a.ID {
+			got, err := e.s.Cancel(e.ctx, b.ID, "race")
+			if err == nil && (got.State != model.StateStarting || !got.CancelRequested) {
+				err = errors.New("b not STARTING with cancel requested: " + string(got.State))
+			}
+			hookErr = err
+		}
+	})
+	e.tick(t)
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if contains(launchedIDs(e.ex), b.ID) {
+		t.Fatalf("cancelled item was launched")
+	}
+	e.wantState(t, b.ID, model.StateCancelled, model.ReasonCancelled)
+	e.wantState(t, a.ID, model.StateRunning, model.ReasonNone)
+}
+
+func TestLaunchFailure(t *testing.T) {
+	e := newEnv(t, nil)
+	e.ex.FailLaunch(errors.New("systemd-run exploded"))
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+	got := e.wantState(t, it.ID, model.StateFailed, model.ReasonLaunchFailed)
+	if !strings.Contains(got.Diagnostic, "exploded") || got.EndedAt.IsZero() {
+		t.Fatalf("failed item %+v", got)
+	}
+
+	e.ex.FailLaunch(nil)
+	next := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.wantState(t, next.ID, model.StateRunning, model.ReasonNone)
+}
+
+func TestCleaningHoldsResources(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.submit(t, e.req(gib))
+	e.tick(t)
+	b := e.submit(t, e.req(512*mib))
+	e.ex.Finish(a.ID, success) // result written, cgroup still has processes
+	e.tick(t)
+	e.wantState(t, a.ID, model.StateCleaning, model.ReasonNone)
+	e.wantState(t, b.ID, model.StateQueued, model.ReasonNone)
+	if id, dec := e.s.HeadDecision(); id != b.ID || dec.Blocker != admission.BlockPoolMemory {
+		t.Fatalf("head %s %+v, want pool_memory", id, dec)
+	}
+	if contains(e.ex.Stopped(), a.ID) {
+		t.Fatalf("stopped before 2x cancel_grace")
+	}
+
+	e.clk.Advance(20 * time.Second) // 2 x cancel_grace
+	e.tick(t)
+	got := e.wantState(t, a.ID, model.StateCleaning, model.ReasonNone)
+	if !contains(e.ex.Stopped(), a.ID) || got.Diagnostic == "" {
+		t.Fatalf("lingering processes: stopped=%v diag=%q", e.ex.Stopped(), got.Diagnostic)
+	}
+	e.wantState(t, b.ID, model.StateQueued, model.ReasonNone)
+
+	e.ex.SetAlive(a.ID, false)
+	e.tick(t)
+	e.wantState(t, a.ID, model.StateSucceeded, model.ReasonNone)
+	e.wantState(t, b.ID, model.StateRunning, model.ReasonNone)
+}
+
+func TestLiveMemoryBlocks(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.PoolMemory = 16 * gib })
+	e.host.Set(platform.MemInfo{Total: 31 * gib, Available: 3 * gib}) // floor 3.1 GiB
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateQueued, model.ReasonNone)
+	if id, dec := e.s.HeadDecision(); id != it.ID || dec.Blocker != admission.BlockLiveMemory {
+		t.Fatalf("head %s %+v, want live_memory", id, dec)
+	}
+	e.host.Set(platform.MemInfo{Total: 31 * gib, Available: 8 * gib})
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateRunning, model.ReasonNone)
+}
+
+func TestPressureBlocks(t *testing.T) {
+	e := newEnv(t, nil)
+	e.host.SetPressure(6)
+	e.tick(t)
+	e.clk.Advance(10 * time.Second)
+	e.tick(t)
+	if closed, avg := e.s.Pressure(); !closed || avg != 6 {
+		t.Fatalf("pressure %v %v, want closed at 6", closed, avg)
+	}
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateQueued, model.ReasonNone)
+	if _, dec := e.s.HeadDecision(); dec.Blocker != admission.BlockPressure {
+		t.Fatalf("decision %+v, want pressure", dec)
+	}
+
+	e.host.SetPressure(0.5)
+	e.tick(t)
+	e.clk.Advance(29 * time.Second)
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateQueued, model.ReasonNone)
+	e.clk.Advance(time.Second)
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateRunning, model.ReasonNone)
+	if closed, _ := e.s.Pressure(); closed {
+		t.Fatalf("gate still closed")
+	}
+}
+
+func TestUnconsumedCountsRecentStarts(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.PoolMemory = 16 * gib })
+	e.host.Set(platform.MemInfo{Total: 30 * gib, Available: 8 * gib}) // floor 3 GiB
+	a := e.submit(t, e.req(3*gib))
+	b := e.submit(t, e.req(3*gib))
+	e.tick(t) // both heads evaluated in one Tick: 8-3 < 3+3
+	e.wantState(t, a.ID, model.StateRunning, model.ReasonNone)
+	e.wantState(t, b.ID, model.StateQueued, model.ReasonNone)
+	if _, dec := e.s.HeadDecision(); dec.Blocker != admission.BlockLiveMemory {
+		t.Fatalf("decision %+v, want live_memory", dec)
+	}
+
+	e.ex.SetCurrent(a.ID, 0)
+	e.tick(t) // a started but consumed nothing yet: still unconsumed
+	e.wantState(t, b.ID, model.StateQueued, model.ReasonNone)
+
+	e.ex.SetCurrent(a.ID, 3*gib)
+	e.tick(t)
+	e.wantState(t, b.ID, model.StateRunning, model.ReasonNone)
+}
+
+func TestGuardActiveFlag(t *testing.T) {
+	e := newEnv(t, nil)
+	if e.s.GuardActive() {
+		t.Fatal("guard active by default")
+	}
+	e.s.SetGuardActive(true)
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.finish(it.ID, platform.ExitInfo{ServiceResult: "oom-kill", ExitCode: "killed", ExitStatus: "KILL", OwnOOMKills: 1})
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateFailed, model.ReasonOOMHostGuard)
+}
+
+// waitRegistered spins until a Wait for id has subscribed.
+func waitRegistered(t *testing.T, s *Scheduler, id model.ItemID) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		_, ok := s.waiters[id]
+		s.mu.Unlock()
+		if ok {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatal("Wait never subscribed")
+}
+
+func TestWaitReturnsOnTerminal(t *testing.T) {
+	e := newEnv(t, nil)
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+
+	type res struct {
+		it  *model.Item
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		got, err := e.s.Wait(e.ctx, it.ID)
+		ch <- res{got, err}
+	}()
+	waitRegistered(t, e.s, it.ID)
+	e.finish(it.ID, platform.ExitInfo{ServiceResult: "exit-code", ExitCode: "exited", ExitStatus: "3"})
+	e.tick(t)
+	select {
+	case r := <-ch:
+		if r.err != nil || r.it.State != model.StateFailed || r.it.Reason != model.ReasonCommandFailed ||
+			r.it.ExitCode == nil || *r.it.ExitCode != 3 {
+			t.Fatalf("wait: %+v %v", r.it, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Wait did not return after finalization")
+	}
+
+	// Already terminal: returns at once.
+	if got, err := e.s.Wait(e.ctx, it.ID); err != nil || got.State != model.StateFailed {
+		t.Fatalf("wait terminal: %+v %v", got, err)
+	}
+
+	// Context cancellation.
+	other := e.submit(t, e.req(gib))
+	ctx, cancel := context.WithCancel(e.ctx)
+	go func() {
+		got, err := e.s.Wait(ctx, other.ID)
+		ch <- res{got, err}
+	}()
+	waitRegistered(t, e.s, other.ID)
+	cancel()
+	select {
+	case r := <-ch:
+		if !errors.Is(r.err, context.Canceled) {
+			t.Fatalf("wait after cancel: %+v %v", r.it, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Wait ignored ctx cancellation")
+	}
+}
+
+func TestRunTicksOnKick(t *testing.T) {
+	e := newEnv(t, nil)
+	launched := make(chan model.ItemID, 1)
+	e.ex.SetBeforeLaunch(func(sp platform.LaunchSpec) { launched <- sp.ID })
+	ctx, cancel := context.WithCancel(e.ctx)
+	done := make(chan error, 1)
+	go func() { done <- e.s.Run(ctx) }()
+	it := e.submit(t, e.req(gib)) // Submit kicks the loop
+	select {
+	case id := <-launched:
+		if id != it.ID {
+			t.Fatalf("launched %s", id)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not admit the submitted item")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+}
