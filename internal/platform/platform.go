@@ -43,7 +43,7 @@ type Executor interface {
 	Capabilities() Capabilities
 	Launch(ctx context.Context, spec LaunchSpec) (unitName string, err error)
 	ReadResult(jobDir string) (*ExitInfo, error)              // (nil, nil) while not finished
-	Alive(ctx context.Context, id model.ItemID) (bool, error) // task cgroup has processes
+	Alive(ctx context.Context, id model.ItemID) (bool, error) // task cgroup tree has processes
 	MemoryCurrent(id model.ItemID) (uint64, error)            // 0, nil if no cgroup
 	Stop(ctx context.Context, id model.ItemID) error          // TERM all, KILL after KillGrace
 	ListManaged(ctx context.Context) ([]model.ItemID, error)  // ids by prefixed cgroup/unit

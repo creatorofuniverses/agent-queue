@@ -84,15 +84,17 @@ func readEvent(path, key string) (uint64, error) {
 	return 0, fmt.Errorf("%s: no %s", path, key)
 }
 
+// Alive reads "populated" from cgroup.events, which also counts processes in
+// sub-cgroups the task created (the unit's own cgroup.procs would miss them).
 func (e *Executor) Alive(_ context.Context, id model.ItemID) (bool, error) {
-	b, err := os.ReadFile(filepath.Join(e.unitDir(id), "cgroup.procs"))
+	n, err := readEvent(filepath.Join(e.unitDir(id), "cgroup.events"), "populated")
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return len(strings.TrimSpace(string(b))) > 0, nil
+	return n > 0, nil
 }
 
 func (e *Executor) MemoryCurrent(id model.ItemID) (uint64, error) {

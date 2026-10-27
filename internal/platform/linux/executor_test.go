@@ -153,8 +153,15 @@ func fakeCgroup(t *testing.T) (*Executor, string) {
 	write("memory.max", "max\n")
 	write("memory.high", "max\n")
 	write("aqtest-one.service/cgroup.procs", "42\n")
+	write("aqtest-one.service/cgroup.events", "populated 1\nfrozen 0\n")
 	write("aqtest-one.service/memory.current", "777\n")
 	write("aqtest-two.service/cgroup.procs", "")
+	write("aqtest-two.service/cgroup.events", "populated 0\nfrozen 0\n")
+	// processes only in a sub-cgroup the task created
+	write("aqtest-nested.service/cgroup.procs", "")
+	write("aqtest-nested.service/cgroup.events", "populated 1\nfrozen 0\n")
+	write("aqtest-nested.service/inner/cgroup.procs", "43\n")
+	write("aqtest-nested.service/inner/cgroup.events", "populated 1\nfrozen 0\n")
 	write("other.service/cgroup.procs", "1\n")
 	return e, slice
 }
@@ -176,14 +183,14 @@ func TestCgroupReads(t *testing.T) {
 	if v, err := e.MemoryCurrent("missing"); err != nil || v != 0 {
 		t.Fatalf("MemoryCurrent missing %d %v", v, err)
 	}
-	for id, want := range map[model.ItemID]bool{"one": true, "two": false, "missing": false} {
+	for id, want := range map[model.ItemID]bool{"one": true, "two": false, "nested": true, "missing": false} {
 		if got, err := e.Alive(t.Context(), id); err != nil || got != want {
 			t.Errorf("Alive(%s) = %v %v", id, got, err)
 		}
 	}
 	ids, err := e.ListManaged(t.Context())
 	slices.Sort(ids)
-	if err != nil || !slices.Equal(ids, []model.ItemID{"one", "two"}) {
+	if err != nil || !slices.Equal(ids, []model.ItemID{"nested", "one", "two"}) {
 		t.Fatalf("ListManaged %v %v", ids, err)
 	}
 	if err := e.SetSliceCeiling(1000, 900); err != nil {
