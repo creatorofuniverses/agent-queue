@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -73,11 +75,21 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		defer close(schedDone)
 		sched.Run(runCtx)
 	}()
-	// Task 12 starts the host-guard loop and incident sampler here.
+	var loops sync.WaitGroup
+	loops.Add(2)
+	go func() {
+		defer loops.Done()
+		RunGuard(runCtx, exec, host, cfg, sched.SetGuardActive, time.Second)
+	}()
+	go func() {
+		defer loops.Done()
+		RunIncidents(runCtx, host, st, sched.Pressure, 10*time.Second)
+	}()
 
 	err = protocol.Serve(runCtx, paths.Socket(), d.handle)
 	cancel()
 	<-schedDone
+	loops.Wait()
 	if ctx.Err() != nil {
 		return nil
 	}

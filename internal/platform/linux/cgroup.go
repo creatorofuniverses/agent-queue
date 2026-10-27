@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"resource-dispatcher/internal/model"
 )
 
@@ -137,14 +139,21 @@ func (e *Executor) SetSliceCeiling(max, high uint64) error {
 }
 
 // writeUint writes an existing cgroup file without creating or truncating it.
+// It uses a plain blocking fd: os.File registers cgroup files with the poller and
+// makes them O_NONBLOCK, and the kernel then skips the reclaim/OOM step of a
+// memory.max write, so lowering the limit would not kill anything.
 func writeUint(path string, v uint64) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return err
+		return &os.PathError{Op: "open", Path: path, Err: err}
 	}
-	_, err = f.WriteString(strconv.FormatUint(v, 10))
-	if cerr := f.Close(); err == nil {
+	buf := strconv.AppendUint(make([]byte, 0, 20), v, 10)
+	_, err = unix.Write(fd, buf)
+	if cerr := unix.Close(fd); err == nil {
 		err = cerr
 	}
-	return err
+	if err != nil {
+		return &os.PathError{Op: "write", Path: path, Err: err}
+	}
+	return nil
 }
