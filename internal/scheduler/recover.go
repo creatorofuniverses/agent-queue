@@ -8,8 +8,8 @@ import (
 	"resource-dispatcher/internal/model"
 )
 
-// Recover reconciles stored items with units left by a previous daemon. Admission
-// stays closed (BlockRecovering) until it succeeds; orphan units are stopped.
+// Recover reconciles stored items with units left by a previous daemon. Admission,
+// closed since New (BlockRecovering), opens only when it succeeds; orphan units are stopped.
 func (s *Scheduler) Recover(ctx context.Context) error {
 	s.mu.Lock()
 	s.recovering = true
@@ -53,11 +53,13 @@ func (s *Scheduler) reconcileLocked(ctx context.Context) (map[model.ItemID]bool,
 		if it.JobDir == "" {
 			it.JobDir = s.d.Paths.JobDir(it.ID)
 		}
-		ei, rerr := s.d.Exec.ReadResult(it.JobDir)
+		// Alive before the result, as in reapLocked: a unit writes result.json before
+		// its cgroup empties, so a unit exiting between the reads still shows its result.
 		alive, err := s.d.Exec.Alive(ctx, it.ID)
 		if err != nil {
 			return nil, fmt.Errorf("recover %s: %w", it.ID, err)
 		}
+		ei, rerr := s.d.Exec.ReadResult(it.JobDir)
 		switch {
 		case ei != nil && !alive:
 			err = s.finalizeLocked(ctx, it, ei)
@@ -66,21 +68,25 @@ func (s *Scheduler) reconcileLocked(ctx context.Context) (map[model.ItemID]bool,
 			s.resultSeen[it.ID] = s.d.Now()
 			err = s.persistLocked(ctx, it)
 		case alive:
+			// An unreadable result while processes remain is settled by Tick.
 			it.State = model.StateRunning
 			if it.StartedAt.IsZero() {
 				it.StartedAt = s.d.Now()
 			}
+			err = s.persistLocked(ctx, it)
+		case rerr != nil:
+			// result.json exists, so the unit did run: never requeue it.
+			s.endLocked(it, model.StateFailed, model.ReasonLost, fmt.Sprintf("unreadable result: %v", rerr))
+			err = s.persistLocked(ctx, it)
+		case it.State == model.StateStarting && it.CancelRequested:
+			s.endLocked(it, model.StateCancelled, model.ReasonCancelled, "")
 			err = s.persistLocked(ctx, it)
 		case it.State == model.StateStarting:
 			// Results are always written by the unit, so no unit ever ran.
 			it.State, it.AdmittedAt = model.StateQueued, time.Time{}
 			err = s.persistLocked(ctx, it)
 		default:
-			diag := "unit and result are gone after daemon restart"
-			if rerr != nil {
-				diag = fmt.Sprintf("unreadable result: %v", rerr)
-			}
-			s.endLocked(it, model.StateFailed, model.ReasonLost, diag)
+			s.endLocked(it, model.StateFailed, model.ReasonLost, "unit and result are gone after daemon restart")
 			err = s.persistLocked(ctx, it)
 		}
 		if err != nil {

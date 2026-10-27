@@ -43,6 +43,7 @@ func (c *clock) Advance(d time.Duration) {
 
 type env struct {
 	s     *Scheduler
+	cfg   config.Config
 	st    *store.Store
 	ex    *fake.Executor
 	host  *fake.Host
@@ -79,9 +80,25 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	}
 	e.host.Set(platform.MemInfo{Total: 64 * gib, Available: 64 * gib})
 	e.host.SetDisk(100 * gib)
-	e.s = New(Deps{Store: st, Exec: e.ex, Host: e.host, Cfg: cfg, Paths: e.paths, Now: e.clk.Now})
+	e.cfg = cfg
+	e.rebuild(t, e.ex, true)
 	t.Cleanup(func() { e.s.bg.Wait() }) // before the temp dirs go away
 	return e
+}
+
+// rebuild replaces the scheduler with one over x; with recover it also runs Recover,
+// which a new scheduler needs before it admits anything.
+func (e *env) rebuild(t *testing.T, x platform.Executor, recover bool) {
+	t.Helper()
+	if e.s != nil {
+		e.s.bg.Wait()
+	}
+	e.s = New(Deps{Store: e.st, Exec: x, Host: e.host, Cfg: e.cfg, Paths: e.paths, Now: e.clk.Now})
+	if recover {
+		if err := e.s.Recover(e.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // settle waits for background stops and temp dir removals.
@@ -572,15 +589,11 @@ func TestRunningVanishedWithoutResultBecomesLost(t *testing.T) {
 func TestStopRunsInBackground(t *testing.T) {
 	e := newEnv(t, nil)
 	release := make(chan struct{})
-	var mu sync.Mutex
-	stops := 0
-	hx := &stopHookExec{Executor: e.ex, onStop: func(model.ItemID) {
-		mu.Lock()
-		stops++
-		mu.Unlock()
+	hx := &hookExec{Executor: e.ex, onStop: func(model.ItemID) error {
 		<-release
+		return nil
 	}}
-	e.s = New(Deps{Store: e.st, Exec: hx, Host: e.host, Cfg: e.s.d.Cfg, Paths: e.paths, Now: e.clk.Now})
+	e.rebuild(t, hx, true)
 	it := e.submit(t, e.req(gib))
 	e.tick(t)
 
@@ -599,17 +612,100 @@ func TestStopRunsInBackground(t *testing.T) {
 	e.wantState(t, it.ID, model.StateCleaning, model.ReasonNone)
 	close(release)
 	e.settle()
-	mu.Lock()
-	n := stops
-	mu.Unlock()
-	if n != 1 {
+	if n := hx.stops(); n != 1 {
 		t.Fatalf("%d Stop calls in flight, want 1", n)
 	}
 
-	// Once the Stop returned, a later repeat stop may run again; finalization still comes from Tick.
+	// Finalization still comes from Tick.
 	e.ex.SetAlive(it.ID, false)
 	e.tick(t)
 	e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
+}
+
+func TestNewStartsRecovering(t *testing.T) {
+	e := newEnv(t, nil)
+	e.rebuild(t, e.ex, false)
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateQueued, model.ReasonNone)
+	if id, dec := e.s.HeadDecision(); id != it.ID || dec.Blocker != admission.BlockRecovering {
+		t.Fatalf("before Recover: %s %+v, want recovering", id, dec)
+	}
+	if err := e.s.Recover(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateRunning, model.ReasonNone)
+}
+
+// Cancel's Stop runs before the unit exists (a no-op for the real executor) and is
+// still in flight when Launch returns, so start() cannot stop again. Tick must.
+func TestCancelDuringLaunchStopsAfterUnitExists(t *testing.T) {
+	e := newEnv(t, nil)
+	release := make(chan struct{})
+	hx := &hookExec{Executor: e.ex}
+	hx.onStop = func(model.ItemID) error {
+		if hx.stops() == 1 {
+			<-release
+		}
+		return nil
+	}
+	e.rebuild(t, hx, true)
+	it := e.submit(t, e.req(gib))
+	e.ex.SetBeforeLaunch(func(sp platform.LaunchSpec) {
+		if _, err := e.s.Cancel(e.ctx, sp.ID, "race"); err != nil {
+			t.Error(err)
+		}
+	})
+	e.tick(t)
+	got := e.wantState(t, it.ID, model.StateRunning, model.ReasonNone)
+	if !got.CancelRequested {
+		t.Fatalf("cancel not recorded")
+	}
+	e.tick(t) // first Stop still in flight: no second one
+	close(release)
+	e.settle()
+	e.tick(t) // within cancel_grace of the first Stop
+	e.settle()
+	if n := hx.stops(); n != 1 {
+		t.Fatalf("%d stops before cancel_grace elapsed, want 1", n)
+	}
+	e.clk.Advance(10 * time.Second)
+	e.tick(t)
+	e.settle()
+	if n := hx.stops(); n != 2 {
+		t.Fatalf("%d stops after cancel_grace, want 2", n)
+	}
+	e.finish(it.ID, platform.ExitInfo{ServiceResult: "exit-code", ExitStatus: "143"})
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
+}
+
+func TestFailedCancelStopRetried(t *testing.T) {
+	e := newEnv(t, nil)
+	hx := &hookExec{Executor: e.ex}
+	hx.onStop = func(model.ItemID) error {
+		if hx.stops() == 1 {
+			return errors.New("systemctl: connection refused")
+		}
+		return nil
+	}
+	e.rebuild(t, hx, true)
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+	if _, err := e.s.Cancel(e.ctx, it.ID, "x"); err != nil {
+		t.Fatal(err)
+	}
+	e.settle()
+	if len(e.ex.Stopped()) != 0 {
+		t.Fatalf("first Stop should have failed")
+	}
+	e.clk.Advance(10 * time.Second)
+	e.tick(t)
+	e.settle()
+	if !contains(e.ex.Stopped(), it.ID) {
+		t.Fatalf("failed Stop not retried")
+	}
 }
 
 func TestLiveMemoryBlocks(t *testing.T) {

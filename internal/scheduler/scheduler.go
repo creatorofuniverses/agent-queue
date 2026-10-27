@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -78,9 +78,11 @@ type Scheduler struct {
 	resultSeen     map[model.ItemID]time.Time     // result read while processes remain
 	goneSince      map[model.ItemID]time.Time     // no processes and no result since
 	stopping       map[model.ItemID]bool          // a background Stop is in flight
+	lastStop       map[model.ItemID]time.Time     // when the last background Stop was issued
 	waiters        map[model.ItemID]chan struct{} // closed on the terminal transition
 }
 
+// New returns a scheduler that admits nothing (BlockRecovering) until Recover succeeds.
 func New(d Deps) *Scheduler {
 	if d.Now == nil {
 		d.Now = time.Now
@@ -97,6 +99,8 @@ func New(d Deps) *Scheduler {
 		resultSeen:   map[model.ItemID]time.Time{},
 		goneSince:    map[model.ItemID]time.Time{},
 		stopping:     map[model.ItemID]bool{},
+		lastStop:     map[model.ItemID]time.Time{},
+		recovering:   true, // admission stays closed until Recover succeeds
 		waiters:      map[model.ItemID]chan struct{}{},
 	}
 }
@@ -219,6 +223,7 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item) error {
 	if it.State.Terminal() {
 		delete(s.resultSeen, it.ID)
 		delete(s.goneSince, it.ID)
+		delete(s.lastStop, it.ID)
 		if ch, ok := s.waiters[it.ID]; ok {
 			close(ch)
 			delete(s.waiters, it.ID)
@@ -226,7 +231,7 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item) error {
 		tmp := s.d.Paths.TmpDir(it.ID)
 		s.background(func() {
 			if err := os.RemoveAll(tmp); err != nil {
-				log.Printf("scheduler: remove temp dir %s: %v", tmp, err)
+				slog.Warn("scheduler: remove temp dir", "dir", tmp, "err", err)
 			}
 		})
 	}
@@ -248,11 +253,12 @@ func (s *Scheduler) stopAsyncLocked(id model.ItemID) {
 		return
 	}
 	s.stopping[id] = true
+	s.lastStop[id] = s.d.Now()
 	s.background(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), s.d.Cfg.CancelGrace+time.Minute)
 		defer cancel()
 		if err := s.d.Exec.Stop(ctx, id); err != nil {
-			log.Printf("scheduler: stop %s: %v", id, err)
+			slog.Warn("scheduler: stop unit", "id", id, "err", err)
 		}
 		s.mu.Lock()
 		delete(s.stopping, id)
@@ -281,7 +287,9 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 
 func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*model.Item, error) {
 	now := s.d.Now()
-	if avg, err := s.d.Host.PressureFullAvg10(); err == nil {
+	if avg, err := s.d.Host.PressureFullAvg10(); err != nil {
+		slog.Warn("scheduler: read memory pressure; gate keeps its state", "err", err)
+	} else {
 		s.pressureClosed, _ = s.gate.Observe(now, avg)
 		s.pressureAvg = avg
 	}
@@ -347,14 +355,20 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 
 	s.mu.Lock()
 	cur, err := s.d.Store.Get(pctx, it.ID)
-	if err != nil || cur.State != model.StateStarting {
+	if err != nil {
+		s.mu.Unlock()
+		// Stays STARTING; Recover requeues it after a restart.
+		slog.Error("scheduler: load admitted item", "id", it.ID, "err", err)
+		return
+	}
+	if cur.State != model.StateStarting {
 		s.mu.Unlock()
 		return
 	}
 	if cur.CancelRequested {
 		s.endLocked(cur, model.StateCancelled, model.ReasonCancelled, "")
 		if err := s.persistLocked(pctx, cur); err != nil {
-			log.Printf("scheduler: cancel %s before launch: %v", cur.ID, err)
+			slog.Error("scheduler: record cancel before launch", "id", cur.ID, "err", err)
 		}
 		s.mu.Unlock()
 		return
@@ -367,7 +381,8 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 	cur, err = s.d.Store.Get(pctx, it.ID)
 	if err != nil {
 		s.mu.Unlock()
-		log.Printf("scheduler: record launch of %s: %v", it.ID, err)
+		// Stays STARTING; Recover settles it from the unit after a restart.
+		slog.Error("scheduler: load launched item", "id", it.ID, "launched", lerr == nil, "err", err)
 		return
 	}
 	if lerr != nil {
@@ -380,7 +395,7 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 	}
 	if err := s.persistLocked(pctx, cur); err != nil {
 		// The item stays STARTING in the store; Recover settles it from the unit.
-		log.Printf("scheduler: record launch of %s: %v", cur.ID, err)
+		slog.Error("scheduler: record launch outcome", "id", cur.ID, "state", cur.State, "err", err)
 	}
 	if lerr == nil && cur.CancelRequested { // cancelled while Launch was in flight
 		s.stopAsyncLocked(it.ID)
@@ -432,7 +447,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	defer t.Stop()
 	for {
 		if err := s.Tick(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("scheduler: tick: %v", err)
+			slog.Error("scheduler: tick", "err", err)
 		}
 		select {
 		case <-ctx.Done():

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -65,7 +66,15 @@ func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) {
 		}
 		alive, err := s.d.Exec.Alive(ctx, it.ID)
 		if err != nil {
+			slog.Warn("scheduler: read unit liveness", "id", it.ID, "err", err)
 			continue
+		}
+		// A cancelled unit that is still alive is stopped again every cancel_grace:
+		// the first Stop may have run before the unit existed, failed, or predate a restart.
+		if alive && it.CancelRequested && !s.stopping[it.ID] {
+			if last, ok := s.lastStop[it.ID]; !ok || now.Sub(last) >= s.d.Cfg.CancelGrace {
+				s.stopAsyncLocked(it.ID)
+			}
 		}
 		ei, rerr := s.d.Exec.ReadResult(it.JobDir)
 		if ei == nil {
@@ -76,6 +85,7 @@ func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) {
 		if it.State == model.StateRunning {
 			it.State = model.StateCleaning
 			if err := s.persistLocked(ctx, it); err != nil {
+				slog.Error("scheduler: record cleaning", "id", it.ID, "err", err)
 				continue
 			}
 		}
@@ -86,6 +96,7 @@ func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) {
 		}
 		if !alive {
 			if err := s.finalizeLocked(ctx, it, ei); err != nil {
+				slog.Error("scheduler: record outcome", "id", it.ID, "err", err)
 				it.State = model.StateCleaning // not persisted: keep it in the accounting
 			}
 			continue
@@ -94,7 +105,9 @@ func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) {
 			s.resultSeen[it.ID] = now
 			if it.Diagnostic != lingerMsg {
 				it.Diagnostic = lingerMsg
-				s.persistLocked(ctx, it)
+				if err := s.persistLocked(ctx, it); err != nil {
+					slog.Error("scheduler: record diagnostic", "id", it.ID, "err", err)
+				}
 			}
 			s.stopAsyncLocked(it.ID)
 		}
@@ -122,6 +135,7 @@ func (s *Scheduler) reapMissingLocked(ctx context.Context, it *model.Item, alive
 	prev := it.State
 	s.endLocked(it, model.StateFailed, model.ReasonLost, diag)
 	if err := s.persistLocked(ctx, it); err != nil {
+		slog.Error("scheduler: record lost unit", "id", it.ID, "err", err)
 		it.State = prev // not persisted: keep it in the accounting
 	}
 }
