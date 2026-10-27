@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/daemon"
+	"resource-dispatcher/internal/mcp"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform/linux"
 	"resource-dispatcher/internal/units"
@@ -359,4 +361,23 @@ func cmdAck(c *cmdCtx, args []string) error {
 	}
 	fmt.Fprintf(c.stdout, "%s %s\n", e.ID, e.Status)
 	return nil
+}
+
+func cmdMCP(c *cmdCtx, args []string) error {
+	fs := c.newFlagSet("mcp")
+	pos, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usagef("mcp: unexpected argument %q", pos[0])
+	}
+	p, err := c.paths()
+	if err != nil {
+		return err
+	}
+	cfg := c.clientConfig()
+	ctx, cancel := signal.NotifyContext(c.ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	return mcp.Serve(ctx, os.Stdin, c.stdout, func(ctx context.Context, op string, args, out any) error { return callOn(ctx, p, op, args, out) }, cfg.Agents, c.env, daemon.Version)
 }

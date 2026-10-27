@@ -52,6 +52,7 @@ func init() {
 		"list":     cmdList,
 		"wait":     cmdWait,
 		"ack":      cmdAck,
+		"mcp":      cmdMCP,
 		"reserve":  cmdReserve,
 		"extend":   cmdExtend,
 		"release":  cmdRelease,
