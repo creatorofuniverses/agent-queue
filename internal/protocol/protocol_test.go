@@ -88,7 +88,9 @@ func TestUnsupportedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	c.Write([]byte(`{"v":2,"op":"x"}` + "\n"))
+	if _, err := c.Write([]byte(`{"v":2,"op":"x"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
 	line, err := bufio.NewReader(c).ReadBytes('\n')
 	if err != nil {
 		t.Fatal(err)
@@ -109,10 +111,17 @@ func TestBadRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	c.Write([]byte("not json\n"))
-	line, _ := bufio.NewReader(c).ReadBytes('\n')
+	if _, err := c.Write([]byte("not json\n")); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(c).ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
 	var r Response
-	json.Unmarshal(line, &r)
+	if err := json.Unmarshal(line, &r); err != nil {
+		t.Fatal(err)
+	}
 	if r.Error == nil || r.Error.Code != "BAD_REQUEST" {
 		t.Fatalf("got %s", line)
 	}
@@ -172,7 +181,10 @@ func TestSocketPermissions(t *testing.T) {
 }
 
 func TestStaleSocketAndCleanup(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "aqp")
+	dir, err := os.MkdirTemp("", "aqp")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(dir)
 	sock := filepath.Join(dir, "aq.sock")
 	// Leave a stale socket file behind.
@@ -218,5 +230,122 @@ func TestCallHonorsContext(t *testing.T) {
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatal("did not return promptly")
+	}
+}
+
+func rawRequest(t *testing.T, sock, line string) net.Conn {
+	t.Helper()
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write([]byte(line + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestDisconnectCancelsHandler(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	sock := startServer(t, func(ctx context.Context, op string, args json.RawMessage, w StreamWriter) (any, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return nil, ctx.Err()
+	})
+	c := rawRequest(t, sock, `{"v":1,"op":"wait"}`)
+	<-started
+	c.Close()
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler ctx not cancelled on disconnect")
+	}
+}
+
+func TestIdleConnDoesNotBlockShutdown(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "aqp")
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "aq.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, sock, echo) }()
+	var c net.Conn
+	var err error
+	for i := 0; i < 200; i++ {
+		if c, err = net.Dial("unix", sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	time.Sleep(50 * time.Millisecond) // let the server accept it
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return with an idle connection")
+	}
+}
+
+func TestServeRefusesNonSocket(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aq.sock")
+	if err := os.WriteFile(path, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Serve(context.Background(), path, echo); err == nil {
+		t.Fatal("expected error")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "precious" {
+		t.Fatalf("file damaged: %q %v", b, err)
+	}
+}
+
+func TestHandlerPanic(t *testing.T) {
+	sock := startServer(t, func(ctx context.Context, op string, args json.RawMessage, w StreamWriter) (any, error) {
+		if op == "panic" {
+			panic("kaboom")
+		}
+		return "ok", nil
+	})
+	var pe *Error
+	err := Call(context.Background(), sock, "panic", nil, nil)
+	if !errors.As(err, &pe) || pe.Code != "INTERNAL" {
+		t.Fatalf("got %v", err)
+	}
+	if err := Call(context.Background(), sock, "fine", nil, nil); err != nil {
+		t.Fatalf("server did not survive: %v", err)
+	}
+}
+
+func TestPermissionDenied(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "aqp")
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "s")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		serveConn(context.Background(), c.(*net.UnixConn), uint32(os.Getuid())+1, echo)
+	}()
+	err = Call(context.Background(), sock, "ping", nil, nil)
+	var pe *Error
+	if !errors.As(err, &pe) || pe.Code != "PERMISSION_DENIED" {
+		t.Fatalf("got %v", err)
 	}
 }

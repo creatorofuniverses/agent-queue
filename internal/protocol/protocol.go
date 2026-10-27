@@ -1,5 +1,9 @@
 // Package protocol implements the versioned newline-delimited JSON protocol
 // spoken between the aq CLI and the daemon over a Unix socket.
+//
+// The server treats EOF on a connection as a client disconnect and cancels the
+// handler's context. Clients must therefore keep their write side open until
+// the final response arrives; half-close is not supported.
 package protocol
 
 import (
@@ -12,6 +16,9 @@ const Version = 1
 
 // maxLine bounds a single protocol line so a peer cannot force unbounded reads.
 const maxLine = 1 << 20
+
+// maxResponseLine bounds a response line read by clients (results can be large).
+const maxResponseLine = 64 << 20
 
 const (
 	CodeBadRequest          = "BAD_REQUEST"

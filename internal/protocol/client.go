@@ -55,7 +55,7 @@ func CallStream(ctx context.Context, socketPath, op string, args any, onStream f
 	}
 	br := bufio.NewReaderSize(c, 64*1024)
 	for {
-		line, err := readLine(br)
+		line, err := readLine(br, maxResponseLine)
 		if err != nil {
 			return ctxErr(fmt.Errorf("read response: %w", err))
 		}
