@@ -10,6 +10,8 @@ import (
 // ItemView is the client-facing projection of an item. It deliberately has no
 // env field: env values may hold secrets and never leave the daemon.
 type ItemView struct {
+	Events         []EventView  `json:"events,omitempty"`
+	ClientType     string       `json:"client_type"`
 	ID             model.ItemID `json:"id"`
 	Name           string       `json:"name"`
 	State          model.State  `json:"state"`
@@ -68,7 +70,7 @@ func optTime(t time.Time) *time.Time {
 
 func viewOf(it *model.Item, now time.Time) ItemView {
 	v := ItemView{
-		ID: it.ID, Name: it.Name, State: it.State, Reason: it.Reason, Priority: it.Priority.String(),
+		ClientType: it.ClientType, ID: it.ID, Name: it.Name, State: it.State, Reason: it.Reason, Priority: it.Priority.String(),
 		MemoryLimit: it.Limit, MemoryExpected: it.Expected, CPUs: it.CPUs,
 		TimeoutSeconds: int64(it.Timeout / time.Second), SessionID: it.SessionID, Project: it.Project,
 		CreatedAt: it.CreatedAt, StartedAt: optTime(it.StartedAt), EndedAt: optTime(it.EndedAt),
@@ -102,4 +104,28 @@ func nonNeg(d time.Duration) float64 {
 		return 0
 	}
 	return d.Seconds()
+}
+
+type EventView struct {
+	ID        string            `json:"id"`
+	Kind      model.EventKind   `json:"kind"`
+	Status    model.EventStatus `json:"status"`
+	CreatedAt time.Time         `json:"created_at"`
+	SentAt    *time.Time        `json:"sent_at,omitempty"`
+	Detail    string            `json:"detail"`
+}
+
+func eventView(e model.Event) EventView {
+	return EventView{e.ID, e.Kind, e.Status, e.CreatedAt, optTime(e.SentAt), e.Detail}
+}
+
+type AdapterStatus struct {
+	Name     string `json:"name"`
+	Delivery string `json:"delivery"`
+	OK       bool   `json:"ok"`
+	Detail   string `json:"detail"`
+}
+type WebhookStatus struct {
+	Configured bool   `json:"configured"`
+	LastError  string `json:"last_error"`
 }

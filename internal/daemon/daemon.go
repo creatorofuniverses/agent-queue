@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	osexec "os/exec"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -15,6 +16,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"resource-dispatcher/internal/config"
+	"resource-dispatcher/internal/model"
+	"resource-dispatcher/internal/notify"
 	"resource-dispatcher/internal/platform"
 	"resource-dispatcher/internal/protocol"
 	"resource-dispatcher/internal/scheduler"
@@ -75,8 +78,19 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		return fmt.Errorf("ensure teardown slice: %w", err)
 	}
 
-	sched := scheduler.New(scheduler.Deps{Store: st, Exec: exec, Host: host, Meter: meter, Cfg: cfg, Paths: paths})
-	d := &server{sched: sched, st: st, paths: paths}
+	router := notify.NewRouter(cfg)
+	deliverers := map[model.Channel]notify.Deliverer{}
+	for _, a := range cfg.Agents {
+		if a.Delivery == config.DeliveryPush {
+			deliverers[model.ExecChannel(a.Name)] = notify.NewExecDeliverer(a, osexec.LookPath)
+		}
+	}
+	if cfg.Webhook.URL != "" {
+		deliverers[model.ChannelWebhook] = notify.NewWebhookDeliverer(cfg.Webhook, nil)
+	}
+	outbox := notify.NewOutbox(st, cfg, paths, router, deliverers, time.Now)
+	sched := scheduler.New(scheduler.Deps{Store: st, Exec: exec, Host: host, Meter: meter, Cfg: cfg, Paths: paths, Route: router.Route, OnEvents: outbox.Kick})
+	d := &server{sched: sched, st: st, paths: paths, router: router, outbox: outbox, cfg: cfg}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {
 		return fmt.Errorf("recover: %w", err)
@@ -91,6 +105,8 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		sched.Run(runCtx)
 	}()
 	var loops sync.WaitGroup
+	loops.Add(1)
+	go func() { defer loops.Done(); outbox.Run(runCtx) }()
 	if meter != nil {
 		loops.Add(1)
 		go func() {
@@ -119,6 +135,9 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 }
 
 type server struct {
+	router     *notify.Router
+	outbox     *notify.Outbox
+	cfg        config.Config
 	sched      *scheduler.Scheduler
 	st         *store.Store
 	paths      config.Paths

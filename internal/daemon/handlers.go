@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/protocol"
 	"resource-dispatcher/internal/scheduler"
@@ -20,6 +22,7 @@ import (
 
 // SubmitArgs is the submit request. Sizes are bytes.
 type SubmitArgs struct {
+	NoNotify       bool              `json:"no_notify"`
 	Name           string            `json:"name"`
 	Argv           []string          `json:"argv"`
 	Cwd            string            `json:"cwd"`
@@ -40,6 +43,7 @@ type SubmitArgs struct {
 
 // ReserveArgs is the reserve request. Sizes are bytes; Teardown is the script's content.
 type ReserveArgs struct {
+	NoNotify      bool              `json:"no_notify"`
 	Name          string            `json:"name"`
 	Cwd           string            `json:"cwd"`
 	Env           map[string]string `json:"env"`
@@ -95,9 +99,12 @@ type LogLines struct {
 }
 
 type pingResult struct {
-	Version    string `json:"version"`
-	PID        int    `json:"pid"`
-	Recovering bool   `json:"recovering"`
+	Adapters      []AdapterStatus `json:"adapters"`
+	Webhook       WebhookStatus   `json:"webhook"`
+	PendingEvents int             `json:"pending_events"`
+	Version       string          `json:"version"`
+	PID           int             `json:"pid"`
+	Recovering    bool            `json:"recovering"`
 }
 
 const followPoll = 200 * time.Millisecond
@@ -130,6 +137,8 @@ func mapErr(err error) error {
 		return &protocol.Error{Code: protocol.CodeIdempotencyConflict, Message: err.Error()}
 	case errors.Is(err, scheduler.ErrRejected):
 		return &protocol.Error{Code: protocol.CodeRejected, Message: err.Error()}
+	case errors.Is(err, scheduler.ErrBadRequest):
+		return badRequest("%s", err)
 	case errors.Is(err, scheduler.ErrBadState):
 		return &protocol.Error{Code: protocol.CodeBadState, Message: err.Error()}
 	}
@@ -144,7 +153,7 @@ func (d *server) handle(ctx context.Context, op string, args json.RawMessage, w 
 func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, w protocol.StreamWriter) (any, error) {
 	switch op {
 	case "ping":
-		return pingResult{Version: Version, PID: os.Getpid(), Recovering: d.recovering.Load()}, nil
+		return d.ping(ctx)
 	case "submit":
 		return d.submit(ctx, args)
 	case "reserve":
@@ -201,16 +210,46 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 			return nil, err
 		}
 		return d.view(it, time.Now()), nil
-	case "wait":
-		var a idArgs
+	case "ack":
+		var a struct {
+			EventID string `json:"event_id"`
+		}
 		if err := decode(args, &a); err != nil {
 			return nil, err
 		}
-		it, err := d.sched.Wait(ctx, a.ID, scheduler.WaitDone)
+		e, err := d.st.Ack(ctx, a.EventID, time.Now())
 		if err != nil {
 			return nil, err
 		}
-		return d.view(it, time.Now()), nil
+		return eventView(e), nil
+	case "wait":
+		var a struct {
+			ID    model.ItemID        `json:"id"`
+			Until scheduler.WaitUntil `json:"until"`
+		}
+		if err := decode(args, &a); err != nil {
+			return nil, err
+		}
+		it, err := d.sched.Wait(ctx, a.ID, a.Until)
+		if err != nil {
+			return nil, err
+		}
+		kinds := []model.EventKind{model.EventTaskFinished}
+		if it.IsReservation() {
+			kinds = []model.EventKind{model.EventReservationGranted}
+		}
+		if a.Until == scheduler.WaitExpiring {
+			kinds = []model.EventKind{model.EventReservationExpiring, model.EventStandOverDeclared}
+		}
+		evs, err := d.st.MarkClientWaitSent(ctx, it.ID, kinds, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		v := d.view(it, time.Now())
+		for _, e := range evs {
+			v.Events = append(v.Events, eventView(e))
+		}
+		return v, nil
 	case "logs":
 		return d.logs(ctx, args, w)
 	}
@@ -257,12 +296,15 @@ func (d *server) reserve(ctx context.Context, raw json.RawMessage) (any, error) 
 	if err := decode(raw, &a); err != nil {
 		return nil, err
 	}
+	if err := d.router.CheckClient(a.ClientType, a.SessionID, a.NoNotify, exec.LookPath); err != nil {
+		return nil, &protocol.Error{Code: protocol.CodeRejected, Message: err.Error()}
+	}
 	prio, err := model.ParsePriority(a.Priority)
 	if err != nil {
 		return nil, badRequest("%v", err)
 	}
 	it, err := d.sched.Reserve(ctx, scheduler.ReserveRequest{
-		Name: a.Name, Cwd: a.Cwd, Env: a.Env, Memory: a.Memory, CPUs: a.CPUs,
+		NoNotify: a.NoNotify, Name: a.Name, Cwd: a.Cwd, Env: a.Env, Memory: a.Memory, CPUs: a.CPUs,
 		TaskMemory: a.TaskMemory, TaskCPUs: a.TaskCPUs, TTL: time.Duration(a.TTLSeconds) * time.Second,
 		Teardown: []byte(a.Teardown), DockerProject: a.DockerProject, Priority: prio,
 		SessionID: a.SessionID, ClientType: a.ClientType, Project: a.Project, IdemKey: a.IdemKey,
@@ -317,12 +359,15 @@ func (d *server) submit(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err := decode(raw, &a); err != nil {
 		return nil, err
 	}
+	if err := d.router.CheckClient(a.ClientType, a.SessionID, a.NoNotify, exec.LookPath); err != nil {
+		return nil, &protocol.Error{Code: protocol.CodeRejected, Message: err.Error()}
+	}
 	prio, err := model.ParsePriority(a.Priority)
 	if err != nil {
 		return nil, badRequest("%v", err)
 	}
 	it, err := d.sched.Submit(ctx, scheduler.SubmitRequest{
-		Name: a.Name, Argv: a.Argv, Cwd: a.Cwd, Env: a.Env, Limit: a.Limit, Expected: a.Expected, CPUs: a.CPUs,
+		NoNotify: a.NoNotify, Name: a.Name, Argv: a.Argv, Cwd: a.Cwd, Env: a.Env, Limit: a.Limit, Expected: a.Expected, CPUs: a.CPUs,
 		Timeout:  time.Duration(a.TimeoutSeconds) * time.Second,
 		Priority: prio, SessionID: a.SessionID, ClientType: a.ClientType, Project: a.Project,
 		IdemKey: a.IdemKey, GitRev: a.GitRev, GitDirty: a.GitDirty, ParentID: a.Within,
@@ -338,13 +383,23 @@ func (d *server) list(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err := decode(raw, &a); err != nil {
 		return nil, err
 	}
-	items, err := d.st.List(ctx, store.ListFilter{SessionID: a.SessionID, IncludeTerminal: a.All})
+	items, err := d.st.List(ctx, store.ListFilter{SessionID: a.SessionID, IncludeTerminal: a.All, WithUnacked: a.SessionID != ""})
 	if err != nil {
 		return nil, err
 	}
 	pos, err := d.queuePositions(ctx)
 	if err != nil {
 		return nil, err
+	}
+	byItem := map[model.ItemID][]EventView{}
+	if a.SessionID != "" {
+		evs, err := d.st.UnackedSessionEvents(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range evs {
+			byItem[e.ItemID] = append(byItem[e.ItemID], eventView(e))
+		}
 	}
 	now := time.Now()
 	views := make([]ItemView, 0, len(items))
@@ -353,6 +408,7 @@ func (d *server) list(ctx context.Context, raw json.RawMessage) (any, error) {
 		if it.State == model.StateQueued {
 			d.markQueued(&v, it, pos)
 		}
+		v.Events = byItem[it.ID]
 		views = append(views, v)
 	}
 	return views, nil
@@ -534,4 +590,27 @@ func tailStart(f *os.File, size int64, n int) (int64, error) {
 		end = start
 	}
 	return 0, nil
+}
+
+func (d *server) ping(ctx context.Context) (pingResult, error) {
+	p := pingResult{Version: Version, PID: os.Getpid(), Recovering: d.recovering.Load(), Webhook: WebhookStatus{Configured: d.cfg.Webhook.URL != ""}}
+	for _, a := range d.cfg.Agents {
+		v := AdapterStatus{Name: a.Name, Delivery: a.Delivery, OK: true, Detail: "client-wait: delivered by aq wait"}
+		if a.Delivery == config.DeliveryPush {
+			if _, err := exec.LookPath(a.Command[0]); err != nil {
+				v.OK = false
+				v.Detail = a.Command[0] + " not found in daemon PATH"
+			} else {
+				v.Detail = a.Command[0] + " available in daemon PATH"
+			}
+		}
+		p.Adapters = append(p.Adapters, v)
+	}
+	var err error
+	p.PendingEvents, err = d.st.CountPending(ctx)
+	if err != nil {
+		return p, err
+	}
+	p.Webhook.LastError, err = d.st.LastDeliveryError(ctx, model.ChannelWebhook)
+	return p, err
 }
