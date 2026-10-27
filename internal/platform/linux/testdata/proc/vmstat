@@ -1,0 +1,3 @@
+nr_free_pages 123
+oom_kill 8
+pgfault 99
