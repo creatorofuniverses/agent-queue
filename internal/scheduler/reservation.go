@@ -359,6 +359,9 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 			diag = "released by operator (--force)"
 		}
 		s.endLocked(it, model.StateReleased, model.ReasonNone, diag)
+	case it.State == model.StateTeardownFailed || it.State == model.StateTeardownUnknown:
+		return it, fmt.Errorf("%w: reservation %s is %s; use aq teardown --retry or aq release --force",
+			ErrBadState, id, it.State)
 	default:
 		return it, fmt.Errorf("%w: reservation %s is %s", ErrBadState, id, it.State)
 	}

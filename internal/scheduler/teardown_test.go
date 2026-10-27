@@ -630,6 +630,9 @@ func TestForceRelease(t *testing.T) {
 
 	_, err = e.s.Release(e.ctx, failed.ID, false)
 	wantBadState(t, err, "TEARDOWN_FAILED")
+	wantBadState(t, err, "use aq teardown --retry or aq release --force")
+	_, err = e.s.Release(e.ctx, unknown.ID, false)
+	wantBadState(t, err, "use aq teardown --retry or aq release --force")
 	e.wantState(t, failed.ID, model.StateTeardownFailed, model.ReasonCommandFailed)
 
 	for _, id := range []model.ItemID{unknown.ID, failed.ID} {
