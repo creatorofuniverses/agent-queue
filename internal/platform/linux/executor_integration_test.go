@@ -102,7 +102,7 @@ func TestIntegOOM(t *testing.T) {
 		t.Fatal(err)
 	}
 	info := waitResult(t, spec.JobDir, 60*time.Second)
-	if info.ServiceResult != "oom-kill" || info.OwnOOMKills < 1 || info.OwnMaxEvents < 1 {
+	if info.ServiceResult != "oom-kill" || info.OwnOOMKills < 1 || info.OwnOOMEvents < 1 {
 		t.Fatalf("%+v", info)
 	}
 }

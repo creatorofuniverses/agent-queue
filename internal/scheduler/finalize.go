@@ -21,7 +21,7 @@ func MapOutcome(ei platform.ExitInfo, cancelRequested, guardActive bool) (model.
 		return model.StateCancelled, model.ReasonCancelled
 	case ei.ServiceResult == "oom-kill" || ei.OwnOOMKills > 0:
 		switch {
-		case ei.OwnMaxEvents > 0:
+		case ei.OwnOOMEvents > 0:
 			return model.StateFailed, model.ReasonOOM
 		case guardActive:
 			return model.StateFailed, model.ReasonOOMHostGuard

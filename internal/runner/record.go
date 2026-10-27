@@ -41,8 +41,8 @@ func recordResult(jobDir string, getenv func(string) string, cgroupRoot, selfCgr
 				}
 				n, _ := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
 				switch k {
-				case "max":
-					info.OwnMaxEvents = n
+				case "oom":
+					info.OwnOOMEvents = n
 				case "oom_kill":
 					info.OwnOOMKills = n
 				}

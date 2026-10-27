@@ -25,11 +25,14 @@ type LaunchSpec struct {
 }
 
 type ExitInfo struct {
-	ServiceResult, ExitCode, ExitStatus   string
-	MemoryPeak, OwnMaxEvents, OwnOOMKills uint64
-	EndedAt                               time.Time
-	LaunchError                           string
-	LogsTruncated                         bool
+	ServiceResult, ExitCode, ExitStatus string
+	MemoryPeak                          uint64
+	// OwnOOMEvents is memory.events "oom": OOMs caused by the unit's own memory.max.
+	// ("max" is not used: it also counts page cache reclaim at the limit, with no OOM.)
+	OwnOOMEvents, OwnOOMKills uint64
+	EndedAt                   time.Time
+	LaunchError               string
+	LogsTruncated             bool
 }
 
 type MemInfo struct {

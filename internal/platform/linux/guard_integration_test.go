@@ -4,6 +4,8 @@ package linux
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -106,4 +108,70 @@ func TestIntegGuardHoldsCeilingAcrossSiblingStart(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 	waitCeiling()
+}
+
+// A task whose page cache keeps hitting its own memory.max (memory.events "max" > 0,
+// no OOM) and that the host guard then kills is a guard kill, not an own-limit OOM.
+func TestIntegGuardKillAfterPageCacheReclaimIsNotOwnOOM(t *testing.T) {
+	e := newTestExecutor(t)
+	restoreSlice(t, e)
+	// Page cache must be disk-backed: /tmp is tmpfs, whose pages count as unreclaimable shmem.
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := os.MkdirTemp(cache, "aqtest-pagecache-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(disk) })
+
+	const script = `
+import os, sys, time
+os.chdir(sys.argv[1])
+b = bytearray(96 << 20)
+b[::4096] = b'x' * len(b[::4096])
+blk = bytes(1 << 20)
+with open('big', 'wb') as f:
+    for i in range(256):
+        f.write(blk)
+        if i % 16 == 15:
+            os.fsync(f.fileno())  # bound dirty pages: they cannot be reclaimed until written back
+open('ready', 'w').close()
+while True:
+    with open('big', 'rb') as f:
+        while f.read(1 << 20):
+            pass
+    time.sleep(0.2)
+`
+	spec, err := launch(t, e, 192<<20, 2*time.Minute, "python3", "-c", script, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		_, rerr := os.Stat(filepath.Join(disk, "ready"))
+		maxEv, _ := readEvent(filepath.Join(e.unitDir(spec.ID), "memory.events"), "max")
+		if rerr == nil && maxEv > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			logs, _ := os.ReadFile(filepath.Join(spec.JobDir, "stderr.log"))
+			t.Fatalf("page cache never hit the unit limit (ready: %v, max events %d): %s", rerr, maxEv, logs)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := e.SetSliceCeiling(64<<20, 64<<20); err != nil {
+		t.Fatal(err)
+	}
+	info := waitResult(t, spec.JobDir, 60*time.Second)
+	if info.ServiceResult != "oom-kill" {
+		t.Fatalf("%+v", info)
+	}
+	if state, reason := scheduler.MapOutcome(*info, false, true); state != model.StateFailed || reason != model.ReasonOOMHostGuard {
+		t.Fatalf("guard active: outcome %v %v for %+v", state, reason, info)
+	}
+	if _, reason := scheduler.MapOutcome(*info, false, false); reason == model.ReasonOOM {
+		t.Fatalf("guard inactive: classified as own OOM for %+v", info)
+	}
 }

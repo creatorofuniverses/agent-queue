@@ -9,9 +9,9 @@ import (
 
 func TestMapOutcome(t *testing.T) {
 	oom := platform.ExitInfo{ServiceResult: "oom-kill", ExitCode: "killed", ExitStatus: "KILL", OwnOOMKills: 1}
-	ownMax := oom
-	ownMax.OwnMaxEvents = 3
-	oomByEventsOnly := platform.ExitInfo{ServiceResult: "exit-code", ExitCode: "exited", ExitStatus: "137", OwnOOMKills: 1, OwnMaxEvents: 1}
+	ownOOM := oom
+	ownOOM.OwnOOMEvents = 1
+	oomByEventsOnly := platform.ExitInfo{ServiceResult: "exit-code", ExitCode: "exited", ExitStatus: "137", OwnOOMKills: 1, OwnOOMEvents: 1}
 	cases := []struct {
 		name          string
 		ei            platform.ExitInfo
@@ -20,9 +20,9 @@ func TestMapOutcome(t *testing.T) {
 		reason        model.Reason
 	}{
 		{"launch error", platform.ExitInfo{ServiceResult: "exit-code", ExitStatus: "127", LaunchError: "exec: not found"}, true, true, model.StateFailed, model.ReasonLaunchFailed},
-		{"cancel wins over oom", ownMax, true, false, model.StateCancelled, model.ReasonCancelled},
+		{"cancel wins over oom", ownOOM, true, false, model.StateCancelled, model.ReasonCancelled},
 		{"cancel after success", platform.ExitInfo{ServiceResult: "success", ExitStatus: "0"}, true, false, model.StateCancelled, model.ReasonCancelled},
-		{"own oom", ownMax, false, true, model.StateFailed, model.ReasonOOM},
+		{"own oom", ownOOM, false, true, model.StateFailed, model.ReasonOOM},
 		{"oom kills counted, own max events", oomByEventsOnly, false, false, model.StateFailed, model.ReasonOOM},
 		{"oom under guard", oom, false, true, model.StateFailed, model.ReasonOOMHostGuard},
 		{"oom group", oom, false, false, model.StateFailed, model.ReasonOOMGroup},
