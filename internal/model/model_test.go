@@ -111,3 +111,33 @@ func TestIsTeardownUnitID(t *testing.T) {
 		}
 	}
 }
+
+func TestChannelHelpers(t *testing.T) {
+	c := ExecChannel("codex")
+	if c != "exec:codex" {
+		t.Fatal(c)
+	}
+	if a, ok := c.ExecAdapter(); !ok || a != "codex" {
+		t.Fatal(a, ok)
+	}
+	if a, ok := ChannelWebhook.ExecAdapter(); ok || a != "" {
+		t.Fatal(a, ok)
+	}
+	for _, ch := range []Channel{ChannelWebhook, c, ChannelClientWait, ChannelNone} {
+		if ch.Retried() != (ch == c || ch == ChannelWebhook) {
+			t.Fatal(ch)
+		}
+	}
+}
+func TestReasonInfra(t *testing.T) {
+	for _, r := range []Reason{ReasonLaunchFailed, ReasonLost, ReasonStorageFull, ReasonOOMHostGuard} {
+		if !r.Infra() {
+			t.Fatal(r)
+		}
+	}
+	for _, r := range []Reason{ReasonOOM, ReasonTimeout, ReasonCommandFailed, ReasonCancelled, ReasonNone} {
+		if r.Infra() {
+			t.Fatal(r)
+		}
+	}
+}

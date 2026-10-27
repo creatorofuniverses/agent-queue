@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,7 +33,36 @@ type ReservationsConfig struct {
 	TeardownConcurrency                    int
 }
 
+const (
+	DeliveryPush       = "push"
+	DeliveryClientWait = "client-wait"
+)
+
+type AgentConfig struct {
+	Name, IdentityEnv, Delivery string
+	Command                     []string
+}
+type NotifyConfig struct{ RetryMin, RetryMax, DeliveryTimeout, GiveUpAfter, AdmissionClosedAlert, CleaningStuckAlert time.Duration }
+type WebhookConfig struct {
+	URL, TokenFile string
+	Timeout        time.Duration
+}
+type HookConfig struct{ Patterns []string }
+
+func (c Config) Agent(name string) (AgentConfig, bool) {
+	for _, a := range c.Agents {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return AgentConfig{}, false
+}
+
 type Config struct {
+	Agents              []AgentConfig
+	Notify              NotifyConfig
+	Webhook             WebhookConfig
+	Hook                HookConfig
 	PoolMemory          uint64
 	PoolCPUs            int
 	ReserveFloorPercent int
@@ -48,6 +80,10 @@ const gib = uint64(1) << 30
 
 func Default() Config {
 	return Config{
+		Agents:              []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}},
+		Notify:              NotifyConfig{time.Second, 5 * time.Minute, 30 * time.Second, 24 * time.Hour, 10 * time.Minute, 5 * time.Minute},
+		Webhook:             WebhookConfig{Timeout: 10 * time.Second},
+		Hook:                HookConfig{Patterns: []string{`(^|[\s;&|(])(pytest|py\.test)\b.*\s(-n|--numprocesses)(\s|=)`, `(^|[\s;&|(])docker\s+compose\b.*\s(up|run)\b`, `(^|[\s;&|(])docker-compose\b.*\s(up|run)\b`, `(^|[\s;&|(])docker\s+run\b`}},
 		PoolMemory:          16 * gib,
 		PoolCPUs:            16,
 		ReserveFloorPercent: 10,
@@ -74,7 +110,30 @@ func Default() Config {
 }
 
 // Raw TOML shape: sizes and durations are strings; absent keys are nil.
+type rawAgent struct {
+	Name        *string  `toml:"name"`
+	IdentityEnv *string  `toml:"identity_env"`
+	Delivery    *string  `toml:"delivery"`
+	Command     []string `toml:"command"`
+}
 type rawConfig struct {
+	Agents []rawAgent `toml:"agents"`
+	Notify struct {
+		RetryMin             *string `toml:"retry_min"`
+		RetryMax             *string `toml:"retry_max"`
+		DeliveryTimeout      *string `toml:"delivery_timeout"`
+		GiveUpAfter          *string `toml:"give_up_after"`
+		AdmissionClosedAlert *string `toml:"admission_closed_alert"`
+		CleaningStuckAlert   *string `toml:"cleaning_stuck_alert"`
+	} `toml:"notify"`
+	Webhook struct {
+		URL       *string `toml:"url"`
+		TokenFile *string `toml:"token_file"`
+		Timeout   *string `toml:"timeout"`
+	} `toml:"webhook"`
+	Hook struct {
+		Patterns *[]string `toml:"patterns"`
+	} `toml:"hook"`
 	PoolMemory          *string  `toml:"pool_memory"`
 	PoolCPUs            *int     `toml:"pool_cpus"`
 	ReserveFloorPercent *int     `toml:"reserve_floor_percent"`
@@ -154,6 +213,33 @@ func Load(path string) (Config, error) {
 	dur("cancel_grace", raw.CancelGrace, &c.CancelGrace)
 	dur("pressure.close_after", raw.Pressure.CloseAfter, &c.Pressure.CloseAfter)
 	dur("pressure.open_after", raw.Pressure.OpenAfter, &c.Pressure.OpenAfter)
+	dur("notify.retry_min", raw.Notify.RetryMin, &c.Notify.RetryMin)
+	dur("notify.retry_max", raw.Notify.RetryMax, &c.Notify.RetryMax)
+	dur("notify.delivery_timeout", raw.Notify.DeliveryTimeout, &c.Notify.DeliveryTimeout)
+	dur("notify.give_up_after", raw.Notify.GiveUpAfter, &c.Notify.GiveUpAfter)
+	dur("notify.admission_closed_alert", raw.Notify.AdmissionClosedAlert, &c.Notify.AdmissionClosedAlert)
+	dur("notify.cleaning_stuck_alert", raw.Notify.CleaningStuckAlert, &c.Notify.CleaningStuckAlert)
+	dur("webhook.timeout", raw.Webhook.Timeout, &c.Webhook.Timeout)
+	str := func(src *string, dst *string) {
+		if src != nil {
+			*dst = *src
+		}
+	}
+	str(raw.Webhook.URL, &c.Webhook.URL)
+	str(raw.Webhook.TokenFile, &c.Webhook.TokenFile)
+	if raw.Hook.Patterns != nil {
+		c.Hook.Patterns = *raw.Hook.Patterns
+	}
+	if len(raw.Agents) > 0 {
+		c.Agents = nil
+		for _, r := range raw.Agents {
+			a := AgentConfig{Command: r.Command}
+			str(r.Name, &a.Name)
+			str(r.IdentityEnv, &a.IdentityEnv)
+			str(r.Delivery, &a.Delivery)
+			c.Agents = append(c.Agents, a)
+		}
+	}
 	if len(errs) > 0 {
 		return Config{}, fmt.Errorf("config %s: %w", path, errors.Join(errs...))
 	}
@@ -210,7 +296,10 @@ func (c Config) Validate(memTotal uint64, numCPU int) error {
 	if !strings.HasSuffix(c.UnitPrefix, "-") || !unitWord(strings.TrimSuffix(c.UnitPrefix, "-")) {
 		return fmt.Errorf("unit_prefix %q must be [A-Za-z0-9_-] ending in \"-\", not starting with \"-\"", c.UnitPrefix)
 	}
-	return c.validateReservations()
+	if err := c.validateReservations(); err != nil {
+		return err
+	}
+	return c.validateNotify()
 }
 
 func (c Config) validateReservations() error {
@@ -269,4 +358,60 @@ func unitWord(s string) bool {
 		}
 	}
 	return true
+}
+
+func (c Config) validateNotify() error {
+	for _, d := range []struct {
+		k string
+		v time.Duration
+	}{
+		{"notify.retry_min", c.Notify.RetryMin}, {"notify.retry_max", c.Notify.RetryMax},
+		{"notify.delivery_timeout", c.Notify.DeliveryTimeout}, {"notify.give_up_after", c.Notify.GiveUpAfter},
+		{"notify.admission_closed_alert", c.Notify.AdmissionClosedAlert}, {"notify.cleaning_stuck_alert", c.Notify.CleaningStuckAlert}, {"webhook.timeout", c.Webhook.Timeout},
+	} {
+		if d.v <= 0 {
+			return fmt.Errorf("%s must be > 0", d.k)
+		}
+	}
+	if c.Notify.RetryMin > c.Notify.RetryMax {
+		return fmt.Errorf("notify.retry_min must be <= retry_max")
+	}
+	seen := map[string]bool{}
+	for _, a := range c.Agents {
+		if !regexp.MustCompile(`^[a-z][a-z0-9_-]*$`).MatchString(a.Name) || a.Name == "cli" || seen[a.Name] {
+			return fmt.Errorf("agents.name invalid or duplicate: %q", a.Name)
+		}
+		seen[a.Name] = true
+		if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(a.IdentityEnv) {
+			return fmt.Errorf("agents.identity_env invalid for %s", a.Name)
+		}
+		switch a.Delivery {
+		case DeliveryPush:
+			cmd := strings.Join(a.Command, " ")
+			if len(a.Command) == 0 || a.Command[0] == "" || !strings.Contains(cmd, "{session}") || !strings.Contains(cmd, "{text}") {
+				return fmt.Errorf("agents.command for %s needs executable, {session} and {text}", a.Name)
+			}
+		case DeliveryClientWait:
+			if len(a.Command) != 0 {
+				return fmt.Errorf("agents.command must be empty for client-wait")
+			}
+		default:
+			return fmt.Errorf("agents.delivery invalid for %s", a.Name)
+		}
+	}
+	if c.Webhook.URL != "" {
+		u, e := url.Parse(c.Webhook.URL)
+		if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("webhook.url must be http(s) with a host")
+		}
+	}
+	if c.Webhook.TokenFile != "" && !filepath.IsAbs(c.Webhook.TokenFile) {
+		return fmt.Errorf("webhook.token_file must be absolute")
+	}
+	for _, p := range c.Hook.Patterns {
+		if _, e := regexp.Compile(p); e != nil {
+			return fmt.Errorf("hook.patterns: %w", e)
+		}
+	}
+	return nil
 }

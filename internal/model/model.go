@@ -93,6 +93,14 @@ const (
 	ReasonStorageFull   Reason = "STORAGE_FULL"
 )
 
+func (r Reason) Infra() bool {
+	switch r {
+	case ReasonLaunchFailed, ReasonLost, ReasonStorageFull, ReasonOOMHostGuard:
+		return true
+	}
+	return false
+}
+
 type Priority int
 
 const (
@@ -159,10 +167,11 @@ type Item struct {
 	GitRev           string
 	GitDirty         bool
 
-	CancelRequested bool
-	CancelReason    string
-	LogsTruncated   bool
-	Diagnostic      string
+	NoNotify, FinishNotified bool
+	CancelRequested          bool
+	CancelReason             string
+	LogsTruncated            bool
+	Diagnostic               string
 
 	// ParentID is the reservation a nested task runs within.
 	ParentID ItemID
@@ -209,13 +218,19 @@ func IsTeardownUnitID(id ItemID) bool { return strings.HasPrefix(string(id), tea
 type EventKind string
 
 const (
-	EventReservationGranted    EventKind = "reservation_granted"
-	EventReservationExpiring   EventKind = "reservation_expiring"
-	EventReservationHeldByTask EventKind = "reservation_held_by_tasks"
-	EventTeardownSucceeded     EventKind = "teardown_succeeded"
-	EventTeardownFailed        EventKind = "teardown_failed"
-	EventTeardownUnknown       EventKind = "teardown_unknown"
-	EventStandOverDeclared     EventKind = "stand_over_declared"
+	EventTaskFinished             EventKind = "task_finished"
+	EventTaskFailedInfra          EventKind = "task_failed_infra"
+	EventCleaningStuck            EventKind = "cleaning_stuck"
+	EventAdmissionClosed          EventKind = "admission_closed"
+	EventDeliveryFailed           EventKind = "delivery_failed"
+	EventReservationForceReleased EventKind = "reservation_force_released"
+	EventReservationGranted       EventKind = "reservation_granted"
+	EventReservationExpiring      EventKind = "reservation_expiring"
+	EventReservationHeldByTask    EventKind = "reservation_held_by_tasks"
+	EventTeardownSucceeded        EventKind = "teardown_succeeded"
+	EventTeardownFailed           EventKind = "teardown_failed"
+	EventTeardownUnknown          EventKind = "teardown_unknown"
+	EventStandOverDeclared        EventKind = "stand_over_declared"
 )
 
 type Audience string
@@ -227,14 +242,48 @@ const (
 
 // Event is a notification recorded in the same transaction as the item change
 // that caused it; delivery is a separate concern.
+type EventStatus string
+
+const (
+	EventPending    EventStatus = "pending"
+	EventDelivering EventStatus = "delivering"
+	EventSent       EventStatus = "sent"
+	EventAcked      EventStatus = "acked"
+	EventSkipped    EventStatus = "skipped"
+	EventFailed     EventStatus = "failed"
+)
+
+type Channel string
+
+const (
+	ChannelNone       Channel = "none"
+	ChannelWebhook    Channel = "webhook"
+	ChannelClientWait Channel = "client_wait"
+)
+
+func ExecChannel(adapter string) Channel { return Channel("exec:" + adapter) }
+func (c Channel) ExecAdapter() (string, bool) {
+	a, ok := strings.CutPrefix(string(c), "exec:")
+	if !ok || a == "" {
+		return "", false
+	}
+	return a, true
+}
+func (c Channel) Retried() bool { _, ok := c.ExecAdapter(); return c == ChannelWebhook || ok }
+
 type Event struct {
-	ID                 string
-	ItemID             ItemID
-	Kind               EventKind
-	Audience           Audience
-	SessionID          string
-	ClientType, Detail string
-	CreatedAt          time.Time
+	Channel                        Channel
+	Status                         EventStatus
+	Attempts                       int
+	NextAttemptAt, SentAt, AckedAt time.Time
+	LastError                      string
+	ID                             string
+	ItemID                         ItemID
+	Kind                           EventKind
+	Audience                       Audience
+	SessionID                      string
+	ClientType, Detail             string
+	CreatedAt                      time.Time
 }
 
 type Incident struct {

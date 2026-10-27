@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c != Default() {
+	if !reflect.DeepEqual(c, Default()) {
 		t.Fatalf("got %+v, want defaults", c)
 	}
 	d := Default()
@@ -288,5 +289,74 @@ func TestTeardownPaths(t *testing.T) {
 	}
 	if got := p.TeardownTmpDir("x", 2); got != "/s/tmp/teardown-x-2" {
 		t.Error(got)
+	}
+}
+
+func TestDefaultAgents(t *testing.T) {
+	c := Default()
+	want := []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}}
+	if !reflect.DeepEqual(c.Agents, want) {
+		t.Fatalf("%+v", c.Agents)
+	}
+	if c.Notify != (NotifyConfig{time.Second, 5 * time.Minute, 30 * time.Second, 24 * time.Hour, 10 * time.Minute, 5 * time.Minute}) || c.Webhook.Timeout != 10*time.Second || c.Webhook.URL != "" {
+		t.Fatal(c)
+	}
+}
+func TestLoadAgentsReplaceDefaults(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte(`[[agents]]
+name="pi"
+identity_env="PI_SESSION"
+delivery="push"
+command=["pi","send","{session}","{text}"]
+[notify]
+retry_min="2s"
+[webhook]
+url="https://example.org/h"
+[hook]
+patterns=["x"]
+`), 0600)
+	c, e := Load(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(c.Agents) != 1 || c.Agents[0].Name != "pi" || c.Notify.RetryMin != 2*time.Second || c.Webhook.URL != "https://example.org/h" || !reflect.DeepEqual(c.Hook.Patterns, []string{"x"}) {
+		t.Fatal(c)
+	}
+}
+func TestValidateNotify(t *testing.T) {
+	cases := []struct {
+		key string
+		mut func(*Config)
+	}{
+		{"retry_min", func(c *Config) { c.Notify.RetryMin = c.Notify.RetryMax + 1 }},
+		{"delivery_timeout", func(c *Config) { c.Notify.DeliveryTimeout = 0 }},
+		{"name", func(c *Config) { c.Agents[0].Name = "Codex" }},
+		{"name", func(c *Config) { c.Agents[0].Name = "cli" }},
+		{"name", func(c *Config) { c.Agents = append(c.Agents, c.Agents[0]) }},
+		{"identity_env", func(c *Config) { c.Agents[0].IdentityEnv = "1X" }},
+		{"delivery", func(c *Config) { c.Agents[0].Delivery = "poll" }},
+		{"command", func(c *Config) { c.Agents[0].Command = []string{"x", "{session}"} }},
+		{"command", func(c *Config) { c.Agents[1].Command = []string{"x"} }},
+		{"url", func(c *Config) { c.Webhook.URL = "ftp://x" }},
+		{"url", func(c *Config) { c.Webhook.URL = "http://" }},
+		{"token_file", func(c *Config) { c.Webhook.TokenFile = "rel/path" }},
+		{"patterns", func(c *Config) { c.Hook.Patterns = []string{"(("} }},
+	}
+	for _, tc := range cases {
+		c := Default()
+		tc.mut(&c)
+		if e := c.Validate(64*gib, 20); e == nil || !strings.Contains(e.Error(), tc.key) {
+			t.Errorf("%s: %v", tc.key, e)
+		}
+	}
+}
+func TestExampleConfigMatchesDefault(t *testing.T) {
+	c, e := Load("../../deploy/config.example.toml")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !reflect.DeepEqual(c, Default()) {
+		t.Fatalf("%+v != %+v", c, Default())
 	}
 }

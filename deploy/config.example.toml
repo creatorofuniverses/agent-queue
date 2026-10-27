@@ -43,3 +43,41 @@ teardown_timeout = "5m"
 teardown_memory = "512M"
 # Сколько снятий может идти одновременно (не меньше 1).
 teardown_concurrency = 2
+
+[notify]
+# Повторы доставки: минимальная и максимальная задержка.
+retry_min = "1s"
+retry_max = "5m"
+# Таймаут попытки и срок, после которого неудачная доставка сдаётся.
+delivery_timeout = "30s"
+give_up_after = "24h"
+# Пороги тревог оператора о закрытом допуске и зависшей очистке.
+admission_closed_alert = "10m"
+cleaning_stuck_alert = "5m"
+
+# Список заменяет адаптеры по умолчанию целиком; порядок определяет сессию.
+[[agents]]
+name = "codex"
+identity_env = "CODEX_THREAD_ID"
+delivery = "push"
+command = ["codex", "queue", "--thread", "{session}", "--message", "{text}"]
+
+[[agents]]
+name = "claude"
+identity_env = "CLAUDE_CODE_SESSION_ID"
+delivery = "client-wait"
+
+[webhook]
+# Пустой URL отключает уведомления оператора. Токен читается при каждой попытке.
+url = ""
+token_file = ""
+timeout = "10s"
+
+[hook]
+# Мягкие предупреждения: pytest с параллелизмом, compose и docker run.
+patterns = [
+  '(^|[\s;&|(])(pytest|py\.test)\b.*\s(-n|--numprocesses)(\s|=)',
+  '(^|[\s;&|(])docker\s+compose\b.*\s(up|run)\b',
+  '(^|[\s;&|(])docker-compose\b.*\s(up|run)\b',
+  '(^|[\s;&|(])docker\s+run\b',
+]
