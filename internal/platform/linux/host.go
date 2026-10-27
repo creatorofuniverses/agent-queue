@@ -1,4 +1,4 @@
-// Package linux implements platform interfaces on Linux via procfs.
+// Package linux implements platform interfaces on Linux via procfs, cgroupfs and systemd.
 package linux
 
 import (
