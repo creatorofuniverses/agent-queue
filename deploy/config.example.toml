@@ -1,0 +1,32 @@
+# Пример конфигурации aq: ~/.config/agent-queue/config.toml
+# Все ключи показаны со значениями по умолчанию.
+
+# Память пула задач. Должна быть не больше MemTotal минус резерв.
+pool_memory = "16G"
+# Число CPU в пуле (от 1 до числа ядер).
+pool_cpus = 16
+# Процент MemTotal, который всегда остаётся хосту.
+reserve_floor_percent = 10
+# Минимум свободного места на диске состояния.
+min_disk_free = "2G"
+# MemoryHigh = лимит задачи * это значение (0 < x <= 1).
+memory_high_ratio = 0.9
+# Время на корректную остановку задачи при отмене.
+cancel_grace = "10s"
+
+# Для тестов: имя slice и префикс unit.
+slice_name = "aq.slice"
+unit_prefix = "aq-"
+
+[pressure]
+# Закрыть приём новых задач, если PSI memory full avg10 >= значения дольше close_after.
+close_full_avg10 = 5.0
+close_after = "10s"
+# Открыть снова, если avg10 <= значения дольше open_after.
+open_full_avg10 = 1.0
+open_after = "30s"
+
+[logs]
+# Максимальный размер сохраняемого stdout/stderr задачи.
+max_stdout = "64M"
+max_stderr = "64M"
