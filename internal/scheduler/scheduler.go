@@ -443,13 +443,25 @@ func (s *Scheduler) launchSpec(it *model.Item) platform.LaunchSpec {
 	}
 }
 
-// gitState reads the revision and dirty flag of cwd; ok is false outside a repository.
+// gitTimeout bounds all git calls for one launch.
+var gitTimeout = 5 * time.Second
+
+// gitState reads the revision and dirty flag of cwd; ok is false outside a repository
+// or when git does not answer within gitTimeout. --no-optional-locks keeps status from
+// taking index.lock in the user's repository.
 func gitState(ctx context.Context, cwd string) (rev string, dirty, ok bool) {
-	out, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "HEAD").Output()
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	git := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks", "-C", cwd}, args...)...)
+		cmd.WaitDelay = time.Second // a killed git's children may hold stdout
+		return cmd.Output()
+	}
+	out, err := git("rev-parse", "HEAD")
 	if err != nil {
 		return "", false, false
 	}
-	st, err := exec.CommandContext(ctx, "git", "-C", cwd, "status", "--porcelain").Output()
+	st, err := git("status", "--porcelain")
 	if err != nil {
 		return "", false, false
 	}

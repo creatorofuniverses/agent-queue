@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -107,15 +108,17 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	if err != nil {
 		return err
 	}
+	gctx, cancel := context.WithTimeout(c.ctx, gitTimeout)
+	defer cancel()
 	proj := *project
 	if proj == "" {
-		proj = gitOut(cwd, "rev-parse", "--show-toplevel")
+		proj = gitOut(gctx, cwd, "rev-parse", "--show-toplevel")
 		if proj == "" {
 			proj = cwd
 		}
 	}
-	rev := gitOut(cwd, "rev-parse", "HEAD")
-	dirty := rev != "" && gitOut(cwd, "status", "--porcelain") != ""
+	rev := gitOut(gctx, cwd, "rev-parse", "HEAD")
+	dirty := rev != "" && gitOut(gctx, cwd, "status", "--porcelain") != ""
 
 	var v daemon.ItemView
 	err = c.call(c.ctx, "submit", daemon.SubmitArgs{
@@ -133,10 +136,15 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	return nil
 }
 
+// gitTimeout bounds all git calls of one submit.
+var gitTimeout = 5 * time.Second
+
 // gitOut runs git in dir and returns trimmed stdout; any error yields "".
-func gitOut(dir string, args ...string) string {
-	cmd := exec.Command("git", args...)
+// --no-optional-locks keeps status from taking index.lock.
+func gitOut(ctx context.Context, dir string, args ...string) string {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = dir
+	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
