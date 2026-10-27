@@ -1,0 +1,6 @@
+[Unit]
+Description=aq task pool
+
+[Slice]
+# The pool memory limit is set by the daemon from config.toml.
+MemorySwapMax=0

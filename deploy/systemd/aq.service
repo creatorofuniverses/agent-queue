@@ -1,0 +1,11 @@
+[Unit]
+Description=aq local resource dispatcher
+
+[Service]
+# The daemon stays outside aq.slice: only tasks are charged to the pool.
+ExecStart=%h/.local/bin/aq daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
