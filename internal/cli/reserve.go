@@ -4,18 +4,11 @@ import (
 	"fmt"
 	"os"
 	"time"
-	"unicode/utf8"
 
+	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/units"
 )
-
-// maxTeardownScript is the largest teardown script the client sends.
-const maxTeardownScript = 64 << 10
-
-// reserveCapturedEnv is the submit env list plus the Docker client variables.
-var reserveCapturedEnv = append(append([]string{}, capturedEnv...), "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
 
 func cmdReserve(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("reserve")
@@ -29,6 +22,8 @@ func cmdReserve(c *cmdCtx, args []string) error {
 	priority := fs.String("priority", "normal", "low|normal|high")
 	name := fs.String("name", "", "reservation name")
 	key := fs.String("key", "", "idempotency key")
+	flagClient := fs.String("client", "", "agent adapter name or cli")
+	noNotify := fs.Bool("no-notify", false, "disable session notifications")
 	session := fs.String("session", "", "session id")
 	project := fs.String("project", "", "project (default: git root of cwd)")
 	asJSON := fs.Bool("json", false, "print the item as JSON")
@@ -41,65 +36,21 @@ func cmdReserve(c *cmdCtx, args []string) error {
 	if len(pos) > 0 {
 		return usagef("reserve: unexpected argument %q", pos[0])
 	}
-	if *memory == "" {
-		return usagef("reserve: --memory is required")
-	}
-	mem, err := units.ParseSize(*memory)
-	if err != nil || mem == 0 {
-		return usagef("reserve: invalid --memory %q", *memory)
-	}
-	if *cpus < 0 {
-		return usagef("reserve: --cpus must not be negative")
-	}
-	if *ttl == "" {
-		return usagef("reserve: --ttl is required")
-	}
-	d, err := time.ParseDuration(*ttl)
-	if err != nil || d < time.Second {
-		return usagef("reserve: invalid --ttl %q", *ttl)
-	}
-	if *teardown == "" {
-		return usagef("reserve: --teardown is required")
-	}
-	if (*taskMemory == "") != (*taskCPUs == 0) {
-		return usagef("reserve: --task-memory and --task-cpus must be given together")
-	}
-	var tmem uint64
-	if *taskMemory != "" {
-		if tmem, err = units.ParseSize(*taskMemory); err != nil {
-			return usagef("reserve: --task-memory: %v", err)
-		}
-		if *taskCPUs < 1 {
-			return usagef("reserve: --task-cpus must be at least 1")
-		}
-	}
-	if _, err := model.ParsePriority(*priority); err != nil {
-		return usagef("reserve: %v", err)
-	}
-	script, err := os.ReadFile(*teardown)
-	if err != nil {
-		return usagef("reserve: cannot read --teardown file: %v", err)
-	}
-	if len(script) == 0 || len(script) > maxTeardownScript {
-		return usagef("reserve: --teardown script must be 1 byte to 64 KiB")
-	}
-	if !utf8.Valid(script) {
-		return usagef("reserve: teardown script must be valid UTF-8")
-	}
-	env, err := captureEnv(c, "reserve", reserveCapturedEnv, envs)
+	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	cwd, proj, _, _, err := detectProject(c, *project)
+	cfg := c.clientConfig()
+	identity, err := client.DetectIdentity(cfg.Agents, c.env, *flagClient, *session)
+	if err != nil {
+		return err
+	}
+	request, err := client.BuildReserve(c.ctx, client.ReserveOptions{Cwd: cwd, Name: *name, Memory: *memory, CPUs: *cpus, TaskMemory: *taskMemory, TaskCPUs: *taskCPUs, TTL: *ttl, TeardownFile: *teardown, DockerProject: *dockerProject, Priority: *priority, Key: *key, Project: *project, Env: envs, NoNotify: *noNotify, Identity: identity}, c.env)
 	if err != nil {
 		return err
 	}
 	var v daemon.ItemView
-	err = c.call(c.ctx, "reserve", daemon.ReserveArgs{
-		Name: *name, Cwd: cwd, Env: env, Memory: mem, CPUs: *cpus, TaskMemory: tmem, TaskCPUs: *taskCPUs,
-		TTLSeconds: int64(d / time.Second), Teardown: string(script), DockerProject: *dockerProject,
-		Priority: *priority, SessionID: *session, ClientType: "cli", Project: proj, IdemKey: *key,
-	}, &v)
+	err = c.call(c.ctx, "reserve", request, &v)
 	if err != nil {
 		return err
 	}
@@ -111,6 +62,7 @@ func cmdReserve(c *cmdCtx, args []string) error {
 		line += fmt.Sprintf(" position=%d blocked_by=%s", v.Position, v.BlockedBy)
 	}
 	fmt.Fprintln(c.stdout, line)
+	waitHint(c, cfg, identity, v.ID)
 	return nil
 }
 

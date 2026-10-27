@@ -10,14 +10,14 @@ import (
 	"io"
 	"path/filepath"
 
+	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/config"
+	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/protocol"
 )
 
 // usageError is a command line mistake; it exits with 64.
-type usageError struct{ msg string }
-
-func (e *usageError) Error() string { return e.msg }
+type usageError = client.UsageError
 
 func usagef(format string, a ...any) error { return &usageError{fmt.Sprintf(format, a...)} }
 
@@ -51,6 +51,7 @@ func init() {
 		"cancel":   cmdCancel,
 		"list":     cmdList,
 		"wait":     cmdWait,
+		"ack":      cmdAck,
 		"reserve":  cmdReserve,
 		"extend":   cmdExtend,
 		"release":  cmdRelease,
@@ -62,7 +63,7 @@ func init() {
 
 const usageText = `usage: aq <command> [flags]
 
-commands: daemon submit status result logs cancel list wait reserve extend release teardown doctor version
+commands: daemon submit status result logs cancel list wait reserve extend release teardown doctor ack hook mcp version
 `
 
 // Main runs the aq CLI and returns the process exit code.
@@ -97,7 +98,7 @@ func exitCode(err error, stderr io.Writer) int {
 		}
 		return ee.code
 	case errors.As(err, &ue):
-		fmt.Fprintln(stderr, "aq:", ue.msg)
+		fmt.Fprintln(stderr, "aq:", ue.Error())
 		return exitUsage
 	case errors.Is(err, protocol.ErrDaemonUnavailable):
 		fmt.Fprintln(stderr, "aq: daemon is not running (start it with `aq daemon`)")
@@ -195,4 +196,24 @@ func callOn(ctx context.Context, p config.Paths, op string, args, out any) error
 
 func callStreamOn(ctx context.Context, p config.Paths, op string, args any, onStream func(json.RawMessage) error) error {
 	return protocol.CallStream(ctx, p.Socket(), op, args, onStream, nil)
+}
+
+// clientConfig warns once and keeps CLI usable with defaults on config errors.
+func (c *cmdCtx) clientConfig() config.Config {
+	p, err := c.paths()
+	if err != nil {
+		fmt.Fprintf(c.stderr, "aq: config: %v; using defaults\n", err)
+		return config.Default()
+	}
+	cfg, err := config.Load(p.ConfigFile)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "aq: %v; using defaults\n", err)
+		return config.Default()
+	}
+	return cfg
+}
+func waitHint(c *cmdCtx, cfg config.Config, id client.Identity, item model.ItemID) {
+	if a, ok := cfg.Agent(id.ClientType); ok && a.Delivery == config.DeliveryClientWait {
+		fmt.Fprintf(c.stderr, "hint: to be woken, run in background: aq wait %s\n", item)
+	}
 }

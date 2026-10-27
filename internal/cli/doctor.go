@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"resource-dispatcher/internal/config"
+	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/platform/linux"
 	"resource-dispatcher/internal/protocol"
 	"resource-dispatcher/internal/units"
@@ -50,20 +51,29 @@ type Check struct {
 
 // doctorSystem is everything doctor needs from the real machine, so tests can fake it.
 type doctorSystem struct {
-	UID       int
-	ReadFile  func(path string) ([]byte, error)
-	Exists    func(path string) bool
-	Run       func(ctx context.Context, name string, args ...string) (string, error)
-	DiskFree  func(path string) (uint64, error)
-	MemTotal  func() (uint64, error)
-	NumCPU    func() int
-	RandomHex func() string
-	Ping      func(ctx context.Context, socket string) error
+	PingDetails func(context.Context, string) ([]daemon.AdapterStatus, daemon.WebhookStatus, error)
+	UID         int
+	ReadFile    func(path string) ([]byte, error)
+	Exists      func(path string) bool
+	Run         func(ctx context.Context, name string, args ...string) (string, error)
+	DiskFree    func(path string) (uint64, error)
+	MemTotal    func() (uint64, error)
+	NumCPU      func() int
+	RandomHex   func() string
+	Ping        func(ctx context.Context, socket string) error
 }
 
 func realDoctorSystem() doctorSystem {
 	host := linux.NewHost("/proc")
 	return doctorSystem{
+		PingDetails: func(ctx context.Context, socket string) ([]daemon.AdapterStatus, daemon.WebhookStatus, error) {
+			var p struct {
+				Adapters []daemon.AdapterStatus `json:"adapters"`
+				Webhook  daemon.WebhookStatus   `json:"webhook"`
+			}
+			err := protocol.Call(ctx, socket, "ping", nil, &p)
+			return p.Adapters, p.Webhook, err
+		},
 		UID:      os.Getuid(),
 		ReadFile: os.ReadFile,
 		Exists:   func(p string) bool { _, err := os.Stat(p); return err == nil },
@@ -170,7 +180,15 @@ func runDoctor(ctx context.Context, sys doctorSystem, paths config.Paths, xdgRun
 
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	add("daemon", codeDaemonUnavailable, sys.Ping(pctx, paths.Socket()), paths.Socket())
+	if sys.PingDetails != nil {
+		adapters, webhook, err := sys.PingDetails(pctx, paths.Socket())
+		add("daemon", codeDaemonUnavailable, err, paths.Socket())
+		if err == nil {
+			out = append(out, notificationChecks(adapters, webhook)...)
+		}
+	} else {
+		add("daemon", codeDaemonUnavailable, sys.Ping(pctx, paths.Socket()), paths.Socket())
+	}
 
 	ver, verErr := systemdVersion(ctx, sys)
 	add("systemd", codeSystemdTooOld, verErr, fmt.Sprintf("version %d", ver)) // ver is only used when verErr is nil
@@ -299,4 +317,24 @@ func existingParent(sys doctorSystem, p string) string {
 		p = filepath.Dir(p)
 	}
 	return p
+}
+
+func notificationChecks(adapters []daemon.AdapterStatus, w daemon.WebhookStatus) []Check {
+	out := make([]Check, 0, len(adapters)+1)
+	for _, a := range adapters {
+		ch := Check{Name: "adapter:" + a.Name, OK: a.OK, Detail: a.Detail}
+		if !ch.OK {
+			ch.Code = "ADAPTER_UNAVAILABLE"
+		}
+		out = append(out, ch)
+	}
+	ch := Check{Name: "webhook", OK: true, Detail: "webhook configured"}
+	if !w.Configured {
+		ch.Detail = "webhook not configured (operator alerts are skipped)"
+	} else if w.LastError != "" {
+		ch.OK = false
+		ch.Code = "WEBHOOK_FAILING"
+		ch.Detail = w.LastError
+	}
+	return append(out, ch)
 }

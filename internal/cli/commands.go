@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/model"
@@ -218,12 +219,23 @@ func cmdCancel(c *cmdCtx, args []string) error {
 func cmdList(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("list")
 	session := fs.String("session", "", "only this session")
+	mine := fs.Bool("mine", false, "only this session, including unacknowledged events")
 	all := fs.Bool("all", false, "include finished items")
 	asJSON := fs.Bool("json", false, "print JSON")
 	if pos, err := parseFlags(fs, args); err != nil {
 		return err
 	} else if len(pos) > 0 {
 		return usagef("list: unexpected argument %q", pos[0])
+	}
+	if *mine {
+		id, err := client.DetectIdentity(c.clientConfig().Agents, c.env, "", *session)
+		if err != nil {
+			return err
+		}
+		if id.SessionID == "" {
+			return usagef("list: --mine needs a session (CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID or --session)")
+		}
+		*session = id.SessionID
 	}
 	var views []daemon.ItemView
 	if err := c.call(c.ctx, "list", map[string]any{"session_id": *session, "all": *all}, &views); err != nil {
@@ -256,24 +268,49 @@ func cmdList(c *cmdCtx, args []string) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, name, kind, state, v.Priority,
 			units.FormatSize(v.MemoryLimit), expires, secs(v.WaitSeconds), secs(v.RunSeconds), blocked)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if *session != "" {
+		fmt.Fprintln(c.stdout)
+		tw = tabwriter.NewWriter(c.stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "EVENT\tITEM\tKIND\tSTATUS\tAGE")
+		for _, v := range views {
+			for _, e := range v.Events {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", e.ID, v.ID, e.Kind, e.Status, time.Since(e.CreatedAt).Round(time.Second))
+			}
+		}
+		return tw.Flush()
+	}
+	return nil
 }
 
 func cmdWait(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("wait")
+	until := fs.String("until", "", "wait condition: expiring (reservation only)")
+	asJSON := fs.Bool("json", false, "print JSON")
 	id, err := parseID(fs, args)
 	if err != nil {
 		return err
 	}
+	if *until != "" && *until != "expiring" {
+		return usagef("wait: --until must be expiring")
+	}
 	ctx, stop := signal.NotifyContext(c.ctx, os.Interrupt)
 	defer stop()
 	var v daemon.ItemView
-	err = c.call(ctx, "wait", map[string]string{"id": id}, &v)
+	err = c.call(ctx, "wait", map[string]string{"id": id, "until": *until}, &v)
 	if ctx.Err() != nil {
 		return &exitError{code: exitInterrupted, msg: "interrupted"}
 	}
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		if err := printJSON(c, v); err != nil {
+			return err
+		}
+		return &exitError{code: ExitCodeFor(v)}
 	}
 	line := fmt.Sprintf("%s %s", v.ID, v.State)
 	if v.Reason != "" {
@@ -286,7 +323,13 @@ func cmdWait(c *cmdCtx, args []string) error {
 	if v.Diagnostic != "" {
 		line += " " + strings.ReplaceAll(v.Diagnostic, "\n", " ")
 	}
+	for _, e := range v.Events {
+		line += fmt.Sprintf(" event=%s:%s", e.ID, e.Kind)
+	}
 	fmt.Fprintln(c.stdout, line)
+	if *until == "expiring" && v.State == model.StateGranted {
+		fmt.Fprintf(c.stderr, "hint: reservation still held; re-run in background: aq wait %s --until expiring\n", v.ID)
+	}
 	if code := ExitCodeFor(v); code != exitOK {
 		return &exitError{code: code}
 	}
@@ -298,4 +341,22 @@ func shortID(id model.ItemID) string {
 		return string(id[:8])
 	}
 	return string(id)
+}
+
+func cmdAck(c *cmdCtx, args []string) error {
+	fs := c.newFlagSet("ack")
+	asJSON := fs.Bool("json", false, "print JSON")
+	id, err := parseID(fs, args)
+	if err != nil {
+		return err
+	}
+	var e daemon.EventView
+	if err = c.call(c.ctx, "ack", map[string]string{"event_id": id}, &e); err != nil {
+		return err
+	}
+	if *asJSON {
+		return printJSON(c, e)
+	}
+	fmt.Fprintf(c.stdout, "%s %s\n", e.ID, e.Status)
+	return nil
 }
