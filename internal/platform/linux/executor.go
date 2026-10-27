@@ -97,6 +97,10 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 	}
 	args := []string{"--user", "--quiet", "--collect", "--expand-environment=no",
 		"--unit", cfg.UnitPrefix + string(spec.ID), "--slice", cfg.unitSlice(spec.ID)}
+	oomAdjust := "900" // the kernel's first choice in a pinch, before anything else on the host
+	if model.IsTeardownUnitID(spec.ID) {
+		oomAdjust = "0" // the script that frees a stand must not be the one killed
+	}
 	props := []string{
 		"MemoryMax=" + strconv.FormatUint(spec.Limit, 10),
 		"MemoryHigh=" + strconv.FormatUint(high, 10),
@@ -104,7 +108,7 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 		"CPUQuota=" + strconv.Itoa(spec.CPUs*100) + "%",
 		"KillMode=control-group",
 		"OOMPolicy=kill",
-		"OOMScoreAdjust=900",
+		"OOMScoreAdjust=" + oomAdjust,
 		"RuntimeMaxSec=" + ceilSeconds(spec.Timeout),
 		"TimeoutStopSec=" + ceilSeconds(spec.KillGrace),
 		// SIGABRT can be ignored and dumps core; on Fedora the drop-in from

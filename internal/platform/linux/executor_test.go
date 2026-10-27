@@ -387,10 +387,17 @@ func TestSystemdRunArgsTeardownSlice(t *testing.T) {
 	if !hasPair(args, "--slice", "aqtesttd.slice") || !hasPair(args, "--unit", "aqtest-teardown-"+string(id)) {
 		t.Fatalf("teardown unit: %q", args)
 	}
+	// Final review F4: the kernel must not prefer the script that frees the stand.
+	if !hasPair(args, "-p", "OOMScoreAdjust=0") || hasPair(args, "-p", "OOMScoreAdjust=900") {
+		t.Fatalf("teardown unit OOMScoreAdjust: %q", args)
+	}
 	s.ID = id
 	args = SystemdRunArgs(cfg, s)
 	if !hasPair(args, "--slice", "aqtest.slice") || !hasPair(args, "--unit", "aqtest-"+string(id)) {
 		t.Fatalf("task unit: %q", args)
+	}
+	if !hasPair(args, "-p", "OOMScoreAdjust=900") || hasPair(args, "-p", "OOMScoreAdjust=0") {
+		t.Fatalf("task unit OOMScoreAdjust: %q", args)
 	}
 }
 
