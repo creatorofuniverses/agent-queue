@@ -97,7 +97,8 @@ func (s *Scheduler) teardownSpec(it *model.Item) platform.LaunchSpec {
 // then applies the outcome only if the reservation is still TEARING_DOWN with the same
 // attempt. A failed Launch whose unit is gone is TEARDOWN_FAILED; one whose unit may
 // still run keeps TEARING_DOWN with TeardownLaunchError, and the reaper stops the unit
-// until it is gone.
+// until it is gone. A Launch error is kept in launchFailed until it is stored, and a
+// unit that may run is stopped even if the reservation cannot be loaded.
 func (s *Scheduler) launchTeardown(ctx context.Context, it *model.Item) {
 	pctx := context.WithoutCancel(ctx)
 	uid := model.TeardownUnitID(it.ID)
@@ -127,15 +128,22 @@ func (s *Scheduler) launchTeardown(ctx context.Context, it *model.Item) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.teardownLaunching, it.ID)
+	if lerr != nil {
+		s.launchFailed[it.ID] = launchFailure{attempt: it.TeardownAttempt, err: lerr.Error()}
+		if unitAlive {
+			s.stopAsyncLocked(uid)
+		}
+	}
 	cur, err := s.d.Store.Get(pctx, it.ID)
 	if err != nil {
-		// Stays TEARING_DOWN; the reaper settles it from the unit.
+		// Stays TEARING_DOWN; the reaper records a launch error and settles it from the unit.
 		slog.Error("scheduler: load launched teardown", "id", it.ID, "launched", lerr == nil, "err", err)
 		return
 	}
 	if cur.State != model.StateTearingDown || cur.TeardownAttempt != it.TeardownAttempt {
 		slog.Warn("scheduler: teardown changed during its launch; outcome dropped", "id", it.ID,
 			"state", cur.State, "attempt", cur.TeardownAttempt, "launched_attempt", it.TeardownAttempt)
+		delete(s.launchFailed, it.ID)
 		return
 	}
 	switch {
@@ -145,25 +153,22 @@ func (s *Scheduler) launchTeardown(ctx context.Context, it *model.Item) {
 			slog.Error("scheduler: record teardown unit", "id", cur.ID, "err", err)
 		}
 	case unitAlive:
-		cur.TeardownLaunchError = lerr.Error()
-		cur.Diagnostic = fmt.Sprintf("teardown launch failed, stopping its unit: %v", lerr)
-		if err := s.persistLocked(pctx, cur); err != nil {
-			slog.Error("scheduler: record teardown launch error", "id", cur.ID, "err", err)
-		}
-		s.stopAsyncLocked(uid)
+		s.recordLaunchFailureLocked(pctx, cur)
 	default:
 		_ = s.failTeardownLocked(pctx, cur, *cur, model.ReasonLaunchFailed, "launch failed: "+lerr.Error(), false)
 	}
 }
 
 // reapTeardownLocked settles a TEARING_DOWN reservation whose Launch has returned.
-// After a launch error the unit is stopped every cancel_grace while it lives, and once
-// it is gone the attempt is TEARDOWN_FAILED whatever it recorded. Otherwise Alive is
+// After a launch error (stored, or pending in launchFailed, which it stores first) the
+// unit is stopped every cancel_grace while it lives, and once it is gone the attempt
+// is TEARDOWN_FAILED whatever it recorded. Otherwise Alive is
 // read before the result, as for tasks: a result with no processes left maps exit 0 to
 // TORN_DOWN and anything else to TEARDOWN_FAILED; no result and no processes,
 // continuously for cancel_grace, is TEARDOWN_UNKNOWN.
 func (s *Scheduler) reapTeardownLocked(ctx context.Context, it *model.Item, now time.Time) {
 	uid := model.TeardownUnitID(it.ID)
+	s.recordLaunchFailureLocked(ctx, it)
 	alive, err := s.d.Exec.Alive(ctx, uid)
 	if err != nil {
 		slog.Warn("scheduler: read teardown unit liveness", "id", it.ID, "err", err)
@@ -209,6 +214,28 @@ func (s *Scheduler) reapTeardownLocked(ctx context.Context, it *model.Item, now 
 		return
 	}
 	_ = s.settleGoneTeardownLocked(ctx, it, ei, nil)
+}
+
+// recordLaunchFailureLocked stores the pending Launch error of it's current attempt as
+// TeardownLaunchError. If the write fails it stays pending and is still set on it, so
+// the caller treats the attempt as failed; a pending error of another attempt, or of
+// one already stored, is dropped.
+func (s *Scheduler) recordLaunchFailureLocked(ctx context.Context, it *model.Item) {
+	f, ok := s.launchFailed[it.ID]
+	if !ok {
+		return
+	}
+	if f.attempt != it.TeardownAttempt || it.TeardownLaunchError != "" {
+		delete(s.launchFailed, it.ID)
+		return
+	}
+	it.TeardownLaunchError = f.err
+	it.Diagnostic = "teardown launch failed, stopping its unit: " + f.err
+	if err := s.persistLocked(ctx, it); err != nil {
+		slog.Error("scheduler: record teardown launch error", "id", it.ID, "err", err)
+		return
+	}
+	delete(s.launchFailed, it.ID)
 }
 
 // settleGoneTeardownLocked records the outcome of a TEARING_DOWN attempt with no
@@ -271,6 +298,7 @@ func (s *Scheduler) settleTeardownLocked(ctx context.Context, it *model.Item, pr
 	delete(s.goneSince, it.ID)
 	delete(s.resultSeen, uid)
 	delete(s.lastStop, uid)
+	delete(s.launchFailed, it.ID)
 	tmp := s.d.Paths.TeardownTmpDir(it.ID, it.TeardownAttempt)
 	s.background(func() {
 		if err := os.RemoveAll(tmp); err != nil {

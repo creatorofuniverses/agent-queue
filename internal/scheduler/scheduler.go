@@ -99,6 +99,15 @@ type Scheduler struct {
 	// teardownLaunching holds reservations whose teardown Launch is in flight; the
 	// reaper leaves them alone, as it does tasks in STARTING.
 	teardownLaunching map[model.ItemID]bool
+	// launchFailed holds a teardown attempt's Launch error until TeardownLaunchError
+	// is stored: the reaper keeps treating that attempt as failed and records it.
+	launchFailed map[model.ItemID]launchFailure
+}
+
+// launchFailure is the Launch error of teardown attempt attempt.
+type launchFailure struct {
+	attempt int
+	err     string
 }
 
 // New returns a scheduler that admits nothing (BlockRecovering) until Recover succeeds.
@@ -125,6 +134,7 @@ func New(d Deps) *Scheduler {
 		standUsage:   map[model.ItemID]uint64{},
 
 		teardownLaunching: map[model.ItemID]bool{},
+		launchFailed:      map[model.ItemID]launchFailure{},
 	}
 }
 

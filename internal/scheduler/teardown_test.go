@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -349,6 +350,87 @@ func TestTeardownLaunchErrorThenSuccessResult(t *testing.T) {
 	e.ex.SetAlive(uid, false)
 	e.tick(t)
 	e.wantState(t, res.ID, model.StateTeardownFailed, model.ReasonLaunchFailed)
+}
+
+// sqlDB is a second connection to the env's database, to inject store failures.
+func (e *env) sqlDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(filepath.Dir(e.paths.StateDir), "aq.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func sqlExec(t *testing.T, db *sql.DB, q string) {
+	t.Helper()
+	if _, err := db.Exec(q); err != nil {
+		t.Fatalf("%s: %v", q, err)
+	}
+}
+
+// Final review F2 (a): loading the reservation after a failed Launch fails. The unit is
+// stopped all the same, and a later successful result of that attempt is not trusted.
+func TestTeardownLaunchErrorSurvivesFailedLoad(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	db := e.sqlDB(t)
+	e.ex.FailLaunch(errors.New("teardown unit started without its memory limit"))
+	e.ex.SetAlive(uid, true)
+	e.ex.SetBeforeLaunch(func(sp platform.LaunchSpec) {
+		if sp.ID == uid { // the Get after Launch fails
+			sqlExec(t, db, "ALTER TABLE items RENAME TO items_away")
+		}
+	})
+	e.tickAt(t, res.ExpiresAt)
+	e.ex.SetBeforeLaunch(nil)
+	sqlExec(t, db, "ALTER TABLE items_away RENAME TO items")
+	e.settle()
+	if !contains(e.ex.Stopped(), uid) {
+		t.Fatalf("stopped %v, want %s", e.ex.Stopped(), uid)
+	}
+	e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone)
+
+	e.finish(uid, exit0) // result.json of the attempt whose launch failed
+	e.tick(t)
+	it := e.wantState(t, res.ID, model.StateTeardownFailed, model.ReasonLaunchFailed)
+	if !strings.Contains(it.Diagnostic, "without its memory limit") {
+		t.Fatalf("diagnostic %q", it.Diagnostic)
+	}
+}
+
+// Final review F2 (b): recording the launch error fails. While it is not recorded the
+// attempt never settles as a success; the reaper records it once the store is back.
+func TestTeardownLaunchErrorSurvivesFailedWrite(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	db := e.sqlDB(t)
+	sqlExec(t, db, `CREATE TRIGGER fail_marker BEFORE UPDATE ON items WHEN NEW.teardown_launch_error <> ''
+BEGIN SELECT RAISE(ABORT, 'injected store failure'); END`)
+	e.ex.FailLaunch(errors.New("teardown unit started without its memory limit"))
+	e.ex.SetAlive(uid, true)
+	e.tickAt(t, res.ExpiresAt)
+	e.settle()
+	if !contains(e.ex.Stopped(), uid) {
+		t.Fatalf("stopped %v, want %s", e.ex.Stopped(), uid)
+	}
+	if it := e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone); it.TeardownLaunchError != "" {
+		t.Fatalf("launch error %q recorded despite the failing store", it.TeardownLaunchError)
+	}
+
+	e.finish(uid, exit0) // result.json of the attempt whose launch failed
+	e.tick(t)
+	e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone)
+
+	sqlExec(t, db, "DROP TRIGGER fail_marker")
+	e.tick(t)
+	it := e.wantState(t, res.ID, model.StateTeardownFailed, model.ReasonLaunchFailed)
+	if !strings.Contains(it.Diagnostic, "without its memory limit") || it.TeardownLaunchError == "" {
+		t.Fatalf("diagnostic %q launch error %q", it.Diagnostic, it.TeardownLaunchError)
+	}
 }
 
 // Codex r2: a retry after a launch error starts clean.
