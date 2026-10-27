@@ -261,3 +261,49 @@ func (h *Host) NumCPU() int {
 	defer h.mu.Unlock()
 	return h.cpus
 }
+
+// Meter is a StandMeter whose measurements the test sets directly.
+type Meter struct {
+	mu      sync.Mutex
+	usage   map[string]uint64
+	watched []string
+}
+
+func NewMeter() *Meter { return &Meter{usage: map[string]uint64{}} }
+
+// Set makes project report a fresh measurement of bytes.
+func (m *Meter) Set(project string, bytes uint64) {
+	m.mu.Lock()
+	m.usage[project] = bytes
+	m.mu.Unlock()
+}
+
+// Unset makes project report no fresh measurement.
+func (m *Meter) Unset(project string) {
+	m.mu.Lock()
+	delete(m.usage, project)
+	m.mu.Unlock()
+}
+
+// Watched is the set from the last Watch.
+func (m *Meter) Watched() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.watched...)
+}
+
+func (m *Meter) Watch(projects []string) {
+	m.mu.Lock()
+	m.watched = append([]string(nil), projects...)
+	m.mu.Unlock()
+}
+
+func (m *Meter) Usage(project string) (uint64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.usage[project]
+	return v, ok
+}
+
+// Run measures nothing; it blocks until ctx ends.
+func (m *Meter) Run(ctx context.Context) { <-ctx.Done() }

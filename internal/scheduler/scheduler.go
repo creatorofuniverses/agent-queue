@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
 	"resource-dispatcher/internal/store"
+	"resource-dispatcher/internal/units"
 )
 
 // ErrRejected: the request failed validation; the item is stored as REJECTED.
@@ -41,6 +43,7 @@ type Deps struct {
 	Store *store.Store
 	Exec  platform.Executor
 	Host  platform.HostMetrics
+	Meter platform.StandMeter // nil: no stand is ever measured
 	Cfg   config.Config
 	Paths config.Paths
 	Now   func() time.Time
@@ -83,7 +86,9 @@ type Scheduler struct {
 	goneSince      map[model.ItemID]time.Time     // no processes and no result since
 	stopping       map[model.ItemID]bool          // a background Stop is in flight
 	lastStop       map[model.ItemID]time.Time     // when the last background Stop was issued
-	waiters        map[model.ItemID]chan struct{} // closed on the terminal transition
+	waiters        map[model.ItemID]chan struct{} // closed once waitDone
+	passDone       chan struct{}                  // closed and replaced at the end of every pass
+	standUsage     map[model.ItemID]uint64        // fresh stand measurements seen by the last pass
 }
 
 // New returns a scheduler that admits nothing (BlockRecovering) until Recover succeeds.
@@ -106,6 +111,8 @@ func New(d Deps) *Scheduler {
 		lastStop:     map[model.ItemID]time.Time{},
 		recovering:   true, // admission stays closed until Recover succeeds
 		waiters:      map[model.ItemID]chan struct{}{},
+		passDone:     make(chan struct{}),
+		standUsage:   map[model.ItemID]uint64{},
 	}
 }
 
@@ -219,23 +226,33 @@ func (s *Scheduler) endLocked(it *model.Item, st model.State, r model.Reason, di
 	}
 }
 
-// persistLocked writes it. On a terminal state, which is only ever reached with no
-// processes left, it drops the env, wakes waiters and removes the item's temp dir (never its JobDir).
-func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item) error {
+// persistLocked writes it together with evs (one transaction; events without CreatedAt
+// are stamped now) and wakes its waiters once waitDone. On a terminal state, which is
+// only ever reached with no processes left, it drops the env and removes the item's
+// temp dir (never its JobDir).
+func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...model.Event) error {
 	if it.State.Terminal() {
 		it.Env = nil // values may be secrets; a terminal item never needs them
 	}
-	if err := s.d.Store.Update(ctx, it); err != nil {
+	now := s.d.Now()
+	for i := range evs {
+		if evs[i].CreatedAt.IsZero() {
+			evs[i].CreatedAt = now
+		}
+	}
+	if err := s.d.Store.UpdateWithEvents(ctx, it, evs); err != nil {
 		return err
+	}
+	if waitDone(it) {
+		if ch, ok := s.waiters[it.ID]; ok {
+			close(ch)
+			delete(s.waiters, it.ID)
+		}
 	}
 	if it.State.Terminal() {
 		delete(s.resultSeen, it.ID)
 		delete(s.goneSince, it.ID)
 		delete(s.lastStop, it.ID)
-		if ch, ok := s.waiters[it.ID]; ok {
-			close(ch)
-			delete(s.waiters, it.ID)
-		}
 		tmp := s.d.Paths.TmpDir(it.ID)
 		s.background(func() {
 			if err := os.RemoveAll(tmp); err != nil {
@@ -275,16 +292,19 @@ func (s *Scheduler) stopAsyncLocked(id model.ItemID) {
 }
 
 // Tick runs one scheduling pass: reap finished or vanished units, update the pressure
-// gate, admit queue heads while they fit, then launch the admitted items outside the lock.
+// gate, admit queue heads while they fit (granting reservations at once), then launch
+// the admitted tasks outside the lock.
 func (s *Scheduler) Tick(ctx context.Context) error {
 	s.mu.Lock()
 	items, err := s.d.Store.ListActive(ctx)
 	if err != nil {
+		s.endPassLocked()
 		s.mu.Unlock()
 		return err
 	}
 	s.reapLocked(ctx, items)
 	admitted, err := s.admitLocked(ctx, items)
+	s.endPassLocked()
 	s.mu.Unlock()
 
 	for _, it := range admitted {
@@ -309,50 +329,149 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 	if err != nil {
 		return nil, err
 	}
-	snap := admission.Snapshot{
-		MemAvailable: mem.Available, DiskFree: disk,
-		PressureClosed: s.pressureClosed, Recovering: s.recovering,
-	}
-	var queue []*model.Item
-	for _, it := range items {
-		switch it.State {
-		case model.StateQueued:
-			queue = append(queue, it)
-			continue
-		case model.StateStarting, model.StateRunning:
-			cur, _ := s.d.Exec.MemoryCurrent(it.ID)
-			if it.Expected > cur {
-				snap.Unconsumed += it.Expected - cur
-			}
-		case model.StateCleaning, model.StateRecovering:
-		default:
-			continue // finalized by reapLocked in this pass
-		}
-		snap.Committed.MemoryBytes += it.Expected
-		snap.Committed.CPUs += it.CPUs
-	}
+	snap, queue, _ := s.snapshotLocked(ctx, items, mem, disk)
 
 	pol := s.policy(mem.Total)
 	s.headID, s.headDecision = "", admission.Decision{Admit: true}
 	var admitted []*model.Item
 	for _, it := range queue {
-		dec := admission.Decide(pol, snap, it.Committed())
+		req := it.Committed()
+		dec := admission.Decide(pol, snap, req)
 		if !dec.Admit {
 			s.headID, s.headDecision = it.ID, dec
 			break
 		}
-		it.State, it.AdmittedAt = model.StateStarting, now
-		it.JobDir = s.d.Paths.JobDir(it.ID)
-		if err := s.persistLocked(ctx, it); err != nil {
-			return admitted, err
+		if it.IsReservation() {
+			if err := s.grantLocked(ctx, it, now); err != nil {
+				return admitted, err
+			}
+		} else {
+			it.State, it.AdmittedAt = model.StateStarting, now
+			it.JobDir = s.d.Paths.JobDir(it.ID)
+			if err := s.persistLocked(ctx, it); err != nil {
+				return admitted, err
+			}
+			admitted = append(admitted, it)
 		}
 		// A just-admitted item has consumed nothing yet.
-		snap.Committed.MemoryBytes += it.Expected
-		snap.Committed.CPUs += it.CPUs
-		snap.Unconsumed += it.Expected
-		admitted = append(admitted, it)
+		snap.Committed.MemoryBytes += req.MemoryBytes
+		snap.Committed.CPUs += req.CPUs
+		snap.Unconsumed += req.MemoryBytes
+	}
+	// A reservation that stays queued through a pass is told when it is granted.
+	for _, it := range queue {
+		if it.IsReservation() && it.State == model.StateQueued && !it.NotifyGrant {
+			it.NotifyGrant = true
+			if err := s.persistLocked(ctx, it); err != nil {
+				slog.Error("scheduler: record grant notification", "id", it.ID, "err", err)
+			}
+		}
 	}
 	return admitted, nil
+}
+
+// snapshotLocked builds the admission snapshot from the active items and returns the
+// non-nested queue (in order) and the queued nested tasks. Counted against the pool:
+// non-nested tasks while STARTING..RECOVERING, reservations while Held, each by
+// Committed(). Unconsumed: a task's max(0, expected - memory.current) while
+// STARTING/RUNNING; a held reservation's budget max(0, task_memory - Σ memory.current
+// of its STARTING/RUNNING nested tasks) plus its stand, which is max(0, memory -
+// measured) with a fresh measurement of its docker project and memory otherwise.
+// Nested tasks count only towards their parent's sum. It also hands the meter the
+// held projects and records stand_over_declared once per reservation.
+func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem platform.MemInfo, disk uint64) (admission.Snapshot, []*model.Item, []*model.Item) {
+	snap := admission.Snapshot{
+		MemAvailable: mem.Available, DiskFree: disk,
+		PressureClosed: s.pressureClosed, Recovering: s.recovering,
+	}
+	nestedCur := map[model.ItemID]uint64{}
+	var queue, nestedQueued []*model.Item
+	for _, it := range items {
+		if it.ParentID == "" {
+			continue
+		}
+		switch it.State {
+		case model.StateQueued:
+			nestedQueued = append(nestedQueued, it)
+		case model.StateStarting, model.StateRunning:
+			cur, _ := s.d.Exec.MemoryCurrent(it.ID)
+			nestedCur[it.ParentID] += cur
+		}
+	}
+
+	var projects []string
+	s.standUsage = map[model.ItemID]uint64{}
+	for _, it := range items {
+		if it.ParentID != "" {
+			continue
+		}
+		if it.State == model.StateQueued {
+			queue = append(queue, it)
+			continue
+		}
+		if it.IsReservation() {
+			if !it.State.Held() {
+				continue // terminal in this pass
+			}
+			snap.Unconsumed += satSub(it.TaskMemory, nestedCur[it.ID]) + s.standUnconsumedLocked(ctx, it)
+			if it.DockerProject != "" {
+				projects = append(projects, it.DockerProject)
+			}
+		} else {
+			switch it.State {
+			case model.StateStarting, model.StateRunning:
+				cur, _ := s.d.Exec.MemoryCurrent(it.ID)
+				snap.Unconsumed += satSub(it.Expected, cur)
+			case model.StateCleaning, model.StateRecovering:
+			default:
+				continue // finalized by reapLocked in this pass
+			}
+		}
+		c := it.Committed()
+		snap.Committed.MemoryBytes += c.MemoryBytes
+		snap.Committed.CPUs += c.CPUs
+	}
+	if s.d.Meter != nil {
+		slices.Sort(projects)
+		s.d.Meter.Watch(slices.Compact(projects))
+	}
+	return snap, queue, nestedQueued
+}
+
+// standUnconsumedLocked is the part of a held reservation's stand not yet in use.
+func (s *Scheduler) standUnconsumedLocked(ctx context.Context, it *model.Item) uint64 {
+	if it.DockerProject == "" || s.d.Meter == nil {
+		return it.Expected
+	}
+	used, ok := s.d.Meter.Usage(it.DockerProject)
+	if !ok {
+		return it.Expected // no fresh measurement: assume nothing is used yet
+	}
+	s.standUsage[it.ID] = used
+	if used > it.Expected && !it.OverDeclaredNotified {
+		it.OverDeclaredNotified = true
+		detail := fmt.Sprintf("stand of reservation %s (docker project %s) uses %s, declared %s",
+			it.ID, it.DockerProject, units.FormatSize(used), units.FormatSize(it.Expected))
+		evs := newEvents(it, model.EventStandOverDeclared, detail, model.AudienceSession, model.AudienceOperator)
+		if err := s.persistLocked(ctx, it, evs...); err != nil {
+			slog.Error("scheduler: record stand over declared", "id", it.ID, "err", err)
+		}
+	}
+	return satSub(it.Expected, used)
+}
+
+// satSub returns a-b, or 0 if b > a.
+func satSub(a, b uint64) uint64 {
+	if b > a {
+		return 0
+	}
+	return a - b
+}
+
+// endPassLocked wakes everyone waiting in AfterNextPass.
+func (s *Scheduler) endPassLocked() {
+	close(s.passDone)
+	s.passDone = make(chan struct{})
 }
 
 // start launches an admitted (STARTING) item. The cancel check, git and Launch run
@@ -497,11 +616,20 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 }
 
-// Wait blocks until id is terminal or ctx ends.
+// waitDone reports whether Wait on it returns: a task once terminal, a reservation
+// once it has left the queue.
+func waitDone(it *model.Item) bool {
+	if it.IsReservation() {
+		return it.State != model.StateQueued
+	}
+	return it.State.Terminal()
+}
+
+// Wait blocks until id is waitDone or ctx ends.
 func (s *Scheduler) Wait(ctx context.Context, id model.ItemID) (*model.Item, error) {
 	s.mu.Lock()
 	it, err := s.d.Store.Get(ctx, id)
-	if err != nil || it.State.Terminal() {
+	if err != nil || waitDone(it) {
 		s.mu.Unlock()
 		return it, err
 	}

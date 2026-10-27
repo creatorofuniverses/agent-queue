@@ -61,3 +61,10 @@ type HostMetrics interface {
 	KernelOOMKills() (uint64, error)
 	NumCPU() int
 }
+
+// StandMeter measures external stands; Usage never blocks.
+type StandMeter interface {
+	Watch(projects []string)                      // replaces the set to measure
+	Usage(project string) (bytes uint64, ok bool) // ok=false: no fresh measurement
+	Run(ctx context.Context)                      // refresh loop until ctx ends
+}

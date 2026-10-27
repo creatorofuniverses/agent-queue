@@ -47,6 +47,7 @@ type env struct {
 	st    *store.Store
 	ex    *fake.Executor
 	host  *fake.Host
+	meter *fake.Meter // nil: Deps.Meter stays nil
 	clk   *clock
 	paths config.Paths
 	cwd   string
@@ -73,6 +74,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		st:    st,
 		ex:    fake.NewExecutor(),
 		host:  fake.NewHost(),
+		meter: fake.NewMeter(),
 		clk:   &clock{t: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)},
 		paths: config.Paths{StateDir: filepath.Join(dir, "state"), RuntimeDir: filepath.Join(dir, "run")},
 		cwd:   t.TempDir(),
@@ -93,7 +95,11 @@ func (e *env) rebuild(t *testing.T, x platform.Executor, recover bool) {
 	if e.s != nil {
 		e.s.bg.Wait()
 	}
-	e.s = New(Deps{Store: e.st, Exec: x, Host: e.host, Cfg: e.cfg, Paths: e.paths, Now: e.clk.Now})
+	var meter platform.StandMeter
+	if e.meter != nil {
+		meter = e.meter
+	}
+	e.s = New(Deps{Store: e.st, Exec: x, Host: e.host, Meter: meter, Cfg: e.cfg, Paths: e.paths, Now: e.clk.Now})
 	if recover {
 		if err := e.s.Recover(e.ctx); err != nil {
 			t.Fatal(err)

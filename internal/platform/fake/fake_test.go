@@ -3,7 +3,9 @@ package fake_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
@@ -13,6 +15,7 @@ import (
 var (
 	_ platform.Executor    = (*fake.Executor)(nil)
 	_ platform.HostMetrics = (*fake.Host)(nil)
+	_ platform.StandMeter  = (*fake.Meter)(nil)
 )
 
 func TestFakeExecutorLifecycle(t *testing.T) {
@@ -86,5 +89,45 @@ func TestFakeHost(t *testing.T) {
 	k, _ := h.KernelOOMKills()
 	if m.Total != 8 || p != 1.5 || d != 7 || k != 3 || h.NumCPU() != 4 {
 		t.Fatal("host values")
+	}
+}
+
+func TestFakeMeter(t *testing.T) {
+	m := fake.NewMeter()
+	if _, ok := m.Usage("p"); ok {
+		t.Fatal("usage before Set")
+	}
+	m.Set("p", 42)
+	if v, ok := m.Usage("p"); !ok || v != 42 {
+		t.Fatalf("usage %d %v", v, ok)
+	}
+	m.Unset("p")
+	if _, ok := m.Usage("p"); ok {
+		t.Fatal("usage after Unset")
+	}
+	in := []string{"a", "b"}
+	m.Watch(in)
+	in[0] = "x" // Watch keeps its own copy
+	if w := m.Watched(); !slices.Equal(w, []string{"a", "b"}) {
+		t.Fatalf("watched %v", w)
+	}
+	m.Watch(nil)
+	if w := m.Watched(); len(w) != 0 {
+		t.Fatalf("watch replaces the set: %v", w)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { m.Run(ctx); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("Run returned before ctx ended")
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run ignored ctx")
 	}
 }
