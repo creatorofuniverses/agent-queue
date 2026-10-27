@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
@@ -29,7 +30,11 @@ type ExecutorConfig struct {
 type Executor struct {
 	cfg     ExecutorConfig
 	manager string // user@UID.service cgroup, relative to CgroupRoot
+	runCmd  func(ctx context.Context, name string, args ...string) error
 }
+
+// launchTimeout bounds systemd-run and the cleanup after a failed launch.
+const launchTimeout = 30 * time.Second
 
 var _ platform.Executor = (*Executor)(nil)
 
@@ -53,7 +58,7 @@ func newExecutor(cfg ExecutorConfig, manager string) *Executor {
 	if cfg.CgroupRoot == "" {
 		cfg.CgroupRoot = "/sys/fs/cgroup"
 	}
-	return &Executor{cfg: cfg, manager: manager}
+	return &Executor{cfg: cfg, manager: manager, runCmd: run}
 }
 
 func (e *Executor) Capabilities() platform.Capabilities {
@@ -78,11 +83,15 @@ func execQuote(s string) string {
 
 // SystemdRunArgs builds the systemd-run argv (without "systemd-run") for spec.
 func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
+	high := spec.MemoryHigh
+	if high == 0 || high > spec.Limit {
+		high = spec.Limit // an unset or oversized MemoryHigh must not throttle below the limit
+	}
 	args := []string{"--user", "--quiet", "--collect", "--expand-environment=no",
 		"--unit", cfg.UnitPrefix + string(spec.ID), "--slice", cfg.SliceName}
 	props := []string{
 		"MemoryMax=" + strconv.FormatUint(spec.Limit, 10),
-		"MemoryHigh=" + strconv.FormatUint(spec.MemoryHigh, 10),
+		"MemoryHigh=" + strconv.FormatUint(high, 10),
 		"MemorySwapMax=0",
 		"CPUQuota=" + strconv.Itoa(spec.CPUs*100) + "%",
 		"KillMode=control-group",
@@ -90,6 +99,9 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 		"OOMScoreAdjust=900",
 		"RuntimeMaxSec=" + ceilSeconds(spec.Timeout),
 		"TimeoutStopSec=" + ceilSeconds(spec.KillGrace),
+		// SIGABRT (the default on Fedora) can be ignored and dumps core. Fedora's
+		// service.d/10-timeout-abort.conf drop-in still overrides this transient value.
+		"TimeoutStopFailureMode=kill",
 		"ExecStopPost=" + execQuote(cfg.AqBinary) + " _record-result " + execQuote(spec.JobDir),
 	}
 	for _, p := range append(props, cfg.ExtraProperties...) {
@@ -124,21 +136,86 @@ func run(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 
+// validateEnv rejects what systemd-run would refuse; errors name the key only.
+func validateEnv(env map[string]string) error {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		ok := k != ""
+		for i, c := range k {
+			if !(c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9') {
+				ok = false
+			}
+		}
+		if !ok {
+			return fmt.Errorf("invalid environment variable name %q", k)
+		}
+		if v := env[k]; !utf8.ValidString(v) || strings.ContainsRune(v, 0) {
+			return fmt.Errorf("environment variable %s: value is not valid UTF-8 or contains NUL", k)
+		}
+	}
+	return nil
+}
+
+// redactEnv removes environment values from systemd-run's stderr: the value part of
+// "environment variable K=V: ..." lines, and any occurrence of a value of 4+ bytes.
+func redactEnv(s string, env map[string]string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if !strings.Contains(l, "environment variable") {
+			continue
+		}
+		if eq := strings.Index(l, "="); eq >= 0 {
+			rest := ""
+			if j := strings.LastIndex(l, ": "); j > eq {
+				rest = l[j:]
+			}
+			lines[i] = l[:eq+1] + "<redacted>" + rest
+		}
+	}
+	s = strings.Join(lines, "\n")
+	for _, v := range env {
+		if len(v) >= 4 {
+			s = strings.ReplaceAll(s, v, "<redacted>")
+		}
+	}
+	return s
+}
+
+// detached outlives the caller's cancellation: once systemd-run is under way the
+// manager may start the unit, so the call and any cleanup must finish.
+func detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), launchTimeout)
+}
+
 // Launch starts the unit synchronously. systemd-run rejects invalid properties before
 // anything starts; afterwards the unit's memory.max is checked against spec.Limit and
 // the unit is stopped if the limit is not in place (the command may have begun by then).
 // A unit whose cgroup is already gone finished before the check and is accepted.
+// On any failure the unit is stopped (a no-op if it never started).
 func (e *Executor) Launch(ctx context.Context, spec platform.LaunchSpec) (string, error) {
+	if err := validateEnv(spec.Env); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(spec.JobDir, 0o700); err != nil {
 		return "", err
 	}
 	unit := e.unitName(spec.ID)
-	if err := run(ctx, "systemd-run", SystemdRunArgs(e.cfg, spec)...); err != nil {
-		return "", err
+	runCtx, cancel := detached(ctx)
+	err := e.runCmd(runCtx, "systemd-run", SystemdRunArgs(e.cfg, spec)...)
+	cancel()
+	if err != nil {
+		err = errors.New(redactEnv(err.Error(), spec.Env))
+	} else if verr := e.verifyLimit(spec.ID, spec.Limit); verr != nil {
+		err = fmt.Errorf("%s started without its memory limit, stopped: %w", unit, verr)
 	}
-	if err := e.verifyLimit(spec.ID, spec.Limit); err != nil {
-		stopErr := e.Stop(ctx, spec.ID)
-		return "", errors.Join(fmt.Errorf("%s started without its memory limit, stopped: %w", unit, err), stopErr)
+	if err != nil {
+		stopCtx, cancel := detached(ctx)
+		defer cancel()
+		return "", errors.Join(err, e.Stop(stopCtx, spec.ID))
 	}
 	return unit, nil
 }
@@ -166,7 +243,7 @@ func (e *Executor) ReadResult(jobDir string) (*platform.ExitInfo, error) {
 // Stop blocks until systemd has stopped the unit (TERM to the cgroup, KILL after TimeoutStopSec).
 // Stopping a unit whose cgroup no longer exists is not an error.
 func (e *Executor) Stop(ctx context.Context, id model.ItemID) error {
-	err := run(ctx, "systemctl", "--user", "stop", e.unitName(id))
+	err := e.runCmd(ctx, "systemctl", "--user", "stop", e.unitName(id))
 	if err != nil {
 		if _, serr := os.Stat(e.unitDir(id)); errors.Is(serr, fs.ErrNotExist) {
 			return nil
@@ -176,9 +253,9 @@ func (e *Executor) Stop(ctx context.Context, id model.ItemID) error {
 }
 
 func (e *Executor) EnsureSlice(ctx context.Context, poolMemory uint64) error {
-	if err := run(ctx, "systemctl", "--user", "start", e.cfg.SliceName); err != nil {
+	if err := e.runCmd(ctx, "systemctl", "--user", "start", e.cfg.SliceName); err != nil {
 		return err
 	}
-	return run(ctx, "systemctl", "--user", "set-property", "--runtime", e.cfg.SliceName,
+	return e.runCmd(ctx, "systemctl", "--user", "set-property", "--runtime", e.cfg.SliceName,
 		"MemoryMax="+strconv.FormatUint(poolMemory, 10), "MemorySwapMax=0")
 }

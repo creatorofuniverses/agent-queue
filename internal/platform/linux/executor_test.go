@@ -1,6 +1,8 @@
 package linux
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -53,7 +55,7 @@ func TestSystemdRunArgs(t *testing.T) {
 		{"--setenv", "PATH=/usr/bin"}, {"--setenv", "AQ_JOB_ID=abc"},
 		{"-p", "MemoryMax=4294967296"}, {"-p", "MemoryHigh=3865470566"}, {"-p", "MemorySwapMax=0"},
 		{"-p", "CPUQuota=200%"}, {"-p", "KillMode=control-group"}, {"-p", "OOMPolicy=kill"},
-		{"-p", "OOMScoreAdjust=900"}, {"-p", "RuntimeMaxSec=1800"}, {"-p", "TimeoutStopSec=10"},
+		{"-p", "OOMScoreAdjust=900"}, {"-p", "RuntimeMaxSec=1800"}, {"-p", "TimeoutStopSec=10"}, {"-p", "TimeoutStopFailureMode=kill"},
 		{"-p", "ExecStopPost=/bin/aq _record-result /state/jobs/abc"},
 	} {
 		if !hasPair(args, p[0], p[1]) {
@@ -128,7 +130,7 @@ func TestSliceCgroupPath(t *testing.T) {
 func fakeCgroup(t *testing.T) (*Executor, string) {
 	t.Helper()
 	root := t.TempDir()
-	e := newExecutor(ExecutorConfig{SliceName: "aq-test.slice", UnitPrefix: "aqtest-", AqBinary: "/bin/aq", CgroupRoot: root},
+	e := newExecutor(ExecutorConfig{SliceName: "aqtest.slice", UnitPrefix: "aqtest-", AqBinary: "/bin/aq", CgroupRoot: root},
 		"user.slice/user-1000.slice/user@1000.service")
 	slice := e.sliceDir()
 	write := func(rel, s string) {
@@ -153,7 +155,7 @@ func fakeCgroup(t *testing.T) (*Executor, string) {
 
 func TestCgroupReads(t *testing.T) {
 	e, slice := fakeCgroup(t)
-	if want := "user.slice/user-1000.slice/user@1000.service/aq.slice/aq-test.slice"; !strings.HasSuffix(slice, want) {
+	if want := "user.slice/user-1000.slice/user@1000.service/aqtest.slice"; !strings.HasSuffix(slice, want) {
 		t.Fatalf("slice dir %s", slice)
 	}
 	if v, err := e.SliceCurrent(); err != nil || v != 1234 {
@@ -200,5 +202,112 @@ func TestCapabilitiesAllTrue(t *testing.T) {
 	e := newExecutor(ExecutorConfig{}, "u")
 	if c := e.Capabilities(); !c.HardMemoryLimit || !c.TreeKill || !c.OOMAttribution || !c.SurvivesDaemonRestart {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestSystemdRunArgsClampsMemoryHigh(t *testing.T) {
+	cfg := ExecutorConfig{SliceName: "aq.slice", UnitPrefix: "aq-", AqBinary: "/bin/aq"}
+	for _, high := range []uint64{0, 5 << 30} {
+		s := testSpec()
+		s.MemoryHigh = high
+		if args := SystemdRunArgs(cfg, s); !hasPair(args, "-p", "MemoryHigh=4294967296") {
+			t.Errorf("high %d: %q", high, args)
+		}
+	}
+}
+
+// fakeRunner records commands instead of running them.
+type fakeRunner struct {
+	calls   [][]string
+	ctxErrs []error
+	fail    map[string]error // by command name
+}
+
+func (f *fakeRunner) run(ctx context.Context, name string, args ...string) error {
+	f.calls = append(f.calls, append([]string{name}, args...))
+	f.ctxErrs = append(f.ctxErrs, ctx.Err())
+	return f.fail[name]
+}
+
+func (f *fakeRunner) ran(name, arg string) bool {
+	for _, c := range f.calls {
+		if c[0] == name && slices.Contains(c, arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func launchSpecIn(t *testing.T, id model.ItemID) platform.LaunchSpec {
+	s := testSpec()
+	s.ID = id
+	s.JobDir = filepath.Join(t.TempDir(), "job")
+	return s
+}
+
+func TestLaunchRejectsBadEnvWithoutLeakingValue(t *testing.T) {
+	const sentinel = "SUPERSECRETVALUE"
+	for _, env := range []map[string]string{
+		{"BAD-NAME": sentinel},
+		{"1X": sentinel},
+		{"OK": sentinel + "\xff"},
+		{"OK": sentinel + "\x00"},
+	} {
+		e, _ := fakeCgroup(t)
+		f := &fakeRunner{}
+		e.runCmd = f.run
+		s := launchSpecIn(t, "one")
+		s.Env = env
+		_, err := e.Launch(t.Context(), s)
+		if err == nil || strings.Contains(err.Error(), sentinel) {
+			t.Errorf("env %q: err %v", env, err)
+		}
+		if f.ran("systemd-run", "--user") {
+			t.Errorf("env %q: systemd-run was called", env)
+		}
+	}
+}
+
+func TestRedactEnv(t *testing.T) {
+	stderr := "Cannot assign environment variable BAD=SUPERSECRETVALUE: Invalid argument\nother SECRET2VAL here"
+	got := redactEnv(stderr, map[string]string{"X": "SECRET2VAL", "Y": "ab"})
+	if strings.Contains(got, "SUPERSECRETVALUE") || strings.Contains(got, "SECRET2VAL") || !strings.Contains(got, "Invalid argument") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLaunchVerifyFailStopsUnit(t *testing.T) {
+	e, slice := fakeCgroup(t)
+	// unit cgroup exists but memory.max says "max": the limit is not in place
+	if err := os.WriteFile(filepath.Join(slice, "aqtest-one.service", "memory.max"), []byte("max\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRunner{}
+	e.runCmd = f.run
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := e.Launch(ctx, launchSpecIn(t, "one"))
+	if err == nil || !strings.Contains(err.Error(), "memory.max") {
+		t.Fatalf("err %v", err)
+	}
+	if !f.ran("systemctl", "aqtest-one.service") || !f.ran("systemctl", "stop") {
+		t.Fatalf("unit not stopped: %q", f.calls)
+	}
+	for i, ce := range f.ctxErrs {
+		if ce != nil {
+			t.Errorf("call %q ran with done ctx: %v", f.calls[i], ce)
+		}
+	}
+}
+
+func TestLaunchSystemdRunErrorStopsUnit(t *testing.T) {
+	e, _ := fakeCgroup(t)
+	f := &fakeRunner{fail: map[string]error{"systemd-run": errors.New("signal: killed")}}
+	e.runCmd = f.run
+	if _, err := e.Launch(t.Context(), launchSpecIn(t, "one")); err == nil {
+		t.Fatal("want error")
+	}
+	if !f.ran("systemctl", "aqtest-one.service") {
+		t.Fatalf("unit not stopped: %q", f.calls)
 	}
 }

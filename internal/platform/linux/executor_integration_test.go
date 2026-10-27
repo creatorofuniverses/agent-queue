@@ -32,7 +32,7 @@ func buildAq(t *testing.T) string {
 
 func newTestExecutor(t *testing.T, extra ...string) *Executor {
 	t.Helper()
-	e, err := NewExecutor(ExecutorConfig{SliceName: "aq-test.slice", UnitPrefix: "aqtest-",
+	e, err := NewExecutor(ExecutorConfig{SliceName: "aqtest.slice", UnitPrefix: "aqtest-",
 		AqBinary: buildAq(t), ExtraProperties: extra})
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +166,37 @@ func TestIntegSetsidDescendantKilled(t *testing.T) {
 	}
 	if err := e.Stop(ctx, spec.ID); err != nil {
 		t.Fatalf("second Stop: %v", err)
+	}
+}
+
+func TestIntegStopKillsTermIgnoringDescendant(t *testing.T) {
+	e := newTestExecutor(t)
+	spec, err := launch(t, e, 64<<20, time.Minute, "sh", "-c", `(trap '' TERM; exec sleep 300) & sleep 300`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	time.Sleep(500 * time.Millisecond)
+	start := time.Now()
+	if err := e.Stop(ctx, spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		alive, err := e.Alive(ctx, spec.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !alive {
+			break
+		}
+		if time.Since(start) > spec.KillGrace+5*time.Second {
+			t.Fatal("still alive after KillGrace+5s")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// the descendant survived TERM, so only the KILL after TimeoutStopSec ended it
+	if el := time.Since(start); el < spec.KillGrace-500*time.Millisecond {
+		t.Fatalf("stopped after %v, before KillGrace: TERM was not ignored", el)
 	}
 }
 
