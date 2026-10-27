@@ -159,13 +159,14 @@ func TestSubmitCapturesOnlyAllowedEnv(t *testing.T) {
 	h.startDaemon(t)
 	h.vars["PATH"], h.vars["HOME"], h.vars["LANG"] = "/bin", "/home/x", "C"
 	h.vars["LC_ALL"], h.vars["VIRTUAL_ENV"], h.vars["SECRET"] = "C.UTF-8", "/venv", "hunter2"
+	h.vars["LC_FOO"] = "x" // not a real locale category
 	code, _, errOut := h.run("submit", "--memory", "128M", "--timeout", "1m", "--env", "FOO=a=b", "--env", "BAR=", "--", "true")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
 	got := map[string]string{}
 	for k, v := range h.launched(t, 1)[0].Env {
-		if !strings.HasPrefix(k, "AQ_") { // added by the scheduler
+		if k != "AQ_JOB_ID" && k != "AQ_CPUS" { // added by the scheduler
 			got[k] = v
 		}
 	}
@@ -478,6 +479,68 @@ func TestDoctorConfigInvalid(t *testing.T) {
 	for _, c := range d.Checks {
 		if c.Name == "config" && (c.OK || c.Code != "CONFIG_INVALID") {
 			t.Errorf("config check: %+v", c)
+		}
+	}
+}
+
+func TestSubmitEnvErrorDoesNotLeakValue(t *testing.T) {
+	h := newHarness(t)
+	for _, kv := range []string{"=SENTINELSECRET", "1BAD=SENTINELSECRET", "BAD KEY=SENTINELSECRET", "SENTINELSECRET"} {
+		code, out, errOut := h.run("submit", "--memory", "1G", "--timeout", "1m", "--env", kv, "--", "true")
+		if code != 64 {
+			t.Errorf("%q: exit %d, want 64", kv, code)
+		}
+		if strings.Contains(out+errOut, "SENTINELSECRET") {
+			t.Errorf("%q: output leaks the value: %q %q", kv, out, errOut)
+		}
+	}
+}
+
+func TestSubmitArgvEdgeCases(t *testing.T) {
+	cases := [][]string{
+		{"-x", "--flag"},
+		{"sh", "-c", ""},
+		{"cmd", "--", "arg"},
+	}
+	for _, argv := range cases {
+		h := newHarness(t)
+		h.startDaemon(t)
+		args := append([]string{"submit", "--memory", "128M", "--timeout", "1m", "--"}, argv...)
+		if code, _, errOut := h.run(args...); code != 0 {
+			t.Fatalf("%q: exit %d: %s", argv, code, errOut)
+		}
+		if got := h.launched(t, 1)[0].Argv; !reflect.DeepEqual(got, argv) {
+			t.Errorf("argv = %q, want %q", got, argv)
+		}
+	}
+}
+
+func TestDoctorSystemdUndeterminable(t *testing.T) {
+	h := newHarness(t)
+	f := newFakeSystem()
+	f.systemd = "garbage"
+	f.install(t)
+	code, d := runDoctorJSON(t, h)
+	if code != 1 {
+		t.Errorf("exit %d", code)
+	}
+	for _, c := range d.Checks {
+		if c.Name != "systemd" {
+			continue
+		}
+		if c.OK || !strings.Contains(c.Detail, "cannot determine systemd version") || strings.Contains(c.Detail, "version 0") {
+			t.Errorf("systemd check: %+v", c)
+		}
+	}
+}
+
+func TestDoctorSystemdOKDetail(t *testing.T) {
+	h := newHarness(t)
+	newFakeSystem().install(t)
+	_, d := runDoctorJSON(t, h)
+	for _, c := range d.Checks {
+		if c.Name == "systemd" && c.Detail != "version 256" {
+			t.Errorf("detail = %q", c.Detail)
 		}
 	}
 }

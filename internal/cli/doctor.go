@@ -173,7 +173,7 @@ func runDoctor(ctx context.Context, sys doctorSystem, paths config.Paths, xdgRun
 	add("daemon", codeDaemonUnavailable, sys.Ping(pctx, paths.Socket()), paths.Socket())
 
 	ver, verErr := systemdVersion(ctx, sys)
-	add("systemd", codeSystemdTooOld, verErr, fmt.Sprintf("version %d", ver))
+	add("systemd", codeSystemdTooOld, verErr, fmt.Sprintf("version %d", ver)) // ver is only used when verErr is nil
 
 	dropin := filepath.Join(xdgRuntime, "systemd", "user", cfg.UnitPrefix+".service.d", "99-aq-kill.conf")
 	var dropErr error
@@ -276,16 +276,16 @@ func runProbe(ctx context.Context, sys doctorSystem, cfg config.Config) (err err
 func systemdVersion(ctx context.Context, sys doctorSystem) (int, error) {
 	out, err := sys.Run(ctx, "systemctl", "--version")
 	if err != nil {
-		return 0, fmt.Errorf("systemctl --version: %v", err)
+		return 0, fmt.Errorf("cannot determine systemd version: systemctl --version: %v", err)
 	}
 	first, _, _ := strings.Cut(out, "\n")
 	f := strings.Fields(first)
 	if len(f) < 2 || f[0] != "systemd" {
-		return 0, fmt.Errorf("unrecognized systemctl --version output %q", first)
+		return 0, fmt.Errorf("cannot determine systemd version: unrecognized output %q", first)
 	}
 	v, err := strconv.Atoi(f[1])
 	if err != nil {
-		return 0, fmt.Errorf("unrecognized systemd version %q", f[1])
+		return 0, fmt.Errorf("cannot determine systemd version: unrecognized version %q", f[1])
 	}
 	if v < minSystemd {
 		return v, fmt.Errorf("systemd %d is older than %d", v, minSystemd)

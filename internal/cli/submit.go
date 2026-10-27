@@ -94,8 +94,12 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	}
 	for _, kv := range envs {
 		k, v, ok := strings.Cut(kv, "=")
-		if !ok || k == "" {
-			return usagef("submit: --env %q must be K=V", kv)
+		// Never echo kv: the value may be a secret.
+		if !ok {
+			return usagef("submit: --env must be K=V")
+		}
+		if !validEnvName(k) {
+			return usagef("submit: --env has an invalid variable name %q", k)
 		}
 		env[k] = v
 	}
@@ -144,4 +148,20 @@ func printJSON(c *cmdCtx, v any) error {
 	enc := json.NewEncoder(c.stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// validEnvName reports whether k is a portable environment variable name.
+func validEnvName(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i, r := range k {
+		switch {
+		case r == '_', r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
