@@ -43,18 +43,15 @@ func newTestExecutor(t *testing.T, extra ...string) *Executor {
 	return e
 }
 
-// launch starts argv with MemoryHigh = 90% of limit, like the default memory_high_ratio, unless high != 0.
-func launch(t *testing.T, e *Executor, limit, high uint64, timeout time.Duration, argv ...string) (platform.LaunchSpec, error) {
+// launch starts argv with MemoryHigh = limit, as with the default memory_high_ratio 1.0.
+func launch(t *testing.T, e *Executor, limit uint64, timeout time.Duration, argv ...string) (platform.LaunchSpec, error) {
 	t.Helper()
 	d := t.TempDir()
 	id := model.NewID()
-	if high == 0 {
-		high = limit / 10 * 9
-	}
 	spec := platform.LaunchSpec{
 		ID: id, Argv: argv, Cwd: d,
 		Env:   map[string]string{"PATH": os.Getenv("PATH"), "HOME": os.Getenv("HOME")},
-		Limit: limit, MemoryHigh: high, CPUs: 1,
+		Limit: limit, MemoryHigh: limit, CPUs: 1,
 		Timeout: timeout, KillGrace: 2 * time.Second,
 		JobDir: filepath.Join(d, "job"), TmpDir: filepath.Join(d, "tmp"),
 		MaxStdout: 1 << 20, MaxStderr: 1 << 20,
@@ -88,7 +85,7 @@ func waitResult(t *testing.T, jobDir string, timeout time.Duration) *platform.Ex
 
 func TestIntegExitCode(t *testing.T) {
 	e := newTestExecutor(t)
-	spec, err := launch(t, e, 64<<20, 0, time.Minute, "sh", "-c", "exit 3")
+	spec, err := launch(t, e, 64<<20, time.Minute, "sh", "-c", "exit 3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,10 +97,7 @@ func TestIntegExitCode(t *testing.T) {
 
 func TestIntegOOM(t *testing.T) {
 	e := newTestExecutor(t)
-	// MemoryHigh = limit: with high at 90% and no swap, the kernel throttles a lone
-	// allocator just above high for minutes instead of reaching memory.max (measured
-	// on this host: still 4 MiB short of max after 3 min).
-	spec, err := launch(t, e, 256<<20, 256<<20, time.Minute, "python3", "-c", "b=bytearray(1<<30)")
+	spec, err := launch(t, e, 256<<20, time.Minute, "python3", "-c", "b=bytearray(1<<30)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +109,7 @@ func TestIntegOOM(t *testing.T) {
 
 func TestIntegChildrenSumOOM(t *testing.T) {
 	e := newTestExecutor(t)
-	// MemoryHigh = limit for the same reason as TestIntegOOM (with 90% it took ~45 s).
-	spec, err := launch(t, e, 256<<20, 256<<20, time.Minute, "sh", "-c",
+	spec, err := launch(t, e, 256<<20, time.Minute, "sh", "-c",
 		`for i in 1 2 3 4; do python3 -c "import time;b=bytearray(100<<20);time.sleep(30)" & done; wait`)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +122,7 @@ func TestIntegChildrenSumOOM(t *testing.T) {
 
 func TestIntegTimeout(t *testing.T) {
 	e := newTestExecutor(t)
-	spec, err := launch(t, e, 64<<20, 0, time.Second, "sleep", "30")
+	spec, err := launch(t, e, 64<<20, time.Second, "sleep", "30")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +134,7 @@ func TestIntegTimeout(t *testing.T) {
 
 func TestIntegSetsidDescendantKilled(t *testing.T) {
 	e := newTestExecutor(t)
-	spec, err := launch(t, e, 64<<20, 0, time.Minute, "sh", "-c", `setsid sh -c "sleep 300" & sleep 300`)
+	spec, err := launch(t, e, 64<<20, time.Minute, "sh", "-c", `setsid sh -c "sleep 300" & sleep 300`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +172,7 @@ func TestIntegSetsidDescendantKilled(t *testing.T) {
 func TestIntegLimitsAppliedBeforeStart(t *testing.T) {
 	e := newTestExecutor(t)
 	const limit = 96 << 20
-	spec, err := launch(t, e, limit, 0, time.Minute, "sh", "-c",
+	spec, err := launch(t, e, limit, time.Minute, "sh", "-c",
 		`cat "/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)/memory.max" /proc/self/oom_score_adj`)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +186,7 @@ func TestIntegLimitsAppliedBeforeStart(t *testing.T) {
 
 func TestIntegLaunchFailsWhenPropertyRejected(t *testing.T) {
 	e := newTestExecutor(t, "MemoryMax=garbage")
-	spec, err := launch(t, e, 64<<20, 0, time.Minute, "sh", "-c", "echo ran")
+	spec, err := launch(t, e, 64<<20, time.Minute, "sh", "-c", "echo ran")
 	if err == nil {
 		t.Fatal("Launch succeeded")
 	}

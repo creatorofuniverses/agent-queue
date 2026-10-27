@@ -44,7 +44,7 @@ func Default() Config {
 		PoolCPUs:            16,
 		ReserveFloorPercent: 10,
 		MinDiskFree:         2 * gib,
-		MemoryHighRatio:     0.9,
+		MemoryHighRatio:     1.0,
 		CancelGrace:         10 * time.Second,
 		Pressure: PressureConfig{
 			CloseFullAvg10: 5.0,

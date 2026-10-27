@@ -10,7 +10,8 @@ reserve_floor_percent = 10
 # Минимум свободного места на диске состояния.
 min_disk_free = "2G"
 # MemoryHigh = лимит задачи * это значение (0 < x <= 1).
-memory_high_ratio = 0.9
+# 1.0: без swap MemoryHigh < MemoryMax бесконечно тормозит задачу вместо OOM.
+memory_high_ratio = 1.0
 # Время на корректную остановку задачи при отмене.
 cancel_grace = "10s"
 

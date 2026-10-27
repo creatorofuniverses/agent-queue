@@ -18,7 +18,7 @@ func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	}
 	d := Default()
 	if d.PoolMemory != 16*gib || d.PoolCPUs != 16 || d.ReserveFloorPercent != 10 ||
-		d.MinDiskFree != 2*gib || d.MemoryHighRatio != 0.9 || d.CancelGrace != 10*time.Second ||
+		d.MinDiskFree != 2*gib || d.MemoryHighRatio != 1.0 || d.CancelGrace != 10*time.Second ||
 		d.SliceName != "aq.slice" || d.UnitPrefix != "aq-" {
 		t.Fatalf("bad defaults: %+v", d)
 	}
