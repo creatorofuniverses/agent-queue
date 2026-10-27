@@ -2,8 +2,10 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
@@ -49,21 +51,28 @@ func exitDetails(ei platform.ExitInfo) (code *int, signal string) {
 // lingerMsg is the diagnostic for a unit whose processes outlive its recorded result.
 const lingerMsg = "processes did not exit within 2x cancel_grace after the command finished; stop repeated"
 
-// reapLocked moves RUNNING items with a result to CLEANING and finalizes those
-// whose cgroup is empty. It returns ids whose processes linger 2×cancel_grace
-// after the result; the caller stops them outside the lock. Items stay in
-// CLEANING, and so in the accounting, until their cgroup is empty.
-func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) []model.ItemID {
-	var toStop []model.ItemID
+// reapLocked settles RUNNING/CLEANING items. A result moves the item to CLEANING;
+// it is finalized once its cgroup is empty, and while processes linger 2×cancel_grace
+// after the result the unit is stopped again in the background. No processes and no
+// result, continuously for cancel_grace, means the unit is gone without recording a
+// result: FAILED/LOST. Alive is read before the result: the unit writes result.json
+// before its cgroup empties, so "not alive, then no result" is never a result in flight.
+func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) {
 	now := s.d.Now()
 	for _, it := range items {
 		if it.State != model.StateRunning && it.State != model.StateCleaning {
 			continue
 		}
-		ei, err := s.d.Exec.ReadResult(it.JobDir)
-		if err != nil || ei == nil {
+		alive, err := s.d.Exec.Alive(ctx, it.ID)
+		if err != nil {
 			continue
 		}
+		ei, rerr := s.d.Exec.ReadResult(it.JobDir)
+		if ei == nil {
+			s.reapMissingLocked(ctx, it, alive, rerr, now)
+			continue
+		}
+		delete(s.goneSince, it.ID)
 		if it.State == model.StateRunning {
 			it.State = model.StateCleaning
 			if err := s.persistLocked(ctx, it); err != nil {
@@ -74,10 +83,6 @@ func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) []model
 		if !ok {
 			seen = now
 			s.resultSeen[it.ID] = now
-		}
-		alive, err := s.d.Exec.Alive(ctx, it.ID)
-		if err != nil {
-			continue
 		}
 		if !alive {
 			if err := s.finalizeLocked(ctx, it, ei); err != nil {
@@ -91,10 +96,34 @@ func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) []model
 				it.Diagnostic = lingerMsg
 				s.persistLocked(ctx, it)
 			}
-			toStop = append(toStop, it.ID)
+			s.stopAsyncLocked(it.ID)
 		}
 	}
-	return toStop
+}
+
+// reapMissingLocked handles an item without a (readable) result.
+func (s *Scheduler) reapMissingLocked(ctx context.Context, it *model.Item, alive bool, rerr error, now time.Time) {
+	if alive {
+		delete(s.goneSince, it.ID)
+		return
+	}
+	since, ok := s.goneSince[it.ID]
+	if !ok {
+		s.goneSince[it.ID] = now
+		return
+	}
+	if now.Sub(since) < s.d.Cfg.CancelGrace {
+		return
+	}
+	diag := "unit gone without result"
+	if rerr != nil {
+		diag += fmt.Sprintf(" (unreadable result: %v)", rerr)
+	}
+	prev := it.State
+	s.endLocked(it, model.StateFailed, model.ReasonLost, diag)
+	if err := s.persistLocked(ctx, it); err != nil {
+		it.State = prev // not persisted: keep it in the accounting
+	}
 }
 
 // finalizeLocked records the outcome from ei and frees the item's resources.

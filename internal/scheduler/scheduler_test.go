@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -79,7 +80,33 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	e.host.Set(platform.MemInfo{Total: 64 * gib, Available: 64 * gib})
 	e.host.SetDisk(100 * gib)
 	e.s = New(Deps{Store: st, Exec: e.ex, Host: e.host, Cfg: cfg, Paths: e.paths, Now: e.clk.Now})
+	t.Cleanup(func() { e.s.bg.Wait() }) // before the temp dirs go away
 	return e
+}
+
+// settle waits for background stops and temp dir removals.
+func (e *env) settle() { e.s.bg.Wait() }
+
+// mkTmp creates the item's temp dir with a file in it, as the runner would.
+func (e *env) mkTmp(t *testing.T, id model.ItemID) string {
+	t.Helper()
+	dir := e.paths.TmpDir(id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func exists(t *testing.T, path string) bool {
+	t.Helper()
+	_, err := os.Stat(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	return err == nil
 }
 
 func (e *env) req(mem uint64) SubmitRequest {
@@ -349,6 +376,7 @@ func TestCancelRunning(t *testing.T) {
 	if err != nil || got.State != model.StateRunning || !got.CancelRequested || got.CancelReason != "stop" {
 		t.Fatalf("cancel: %+v %v", got, err)
 	}
+	e.settle()
 	if !contains(e.ex.Stopped(), it.ID) {
 		t.Fatalf("Stop not called")
 	}
@@ -425,10 +453,15 @@ func TestLaunchFailure(t *testing.T) {
 	e := newEnv(t, nil)
 	e.ex.FailLaunch(errors.New("systemd-run exploded"))
 	it := e.submit(t, e.req(gib))
+	tmp := e.mkTmp(t, it.ID)
 	e.tick(t)
 	got := e.wantState(t, it.ID, model.StateFailed, model.ReasonLaunchFailed)
 	if !strings.Contains(got.Diagnostic, "exploded") || got.EndedAt.IsZero() {
 		t.Fatalf("failed item %+v", got)
+	}
+	e.settle()
+	if exists(t, tmp) {
+		t.Fatalf("temp dir kept after launch failure")
 	}
 
 	e.ex.FailLaunch(nil)
@@ -441,10 +474,22 @@ func TestCleaningHoldsResources(t *testing.T) {
 	e := newEnv(t, nil)
 	a := e.submit(t, e.req(gib))
 	e.tick(t)
+	tmp := e.mkTmp(t, a.ID)
+	jobFile := filepath.Join(e.paths.JobDir(a.ID), "stdout.log")
+	if err := os.MkdirAll(filepath.Dir(jobFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(jobFile, []byte("out"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	b := e.submit(t, e.req(512*mib))
 	e.ex.Finish(a.ID, success) // result written, cgroup still has processes
 	e.tick(t)
+	e.settle()
 	e.wantState(t, a.ID, model.StateCleaning, model.ReasonNone)
+	if !exists(t, tmp) {
+		t.Fatalf("temp dir removed before cleanup was confirmed")
+	}
 	e.wantState(t, b.ID, model.StateQueued, model.ReasonNone)
 	if id, dec := e.s.HeadDecision(); id != b.ID || dec.Blocker != admission.BlockPoolMemory {
 		t.Fatalf("head %s %+v, want pool_memory", id, dec)
@@ -455,6 +500,7 @@ func TestCleaningHoldsResources(t *testing.T) {
 
 	e.clk.Advance(20 * time.Second) // 2 x cancel_grace
 	e.tick(t)
+	e.settle()
 	got := e.wantState(t, a.ID, model.StateCleaning, model.ReasonNone)
 	if !contains(e.ex.Stopped(), a.ID) || got.Diagnostic == "" {
 		t.Fatalf("lingering processes: stopped=%v diag=%q", e.ex.Stopped(), got.Diagnostic)
@@ -465,6 +511,105 @@ func TestCleaningHoldsResources(t *testing.T) {
 	e.tick(t)
 	e.wantState(t, a.ID, model.StateSucceeded, model.ReasonNone)
 	e.wantState(t, b.ID, model.StateRunning, model.ReasonNone)
+	e.settle()
+	if exists(t, tmp) || !exists(t, jobFile) {
+		t.Fatalf("after cleanup: tmp exists=%v, job file exists=%v; want tmp gone, job dir kept",
+			exists(t, tmp), exists(t, jobFile))
+	}
+}
+
+func TestRunningVanishedWithoutResultBecomesLost(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.submit(t, e.req(gib))
+	e.tick(t)
+	tmp := e.mkTmp(t, a.ID)
+	next := e.submit(t, e.req(gib))
+	waited := make(chan *model.Item, 1)
+	go func() {
+		it, _ := e.s.Wait(e.ctx, a.ID)
+		waited <- it
+	}()
+	waitRegistered(t, e.s, a.ID)
+
+	e.ex.SetAlive(a.ID, false) // unit gone, no result.json
+	e.tick(t)
+	e.clk.Advance(9 * time.Second)
+	e.tick(t)
+	e.wantState(t, a.ID, model.StateRunning, model.ReasonNone)
+
+	// Processes seen again: the grace period restarts.
+	e.ex.SetAlive(a.ID, true)
+	e.tick(t)
+	e.ex.SetAlive(a.ID, false)
+	e.clk.Advance(time.Second)
+	e.tick(t)
+	e.clk.Advance(9 * time.Second)
+	e.tick(t)
+	e.wantState(t, a.ID, model.StateRunning, model.ReasonNone)
+	e.wantState(t, next.ID, model.StateQueued, model.ReasonNone)
+
+	e.clk.Advance(time.Second) // cancel_grace of continuous absence
+	e.tick(t)
+	got := e.wantState(t, a.ID, model.StateFailed, model.ReasonLost)
+	if !strings.Contains(got.Diagnostic, "without result") || got.EndedAt.IsZero() {
+		t.Fatalf("lost item %+v", got)
+	}
+	e.wantState(t, next.ID, model.StateRunning, model.ReasonNone)
+	select {
+	case it := <-waited:
+		if it == nil || it.State != model.StateFailed {
+			t.Fatalf("waiter got %+v", it)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("waiter not notified")
+	}
+	e.settle()
+	if exists(t, tmp) {
+		t.Fatalf("temp dir kept for LOST item")
+	}
+}
+
+func TestStopRunsInBackground(t *testing.T) {
+	e := newEnv(t, nil)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	stops := 0
+	hx := &stopHookExec{Executor: e.ex, onStop: func(model.ItemID) {
+		mu.Lock()
+		stops++
+		mu.Unlock()
+		<-release
+	}}
+	e.s = New(Deps{Store: e.st, Exec: hx, Host: e.host, Cfg: e.s.d.Cfg, Paths: e.paths, Now: e.clk.Now})
+	it := e.submit(t, e.req(gib))
+	e.tick(t)
+
+	// Both calls return while the first Stop is still blocked; only one Stop is in flight.
+	for range 2 {
+		got, err := e.s.Cancel(e.ctx, it.ID, "x")
+		if err != nil || !got.CancelRequested {
+			t.Fatalf("cancel: %+v %v", got, err)
+		}
+	}
+	// Ticks are not blocked either, and do not stack another Stop.
+	e.ex.Finish(it.ID, platform.ExitInfo{ServiceResult: "exit-code", ExitStatus: "143"})
+	e.tick(t)
+	e.clk.Advance(20 * time.Second)
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateCleaning, model.ReasonNone)
+	close(release)
+	e.settle()
+	mu.Lock()
+	n := stops
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d Stop calls in flight, want 1", n)
+	}
+
+	// Once the Stop returned, a later repeat stop may run again; finalization still comes from Tick.
+	e.ex.SetAlive(it.ID, false)
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
 }
 
 func TestLiveMemoryBlocks(t *testing.T) {

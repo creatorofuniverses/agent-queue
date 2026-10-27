@@ -64,6 +64,7 @@ type Scheduler struct {
 	d     Deps
 	kick  chan struct{}
 	guard atomic.Bool
+	bg    sync.WaitGroup // background stops and temp dir removals
 
 	// mu guards everything below and serializes every state transition.
 	// It is never held across Launch, Stop or git.
@@ -75,6 +76,8 @@ type Scheduler struct {
 	headID         model.ItemID
 	headDecision   admission.Decision
 	resultSeen     map[model.ItemID]time.Time     // result read while processes remain
+	goneSince      map[model.ItemID]time.Time     // no processes and no result since
+	stopping       map[model.ItemID]bool          // a background Stop is in flight
 	waiters        map[model.ItemID]chan struct{} // closed on the terminal transition
 }
 
@@ -92,6 +95,8 @@ func New(d Deps) *Scheduler {
 		},
 		headDecision: admission.Decision{Admit: true},
 		resultSeen:   map[model.ItemID]time.Time{},
+		goneSince:    map[model.ItemID]time.Time{},
+		stopping:     map[model.ItemID]bool{},
 		waiters:      map[model.ItemID]chan struct{}{},
 	}
 }
@@ -164,7 +169,8 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 }
 
 // Cancel is idempotent: QUEUED becomes CANCELLED at once; STARTING/RUNNING get
-// CancelRequested and a Stop (the outcome is recorded at finalization); others are returned unchanged.
+// CancelRequested and a background Stop (the outcome is recorded at finalization
+// by Tick); others are returned unchanged. It never waits for the Stop.
 func (s *Scheduler) Cancel(ctx context.Context, id model.ItemID, reason string) (*model.Item, error) {
 	s.mu.Lock()
 	it, err := s.d.Store.Get(ctx, id)
@@ -187,9 +193,10 @@ func (s *Scheduler) Cancel(ctx context.Context, id model.ItemID, reason string) 
 				return nil, err
 			}
 		}
-		s.mu.Unlock()
 		// A STARTING item is caught before or right after its Launch.
-		return it, s.d.Exec.Stop(ctx, id)
+		s.stopAsyncLocked(id)
+		s.mu.Unlock()
+		return it, nil
 	}
 	s.mu.Unlock()
 	return it, nil
@@ -203,23 +210,58 @@ func (s *Scheduler) endLocked(it *model.Item, st model.State, r model.Reason, di
 	}
 }
 
-// persistLocked writes it and wakes waiters if it reached a terminal state.
+// persistLocked writes it. On a terminal state, which is only ever reached with no
+// processes left, it wakes waiters and removes the item's temp dir (never its JobDir).
 func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item) error {
 	if err := s.d.Store.Update(ctx, it); err != nil {
 		return err
 	}
 	if it.State.Terminal() {
 		delete(s.resultSeen, it.ID)
+		delete(s.goneSince, it.ID)
 		if ch, ok := s.waiters[it.ID]; ok {
 			close(ch)
 			delete(s.waiters, it.ID)
 		}
+		tmp := s.d.Paths.TmpDir(it.ID)
+		s.background(func() {
+			if err := os.RemoveAll(tmp); err != nil {
+				log.Printf("scheduler: remove temp dir %s: %v", tmp, err)
+			}
+		})
 	}
 	return nil
 }
 
-// Tick runs one scheduling pass: reap finished units, update the pressure gate,
-// admit queue heads while they fit, then launch the admitted items outside the lock.
+func (s *Scheduler) background(f func()) {
+	s.bg.Add(1)
+	go func() {
+		defer s.bg.Done()
+		f()
+	}()
+}
+
+// stopAsyncLocked stops id's unit in the background, at most one Stop per item at a time.
+// Stop blocks up to cancel_grace, so neither Cancel nor Tick waits for it.
+func (s *Scheduler) stopAsyncLocked(id model.ItemID) {
+	if s.stopping[id] {
+		return
+	}
+	s.stopping[id] = true
+	s.background(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), s.d.Cfg.CancelGrace+time.Minute)
+		defer cancel()
+		if err := s.d.Exec.Stop(ctx, id); err != nil {
+			log.Printf("scheduler: stop %s: %v", id, err)
+		}
+		s.mu.Lock()
+		delete(s.stopping, id)
+		s.mu.Unlock()
+	})
+}
+
+// Tick runs one scheduling pass: reap finished or vanished units, update the pressure
+// gate, admit queue heads while they fit, then launch the admitted items outside the lock.
 func (s *Scheduler) Tick(ctx context.Context) error {
 	s.mu.Lock()
 	items, err := s.d.Store.ListActive(ctx)
@@ -227,13 +269,10 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		s.mu.Unlock()
 		return err
 	}
-	toStop := s.reapLocked(ctx, items)
+	s.reapLocked(ctx, items)
 	admitted, err := s.admitLocked(ctx, items)
 	s.mu.Unlock()
 
-	for _, id := range toStop {
-		s.d.Exec.Stop(ctx, id) // repeated on the next interval if processes remain
-	}
 	for _, it := range admitted {
 		s.start(ctx, it)
 	}
@@ -343,11 +382,10 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 		// The item stays STARTING in the store; Recover settles it from the unit.
 		log.Printf("scheduler: record launch of %s: %v", cur.ID, err)
 	}
-	stop := lerr == nil && cur.CancelRequested // cancelled while Launch was in flight
-	s.mu.Unlock()
-	if stop {
-		s.d.Exec.Stop(ctx, it.ID)
+	if lerr == nil && cur.CancelRequested { // cancelled while Launch was in flight
+		s.stopAsyncLocked(it.ID)
 	}
+	s.mu.Unlock()
 }
 
 func (s *Scheduler) launchSpec(it *model.Item) platform.LaunchSpec {
