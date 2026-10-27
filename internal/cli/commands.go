@@ -108,6 +108,28 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 	fmt.Fprintf(w, "memory:    %s limit, %s expected, %s peak\n",
 		units.FormatSize(v.MemoryLimit), units.FormatSize(v.MemoryExpected), units.FormatSize(v.MemoryPeak))
 	fmt.Fprintf(w, "cpus:      %d\n", v.CPUs)
+	if v.Kind == model.KindReservation {
+		fmt.Fprintf(w, "kind:      reservation\n")
+		fmt.Fprintf(w, "stand:     %s memory, %d cpus\n", units.FormatSize(v.MemoryLimit), v.CPUs)
+		fmt.Fprintf(w, "budget:    %s memory, %d cpus\n", units.FormatSize(v.TaskMemory), v.TaskCPUs)
+		if v.ExpiresAt != nil {
+			fmt.Fprintf(w, "expires:   %s\n", v.ExpiresAt.Format(time.RFC3339))
+		}
+		if v.TTLHeld {
+			fmt.Fprintf(w, "ttl held:  yes\n")
+		}
+		if v.DockerProject != "" {
+			fmt.Fprintf(w, "docker:    %s\n", v.DockerProject)
+		}
+		if v.StandMeasured != nil {
+			fmt.Fprintf(w, "measured:  %s\n", units.FormatSize(*v.StandMeasured))
+		}
+		if v.TeardownAttempt > 0 {
+			fmt.Fprintf(w, "teardown attempt: %d\n", v.TeardownAttempt)
+		}
+	} else if v.Within != "" {
+		fmt.Fprintf(w, "within:    %s\n", v.Within)
+	}
 	fmt.Fprintf(w, "timeout:   %s\n", time.Duration(v.TimeoutSeconds)*time.Second)
 	fmt.Fprintf(w, "waited:    %s\n", secs(v.WaitSeconds))
 	fmt.Fprintf(w, "ran:       %s\n", secs(v.RunSeconds))
@@ -211,7 +233,7 @@ func cmdList(c *cmdCtx, args []string) error {
 		return printJSON(c, views)
 	}
 	tw := tabwriter.NewWriter(c.stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tSTATE\tPRIORITY\tMEMORY\tWAIT\tRUN\tBLOCKED_BY")
+	fmt.Fprintln(tw, "ID\tNAME\tKIND\tSTATE\tPRIORITY\tMEMORY\tEXPIRES\tWAIT\tRUN\tBLOCKED_BY")
 	for _, v := range views {
 		state := string(v.State)
 		if v.Reason != "" {
@@ -221,8 +243,18 @@ func cmdList(c *cmdCtx, args []string) error {
 		if blocked != "" && v.BlockedDetail != "" {
 			blocked += " (" + v.BlockedDetail + ")"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, v.Name, state, v.Priority,
-			units.FormatSize(v.MemoryLimit), secs(v.WaitSeconds), secs(v.RunSeconds), blocked)
+		kind, name, expires := "task", v.Name, ""
+		if v.Kind == model.KindReservation {
+			kind = "res"
+			if v.State.Held() && v.ExpiresAt != nil {
+				expires = time.Until(*v.ExpiresAt).Round(time.Second).String()
+			}
+		}
+		if v.Within != "" {
+			name = strings.TrimSpace(name + " (in " + shortID(v.Within) + ")")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, name, kind, state, v.Priority,
+			units.FormatSize(v.MemoryLimit), expires, secs(v.WaitSeconds), secs(v.RunSeconds), blocked)
 	}
 	return tw.Flush()
 }
@@ -259,4 +291,11 @@ func cmdWait(c *cmdCtx, args []string) error {
 		return &exitError{code: code}
 	}
 	return nil
+}
+
+func shortID(id model.ItemID) string {
+	if len(id) > 8 {
+		return string(id[:8])
+	}
+	return string(id)
 }

@@ -47,6 +47,7 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	key := fs.String("key", "", "idempotency key")
 	session := fs.String("session", "", "session id")
 	project := fs.String("project", "", "project (default: git root of cwd)")
+	within := fs.String("within", "", "run inside this reservation (task budget)")
 	asJSON := fs.Bool("json", false, "print the item as JSON")
 	var envs stringList
 	fs.Var(&envs, "env", "extra environment K=V (repeatable)")
@@ -87,44 +88,19 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 		return usagef("submit: %v", err)
 	}
 
-	env := map[string]string{}
-	for _, k := range capturedEnv {
-		if v := c.env(k); v != "" {
-			env[k] = v
-		}
-	}
-	for _, kv := range envs {
-		k, v, ok := strings.Cut(kv, "=")
-		// Never echo kv: the value may be a secret.
-		if !ok {
-			return usagef("submit: --env must be K=V")
-		}
-		if !validEnvName(k) {
-			return usagef("submit: --env has an invalid variable name %q", k)
-		}
-		env[k] = v
-	}
-	cwd, err := os.Getwd()
+	env, err := captureEnv(c, "submit", capturedEnv, envs)
 	if err != nil {
 		return err
 	}
-	gctx, cancel := context.WithTimeout(c.ctx, gitTimeout)
-	defer cancel()
-	proj := *project
-	if proj == "" {
-		proj = gitOut(gctx, cwd, "rev-parse", "--show-toplevel")
-		if proj == "" {
-			proj = cwd
-		}
+	cwd, proj, rev, dirty, err := detectProject(c, *project)
+	if err != nil {
+		return err
 	}
-	rev := gitOut(gctx, cwd, "rev-parse", "HEAD")
-	dirty := rev != "" && gitOut(gctx, cwd, "status", "--porcelain") != ""
-
 	var v daemon.ItemView
 	err = c.call(c.ctx, "submit", daemon.SubmitArgs{
 		Name: *name, Argv: argv, Cwd: cwd, Env: env, Limit: limit, Expected: exp, CPUs: *cpus,
 		TimeoutSeconds: int64(d / time.Second), Priority: *priority, SessionID: *session,
-		ClientType: "cli", Project: proj, IdemKey: *key, GitRev: rev, GitDirty: dirty,
+		ClientType: "cli", Project: proj, IdemKey: *key, GitRev: rev, GitDirty: dirty, Within: model.ItemID(*within),
 	}, &v)
 	if err != nil {
 		return err
@@ -134,6 +110,47 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	}
 	fmt.Fprintln(c.stdout, v.ID)
 	return nil
+}
+
+// captureEnv collects the caller variables named in names plus the --env K=V pairs.
+// It never echoes a pair: the value may be a secret.
+func captureEnv(c *cmdCtx, cmd string, names []string, extra stringList) (map[string]string, error) {
+	env := map[string]string{}
+	for _, k := range names {
+		if v := c.env(k); v != "" {
+			env[k] = v
+		}
+	}
+	for _, kv := range extra {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, usagef("%s: --env must be K=V", cmd)
+		}
+		if !validEnvName(k) {
+			return nil, usagef("%s: --env has an invalid variable name %q", cmd, k)
+		}
+		env[k] = v
+	}
+	return env, nil
+}
+
+// detectProject returns the cwd, the project (flag, else git root, else cwd) and git state.
+func detectProject(c *cmdCtx, flagProject string) (cwd, proj, rev string, dirty bool, err error) {
+	if cwd, err = os.Getwd(); err != nil {
+		return
+	}
+	gctx, cancel := context.WithTimeout(c.ctx, gitTimeout)
+	defer cancel()
+	proj = flagProject
+	if proj == "" {
+		proj = gitOut(gctx, cwd, "rev-parse", "--show-toplevel")
+		if proj == "" {
+			proj = cwd
+		}
+	}
+	rev = gitOut(gctx, cwd, "rev-parse", "HEAD")
+	dirty = rev != "" && gitOut(gctx, cwd, "status", "--porcelain") != ""
+	return
 }
 
 // gitTimeout bounds all git calls of one submit.

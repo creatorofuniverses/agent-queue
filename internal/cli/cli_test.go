@@ -50,7 +50,10 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-func (h *harness) startDaemon(t *testing.T) {
+func (h *harness) startDaemon(t *testing.T) { t.Helper(); h.startDaemonCfg(t, nil) }
+
+// startDaemonCfg starts the daemon after letting tweak adjust the config.
+func (h *harness) startDaemonCfg(t *testing.T, tweak func(*config.Config)) {
 	t.Helper()
 	host := fake.NewHost()
 	host.Set(platform.MemInfo{Total: 64 * gib, Available: 64 * gib})
@@ -58,6 +61,9 @@ func (h *harness) startDaemon(t *testing.T) {
 	host.SetNumCPU(16)
 	cfg := config.Default()
 	cfg.PoolMemory = gib
+	if tweak != nil {
+		tweak(&cfg)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host, nil) }()

@@ -43,22 +43,26 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{
-		"daemon":  cmdDaemon,
-		"submit":  cmdSubmit,
-		"status":  cmdStatus,
-		"result":  cmdResult,
-		"logs":    cmdLogs,
-		"cancel":  cmdCancel,
-		"list":    cmdList,
-		"wait":    cmdWait,
-		"doctor":  cmdDoctor,
-		"version": cmdVersion,
+		"daemon":   cmdDaemon,
+		"submit":   cmdSubmit,
+		"status":   cmdStatus,
+		"result":   cmdResult,
+		"logs":     cmdLogs,
+		"cancel":   cmdCancel,
+		"list":     cmdList,
+		"wait":     cmdWait,
+		"reserve":  cmdReserve,
+		"extend":   cmdExtend,
+		"release":  cmdRelease,
+		"teardown": cmdTeardown,
+		"doctor":   cmdDoctor,
+		"version":  cmdVersion,
 	}
 }
 
 const usageText = `usage: aq <command> [flags]
 
-commands: daemon submit status result logs cancel list wait doctor version
+commands: daemon submit status result logs cancel list wait reserve extend release teardown doctor version
 `
 
 // Main runs the aq CLI and returns the process exit code.
