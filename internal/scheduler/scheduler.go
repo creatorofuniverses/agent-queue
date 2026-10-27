@@ -65,6 +65,9 @@ type SubmitRequest struct {
 	IdemKey    string            `json:"-"`
 	GitRev     string            `json:"git_rev"`
 	GitDirty   bool              `json:"git_dirty"`
+	// ParentID runs the task within a reservation's task budget. omitempty keeps the
+	// hash of a non-nested request equal to plan 1's, so a repeated --key still matches.
+	ParentID model.ItemID `json:"parent_id,omitempty"`
 }
 
 type Scheduler struct {
@@ -138,7 +141,12 @@ func validate(r SubmitRequest, p admission.Policy) error {
 	if st, err := os.Stat(r.Cwd); err != nil || !st.IsDir() {
 		return fmt.Errorf("cwd %q is not an existing directory", r.Cwd)
 	}
-	if err := admission.Validate(p, model.Resources{MemoryBytes: r.Limit, CPUs: r.CPUs}); err != nil {
+	if r.ParentID != "" {
+		// A nested task is checked against its reservation's budget, under the mutex.
+		if r.CPUs < 1 {
+			return errors.New("cpus must be at least 1")
+		}
+	} else if err := admission.Validate(p, model.Resources{MemoryBytes: r.Limit, CPUs: r.CPUs}); err != nil {
 		return err
 	}
 	if r.Limit < minMemory {
@@ -149,6 +157,8 @@ func validate(r SubmitRequest, p admission.Policy) error {
 
 // Submit validates and stores r: QUEUED on success, REJECTED (returned with
 // ErrRejected) otherwise. A repeated IdemKey with the same request returns the stored item.
+// A nested task (ParentID set) is checked against its reservation's task budget
+// instead of the pool.
 func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, error) {
 	if r.Expected == 0 {
 		r.Expected = r.Limit
@@ -164,14 +174,23 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 		Argv: r.Argv, Cwd: r.Cwd, Env: r.Env, Limit: r.Limit, Expected: r.Expected, CPUs: r.CPUs, Timeout: r.Timeout,
 		SessionID: r.SessionID, ClientType: r.ClientType, Project: r.Project, IdemKey: r.IdemKey,
 		RequestHash: hex.EncodeToString(sum[:]), NodeID: "local", CreatedAt: now,
-		GitRev: r.GitRev, GitDirty: r.GitDirty,
+		GitRev: r.GitRev, GitDirty: r.GitDirty, ParentID: r.ParentID,
 	}
-	vErr := validate(r, s.policy(0))
-	if vErr != nil {
-		it.State, it.Diagnostic, it.EndedAt = model.StateRejected, vErr.Error(), now
-		it.Env = nil // values may be secrets; a terminal item never needs them
+	var (
+		stored  *model.Item
+		created bool
+	)
+	switch vErr := validate(r, s.policy(0)); {
+	case vErr != nil:
+		s.rejectItem(it, vErr.Error())
+		stored, created, err = s.d.Store.InsertItem(ctx, it)
+	case r.ParentID != "":
+		s.mu.Lock()
+		stored, created, err = s.insertNestedLocked(ctx, it)
+		s.mu.Unlock()
+	default:
+		stored, created, err = s.d.Store.InsertItem(ctx, it)
 	}
-	stored, created, err := s.d.Store.InsertItem(ctx, it)
 	if err != nil {
 		return nil, err
 	}
@@ -321,19 +340,21 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 		s.pressureClosed, _ = s.gate.Observe(now, avg)
 		s.pressureAvg = avg
 	}
-	mem, err := s.d.Host.Memory()
+	// Nested tasks start whatever the host reads, so a failed read is returned only
+	// after they are admitted.
+	mem, memErr := s.d.Host.Memory()
+	disk, diskErr := s.d.Host.DiskFree(s.d.Paths.StateDir)
+	snap, queue, nestedQueued := s.snapshotLocked(ctx, items, mem, disk)
+	admitted, err := s.admitNestedLocked(ctx, items, nestedQueued, now)
 	if err != nil {
-		return nil, err
+		return admitted, err
 	}
-	disk, err := s.d.Host.DiskFree(s.d.Paths.StateDir)
-	if err != nil {
-		return nil, err
+	if err := errors.Join(memErr, diskErr); err != nil {
+		return admitted, err
 	}
-	snap, queue, _ := s.snapshotLocked(ctx, items, mem, disk)
 
 	pol := s.policy(mem.Total)
 	s.headID, s.headDecision = "", admission.Decision{Admit: true}
-	var admitted []*model.Item
 	for _, it := range queue {
 		req := it.Committed()
 		dec := admission.Decide(pol, snap, req)
@@ -346,9 +367,7 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 				return admitted, err
 			}
 		} else {
-			it.State, it.AdmittedAt = model.StateStarting, now
-			it.JobDir = s.d.Paths.JobDir(it.ID)
-			if err := s.persistLocked(ctx, it); err != nil {
+			if err := s.admitTaskLocked(ctx, it, now); err != nil {
 				return admitted, err
 			}
 			admitted = append(admitted, it)
@@ -368,6 +387,13 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 		}
 	}
 	return admitted, nil
+}
+
+// admitTaskLocked moves a queued task to STARTING; Tick launches it after the pass.
+func (s *Scheduler) admitTaskLocked(ctx context.Context, it *model.Item, now time.Time) error {
+	it.State, it.AdmittedAt = model.StateStarting, now
+	it.JobDir = s.d.Paths.JobDir(it.ID)
+	return s.persistLocked(ctx, it)
 }
 
 // snapshotLocked builds the admission snapshot from the active items and returns the

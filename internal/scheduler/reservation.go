@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"resource-dispatcher/internal/model"
+	"resource-dispatcher/internal/store"
+	"resource-dispatcher/internal/units"
 )
 
 // maxTeardownScript is the largest teardown script a reservation may carry.
@@ -156,6 +158,111 @@ func (s *Scheduler) insertReservationLocked(ctx context.Context, it *model.Item,
 		}
 	}
 	return s.d.Store.InsertItem(ctx, it)
+}
+
+// insertNestedLocked checks a nested task against its reservation and the
+// reservation's task budget and inserts it (REJECTED if a check fails), so concurrent
+// submits cannot overrun the budget. A repeat of an accepted request (same idempotency
+// key) is not counted against itself: InsertItem returns the stored item.
+func (s *Scheduler) insertNestedLocked(ctx context.Context, it *model.Item) (*model.Item, bool, error) {
+	diag, err := s.nestedRejectionLocked(ctx, it)
+	if err != nil {
+		return nil, false, err
+	}
+	if diag != "" {
+		s.rejectItem(it, diag)
+	}
+	return s.d.Store.InsertItem(ctx, it)
+}
+
+// nestedRejectionLocked is why it may not run within its parent, or "" if it may: the
+// parent is a GRANTED or EXPIRING reservation not held past its TTL, the limit fits the
+// task memory, and its expected memory and cpus plus those of the reservation's other
+// non-terminal nested tasks fit the task budget.
+func (s *Scheduler) nestedRejectionLocked(ctx context.Context, it *model.Item) (string, error) {
+	pid := it.ParentID
+	parent, err := s.d.Store.Get(ctx, pid)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return fmt.Sprintf("reservation %s not found", pid), nil
+	case err != nil:
+		return "", err
+	case !parent.IsReservation():
+		return fmt.Sprintf("%s is not a reservation", pid), nil
+	case parent.State != model.StateGranted && parent.State != model.StateExpiring:
+		return fmt.Sprintf("reservation %s is %s, not granted", pid, parent.State), nil
+	case parent.TTLHeld:
+		return fmt.Sprintf("reservation %s is held past its TTL; extend it first", pid), nil
+	case it.Limit > parent.TaskMemory:
+		return fmt.Sprintf("task budget: memory limit %s exceeds task memory %s of reservation %s",
+			units.FormatSize(it.Limit), units.FormatSize(parent.TaskMemory), pid), nil
+	}
+	active, err := s.d.Store.ListActive(ctx)
+	if err != nil {
+		return "", err
+	}
+	var mem uint64
+	var cpus int
+	for _, x := range active {
+		if x.ParentID != pid {
+			continue
+		}
+		if it.IdemKey != "" && x.IdemKey == it.IdemKey && x.ClientType == it.ClientType && x.Project == it.Project {
+			continue
+		}
+		mem += x.Expected
+		cpus += x.CPUs
+	}
+	if mem > parent.TaskMemory || it.Expected > parent.TaskMemory-mem {
+		return fmt.Sprintf("task budget: memory %s expected plus %s of nested tasks exceeds task memory %s of reservation %s",
+			units.FormatSize(it.Expected), units.FormatSize(mem), units.FormatSize(parent.TaskMemory), pid), nil
+	}
+	if cpus+it.CPUs > parent.TaskCPUs {
+		return fmt.Sprintf("task budget: cpus %d plus %d of nested tasks exceed task cpus %d of reservation %s",
+			it.CPUs, cpus, parent.TaskCPUs, pid), nil
+	}
+	return "", nil
+}
+
+// admitNestedLocked starts every queued nested task: they are paid for by their
+// reservation's budget, so neither the queue, the pool, pressure, disk nor live memory
+// holds them back; only recovery does. One whose parent is no longer GRANTED or
+// EXPIRING (which Submit and Release rule out) is cancelled instead.
+func (s *Scheduler) admitNestedLocked(ctx context.Context, items, nested []*model.Item, now time.Time) ([]*model.Item, error) {
+	if s.recovering || len(nested) == 0 {
+		return nil, nil
+	}
+	byID := make(map[model.ItemID]*model.Item, len(items))
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	var admitted []*model.Item
+	for _, it := range nested {
+		var parentState model.State
+		if p, ok := byID[it.ParentID]; ok {
+			parentState = p.State
+		} else if p, err := s.d.Store.Get(ctx, it.ParentID); err == nil {
+			parentState = p.State // terminal: not in the active list
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return admitted, err
+		}
+		if parentState != model.StateGranted && parentState != model.StateExpiring {
+			diag := fmt.Sprintf("reservation %s is %s", it.ParentID, parentState)
+			if parentState == "" {
+				diag = fmt.Sprintf("reservation %s not found", it.ParentID)
+			}
+			s.endLocked(it, model.StateCancelled, model.ReasonCancelled, diag)
+			if err := s.persistLocked(ctx, it); err != nil {
+				return admitted, err
+			}
+			continue
+		}
+		if err := s.admitTaskLocked(ctx, it, now); err != nil {
+			return admitted, err
+		}
+		admitted = append(admitted, it)
+	}
+	return admitted, nil
 }
 
 func (s *Scheduler) rejectItem(it *model.Item, diag string) {
