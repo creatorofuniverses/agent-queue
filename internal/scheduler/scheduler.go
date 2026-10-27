@@ -162,6 +162,7 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 	vErr := validate(r, s.policy(0))
 	if vErr != nil {
 		it.State, it.Diagnostic, it.EndedAt = model.StateRejected, vErr.Error(), now
+		it.Env = nil // values may be secrets; a terminal item never needs them
 	}
 	stored, created, err := s.d.Store.InsertItem(ctx, it)
 	if err != nil {
@@ -219,8 +220,11 @@ func (s *Scheduler) endLocked(it *model.Item, st model.State, r model.Reason, di
 }
 
 // persistLocked writes it. On a terminal state, which is only ever reached with no
-// processes left, it wakes waiters and removes the item's temp dir (never its JobDir).
+// processes left, it drops the env, wakes waiters and removes the item's temp dir (never its JobDir).
 func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item) error {
+	if it.State.Terminal() {
+		it.Env = nil // values may be secrets; a terminal item never needs them
+	}
 	if err := s.d.Store.Update(ctx, it); err != nil {
 		return err
 	}

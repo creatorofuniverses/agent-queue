@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -29,7 +30,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if err := os.MkdirAll(paths.RuntimeDir, 0o700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
+	if err := privateDir(paths.StateDir); err != nil {
 		return err
 	}
 	lock, err := flock(paths.Lock())
@@ -124,4 +125,23 @@ func flock(path string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// privateDir creates dir 0700, or makes an existing one of ours 0700: it holds
+// the database and job logs. A directory owned by someone else is refused.
+func privateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if st.Mode().Perm() == 0o700 {
+		return nil
+	}
+	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
+		return fmt.Errorf("state dir %s is not owned by this user", dir)
+	}
+	return os.Chmod(dir, 0o700)
 }

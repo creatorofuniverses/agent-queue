@@ -165,6 +165,20 @@ func TestSecondDaemonOnSameSliceRefused(t *testing.T) {
 	other.start(t)
 }
 
+func TestStateDirMadePrivate(t *testing.T) {
+	e := newEnv(t)
+	if err := os.MkdirAll(e.paths.StateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.start(t)
+	if st, err := os.Stat(e.paths.StateDir); err != nil || st.Mode().Perm() != 0o700 {
+		t.Fatalf("state dir %v %v, want 0700", st.Mode().Perm(), err)
+	}
+	if st, err := os.Stat(e.paths.DB()); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("db %v %v, want 0600", st.Mode().Perm(), err)
+	}
+}
+
 func TestSubmitStatusWaitFlow(t *testing.T) {
 	e := newEnv(t)
 	e.start(t)

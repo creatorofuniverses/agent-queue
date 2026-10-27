@@ -547,6 +547,55 @@ func TestLaunchErrorWithLiveUnitStaysRunning(t *testing.T) {
 	}
 }
 
+// Env values may be secrets: kept only while the item can still launch.
+func TestEnvClearedOnTerminal(t *testing.T) {
+	e := newEnv(t, nil)
+	secret := map[string]string{"TOKEN": "s3cret"}
+	withEnv := func(mem uint64) SubmitRequest {
+		r := e.req(mem)
+		r.Env = secret
+		return r
+	}
+	noEnv := func(id model.ItemID) {
+		t.Helper()
+		if it := e.get(t, id); it.Env != nil {
+			t.Fatalf("item %s (%s) keeps env %v", id, it.State, it.Env)
+		}
+	}
+
+	done := e.submit(t, withEnv(512*mib))
+	cancelled := e.submit(t, withEnv(gib)) // queued behind done
+	if e.get(t, done.ID).Env["TOKEN"] != "s3cret" {
+		t.Fatal("env not stored for launch")
+	}
+	e.tick(t)
+	if l := e.ex.Launched(); len(l) != 1 || l[0].Env["TOKEN"] != "s3cret" {
+		t.Fatalf("launch spec env %+v", l)
+	}
+	if _, err := e.s.Cancel(e.ctx, cancelled.ID, "x"); err != nil {
+		t.Fatal(err)
+	}
+	noEnv(cancelled.ID)
+	e.finish(done.ID, success)
+	e.tick(t)
+	e.wantState(t, done.ID, model.StateSucceeded, model.ReasonNone)
+	noEnv(done.ID)
+
+	e.ex.FailLaunch(errors.New("boom"))
+	failed := e.submit(t, withEnv(gib))
+	e.tick(t)
+	e.wantState(t, failed.ID, model.StateFailed, model.ReasonLaunchFailed)
+	noEnv(failed.ID)
+
+	bad := withEnv(gib)
+	bad.Argv = nil
+	rej, err := e.s.Submit(e.ctx, bad)
+	if !errors.Is(err, ErrRejected) {
+		t.Fatalf("submit: %v", err)
+	}
+	noEnv(rej.ID)
+}
+
 func TestCleaningHoldsResources(t *testing.T) {
 	e := newEnv(t, nil)
 	a := e.submit(t, e.req(gib))

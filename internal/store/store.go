@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +38,9 @@ type Store struct {
 
 // Open opens (creating if needed) the database at path and applies migrations.
 func Open(path string) (*Store, error) {
+	if err := makePrivate(path); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "journal_mode(WAL)")
@@ -54,6 +59,31 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// makePrivate creates the database file 0600 (SQLite gives -wal/-shm the same mode)
+// and removes group/other access from existing database files.
+func makePrivate(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		st, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if st.Mode().Perm()&0o077 != 0 {
+			if err := os.Chmod(p, st.Mode().Perm()&0o700); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 // immediate runs fn inside BEGIN IMMEDIATE ... COMMIT on a dedicated connection.
 func (s *Store) immediate(ctx context.Context, fn func(c *sql.Conn) error) error {

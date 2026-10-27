@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -272,5 +273,36 @@ func TestIncidents(t *testing.T) {
 	got, _ = s.Incidents(ctx, t0)
 	if len(got) != 2 || got[0].Detail != "old" {
 		t.Fatalf("all: %+v", got)
+	}
+}
+
+func TestOpenKeepsDBPrivate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aq.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.InsertItem(context.Background(), newItem(0, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if st, err := os.Stat(p); err == nil && st.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode %v, want 0600", filepath.Base(p), st.Mode().Perm())
+		}
+	}
+
+	// an existing database left readable by others is tightened
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Fatalf("existing db mode %v, want 0600", st.Mode().Perm())
 	}
 }
