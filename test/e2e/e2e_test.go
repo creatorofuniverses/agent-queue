@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	sliceName  = "aqe2e.slice"
-	unitPrefix = "aqe2e-"
-	poolMemory = 1 << 30
+	sliceName         = "aqe2e.slice"
+	teardownSliceName = "aqe2etd.slice"
+	unitPrefix        = "aqe2e-"
+	poolMemory        = 1 << 30
 )
 
 var aqBin string
@@ -66,6 +67,11 @@ pool_cpus = 4
 cancel_grace = "3s"
 slice_name = "` + sliceName + `"
 unit_prefix = "` + unitPrefix + `"
+
+[reservations]
+expiry_warning = "2s"
+teardown_timeout = "20s"
+teardown_memory = "64M"
 `
 
 // newHarness writes the config (base plus extra TOML) and starts the daemon.
@@ -183,7 +189,7 @@ func (h *harness) cleanup() {
 	}
 	systemctl("stop", unitPrefix+"*.service")
 	systemctl("reset-failed", unitPrefix+"*.service")
-	systemctl("stop", sliceName)
+	systemctl("stop", sliceName, teardownSliceName)
 	if h.t.Failed() {
 		h.t.Logf("daemon log:\n%s", h.daemonLog())
 	}
@@ -194,11 +200,16 @@ func (h *harness) cleanup() {
 // aq runs the client and returns stdout, stderr and the exit code (-1 if it
 // could not run). Safe to call from any goroutine.
 func (h *harness) aq(args ...string) (string, string, int) {
+	return h.aqIn(h.dir, args...)
+}
+
+// aqIn is aq run from directory dir.
+func (h *harness) aqIn(dir string, args ...string) (string, string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, aqBin, args...)
 	cmd.Env = h.env
-	cmd.Dir = h.dir
+	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
