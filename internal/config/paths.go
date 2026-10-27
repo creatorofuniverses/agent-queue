@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -10,6 +11,17 @@ import (
 
 type Paths struct {
 	StateDir, RuntimeDir, ConfigFile string
+	// SliceLockDir holds the per-slice daemon lock; it does not follow AQ_RUNTIME_DIR,
+	// so daemons with different runtime dirs still exclude each other on one slice.
+	SliceLockDir string
+}
+
+// SliceLockDirFor is xdgRuntimeDir, or /run/user/<uid> when it is unset.
+func SliceLockDirFor(xdgRuntimeDir string) string {
+	if xdgRuntimeDir != "" {
+		return xdgRuntimeDir
+	}
+	return fmt.Sprintf("/run/user/%d", os.Getuid())
 }
 
 // DefaultPaths resolves directories, honoring AQ_STATE_DIR, AQ_RUNTIME_DIR, AQ_CONFIG.
@@ -31,6 +43,7 @@ func DefaultPaths() (Paths, error) {
 			p.ConfigFile = filepath.Join(home, ".config", "agent-queue", "config.toml")
 		}
 	}
+	p.SliceLockDir = SliceLockDirFor(os.Getenv("XDG_RUNTIME_DIR"))
 	if p.RuntimeDir == "" {
 		xdg := os.Getenv("XDG_RUNTIME_DIR")
 		if xdg == "" {
@@ -44,6 +57,10 @@ func DefaultPaths() (Paths, error) {
 func (p Paths) DB() string     { return filepath.Join(p.StateDir, "aq.db") }
 func (p Paths) Socket() string { return filepath.Join(p.RuntimeDir, "aq.sock") }
 func (p Paths) Lock() string   { return filepath.Join(p.RuntimeDir, "daemon.lock") }
+
+func (p Paths) SliceLock(slice string) string {
+	return filepath.Join(p.SliceLockDir, "agent-queue."+slice+".lock")
+}
 
 func (p Paths) JobDir(id model.ItemID) string { return filepath.Join(p.StateDir, "jobs", string(id)) }
 func (p Paths) TmpDir(id model.ItemID) string { return filepath.Join(p.StateDir, "tmp", string(id)) }

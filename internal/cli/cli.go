@@ -152,7 +152,8 @@ func parseID(fs *flag.FlagSet, args []string) (string, error) {
 
 // paths resolves directories from the injected env (AQ_STATE_DIR, AQ_RUNTIME_DIR, AQ_CONFIG).
 func (c *cmdCtx) paths() (config.Paths, error) {
-	p := config.Paths{StateDir: c.env("AQ_STATE_DIR"), RuntimeDir: c.env("AQ_RUNTIME_DIR"), ConfigFile: c.env("AQ_CONFIG")}
+	p := config.Paths{StateDir: c.env("AQ_STATE_DIR"), RuntimeDir: c.env("AQ_RUNTIME_DIR"), ConfigFile: c.env("AQ_CONFIG"),
+		SliceLockDir: config.SliceLockDirFor(c.env("XDG_RUNTIME_DIR"))}
 	if p.StateDir == "" || p.ConfigFile == "" {
 		home := c.env("HOME")
 		if home == "" {

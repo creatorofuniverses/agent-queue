@@ -39,7 +39,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
 	h := &harness{
-		paths: config.Paths{StateDir: filepath.Join(root, "s"), RuntimeDir: filepath.Join(root, "r"), ConfigFile: filepath.Join(root, "none.toml")},
+		paths: config.Paths{StateDir: filepath.Join(root, "s"), RuntimeDir: filepath.Join(root, "r"), ConfigFile: filepath.Join(root, "none.toml"), SliceLockDir: root},
 		ex:    fake.NewExecutor(),
 		cwd:   t.TempDir(),
 	}
@@ -542,5 +542,14 @@ func TestDoctorSystemdOKDetail(t *testing.T) {
 		if c.Name == "systemd" && c.Detail != "version 256" {
 			t.Errorf("detail = %q", c.Detail)
 		}
+	}
+}
+
+func TestPathsSliceLockIgnoresRuntimeDir(t *testing.T) {
+	vars := map[string]string{"HOME": "/home/u", "AQ_RUNTIME_DIR": "/elsewhere", "XDG_RUNTIME_DIR": "/run/user/7"}
+	c := &cmdCtx{env: func(k string) string { return vars[k] }}
+	p, err := c.paths()
+	if err != nil || p.SliceLock("aq.slice") != "/run/user/7/agent-queue.aq.slice.lock" {
+		t.Fatalf("%+v %v", p, err)
 	}
 }

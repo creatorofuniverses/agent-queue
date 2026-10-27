@@ -42,7 +42,7 @@ func newEnv(t *testing.T) *env {
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
 	e := &env{
-		paths: config.Paths{StateDir: filepath.Join(root, "s"), RuntimeDir: filepath.Join(root, "r")},
+		paths: config.Paths{StateDir: filepath.Join(root, "s"), RuntimeDir: filepath.Join(root, "r"), SliceLockDir: root},
 		cfg:   config.Default(),
 		ex:    fake.NewExecutor(),
 		host:  fake.NewHost(),
@@ -142,6 +142,27 @@ func TestSecondDaemonRefused(t *testing.T) {
 	if err := e.call(t, "ping", nil, nil); err != nil {
 		t.Fatalf("first daemon not alive: %v", err)
 	}
+}
+
+// A daemon with its own state and runtime dirs but the same slice would treat the
+// first daemon's units as orphans and stop them: it must not start.
+func TestSecondDaemonOnSameSliceRefused(t *testing.T) {
+	e := newEnv(t)
+	e.start(t)
+	other := newEnv(t)
+	other.paths.SliceLockDir = e.paths.SliceLockDir
+	ex := fake.NewExecutor()
+	err := Run(context.Background(), other.paths, other.cfg, ex, other.host)
+	if err == nil || !strings.Contains(err.Error(), e.cfg.SliceName) {
+		t.Fatalf("second Run: %v", err)
+	}
+	if err := e.call(t, "ping", nil, nil); err != nil {
+		t.Fatalf("first daemon not alive: %v", err)
+	}
+
+	// another slice is fine
+	other.cfg.SliceName = "aqother.slice"
+	other.start(t)
 }
 
 func TestSubmitStatusWaitFlow(t *testing.T) {

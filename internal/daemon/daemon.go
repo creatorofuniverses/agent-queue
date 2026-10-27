@@ -32,17 +32,14 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(paths.Lock(), os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := flock(paths.Lock())
 	if err != nil {
-		return err
-	}
-	defer lock.Close() // closing releases the flock
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) {
 			return fmt.Errorf("daemon already running (lock %s held)", paths.Lock())
 		}
 		return err
 	}
+	defer lock.Close() // closing releases the flock
 
 	mem, err := host.Memory()
 	if err != nil {
@@ -51,6 +48,19 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if err := cfg.Validate(mem.Total, host.NumCPU()); err != nil {
 		return err
 	}
+	// A daemon with other state/runtime dirs on the same slice would stop this
+	// one's units as orphans, so the slice gets its own lock at a fixed place.
+	if paths.SliceLockDir == "" {
+		return errors.New("slice lock directory is not set")
+	}
+	sliceLock, err := flock(paths.SliceLock(cfg.SliceName))
+	if err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return fmt.Errorf("another aq daemon already manages slice %s (lock %s held)", cfg.SliceName, paths.SliceLock(cfg.SliceName))
+		}
+		return err
+	}
+	defer sliceLock.Close()
 	st, err := store.Open(paths.DB())
 	if err != nil {
 		return err
@@ -101,4 +111,17 @@ type server struct {
 	st         *store.Store
 	paths      config.Paths
 	recovering atomic.Bool
+}
+
+// flock opens (creating) path and takes an exclusive non-blocking lock on it.
+func flock(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }

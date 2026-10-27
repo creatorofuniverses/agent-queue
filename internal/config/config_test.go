@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,6 +157,16 @@ func TestPathsDefaults(t *testing.T) {
 		p.ConfigFile != "/home/u/.config/agent-queue/config.toml" {
 		t.Fatalf("%+v", p)
 	}
+	// The slice lock ignores AQ_RUNTIME_DIR: every daemon on a slice must see the same file.
+	t.Setenv("AQ_RUNTIME_DIR", "/elsewhere")
+	if p, err = DefaultPaths(); err != nil || p.SliceLock("aq.slice") != "/run/user/1000/agent-queue.aq.slice.lock" {
+		t.Fatalf("slice lock %q %v", p.SliceLock("aq.slice"), err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	if p, err = DefaultPaths(); err != nil || p.SliceLockDir != fmt.Sprintf("/run/user/%d", os.Getuid()) {
+		t.Fatalf("slice lock dir without XDG_RUNTIME_DIR: %q %v", p.SliceLockDir, err)
+	}
+	t.Setenv("AQ_RUNTIME_DIR", "")
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	if _, err := DefaultPaths(); err == nil {
 		t.Fatal("missing XDG_RUNTIME_DIR must error (nothing in /tmp)")
