@@ -23,6 +23,7 @@ import (
 type ExecutorConfig struct {
 	SliceName, UnitPrefix, AqBinary string
 	CgroupRoot                      string   // "/sys/fs/cgroup" when empty
+	RuntimeDir                      string   // $XDG_RUNTIME_DIR when empty
 	ExtraProperties                 []string // tests only: appended as -p after the standard properties
 }
 
@@ -57,6 +58,9 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 func newExecutor(cfg ExecutorConfig, manager string) *Executor {
 	if cfg.CgroupRoot == "" {
 		cfg.CgroupRoot = "/sys/fs/cgroup"
+	}
+	if cfg.RuntimeDir == "" {
+		cfg.RuntimeDir = os.Getenv("XDG_RUNTIME_DIR")
 	}
 	return &Executor{cfg: cfg, manager: manager, runCmd: run}
 }
@@ -99,8 +103,8 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 		"OOMScoreAdjust=900",
 		"RuntimeMaxSec=" + ceilSeconds(spec.Timeout),
 		"TimeoutStopSec=" + ceilSeconds(spec.KillGrace),
-		// SIGABRT (the default on Fedora) can be ignored and dumps core. Fedora's
-		// service.d/10-timeout-abort.conf drop-in still overrides this transient value.
+		// SIGABRT can be ignored and dumps core; on Fedora the drop-in from
+		// EnsureSlice is what makes this stick (see writeKillDropIn).
 		"TimeoutStopFailureMode=kill",
 		"ExecStopPost=" + execQuote(cfg.AqBinary) + " _record-result " + execQuote(spec.JobDir),
 	}
@@ -252,7 +256,48 @@ func (e *Executor) Stop(ctx context.Context, id model.ItemID) error {
 	return err
 }
 
+const killDropIn = "[Service]\nTimeoutStopFailureMode=kill\n"
+
+// writeKillDropIn installs a runtime drop-in for all <prefix>*.service units that
+// overrides Fedora's service.d/10-timeout-abort.conf (SIGABRT + core dump on stop timeout).
+// Drop-ins beat transient properties, so the -p value alone is not enough there.
+func (e *Executor) writeKillDropIn() error {
+	if e.cfg.RuntimeDir == "" {
+		return errors.New("linux executor: XDG_RUNTIME_DIR is not set")
+	}
+	dir := filepath.Join(e.cfg.RuntimeDir, "systemd", "user", e.cfg.UnitPrefix+".service.d")
+	path := filepath.Join(dir, "99-aq-kill.conf")
+	if b, err := os.ReadFile(path); err == nil && string(b) == killDropIn {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".99-aq-kill.conf.*")
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(killDropIn)
+	if err == nil {
+		err = f.Chmod(0o644)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
+}
+
+// EnsureSlice installs the stop-mode drop-in, starts the slice and sets its pool limit.
 func (e *Executor) EnsureSlice(ctx context.Context, poolMemory uint64) error {
+	if err := e.writeKillDropIn(); err != nil {
+		return err
+	}
 	if err := e.runCmd(ctx, "systemctl", "--user", "start", e.cfg.SliceName); err != nil {
 		return err
 	}

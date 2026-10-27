@@ -171,12 +171,19 @@ func TestIntegSetsidDescendantKilled(t *testing.T) {
 
 func TestIntegStopKillsTermIgnoringDescendant(t *testing.T) {
 	e := newTestExecutor(t)
-	spec, err := launch(t, e, 64<<20, time.Minute, "sh", "-c", `(trap '' TERM; exec sleep 300) & sleep 300`)
+	// The descendant ignores TERM and records any SIGABRT (Fedora's default stop-timeout action).
+	spec, err := launch(t, e, 64<<20, time.Minute, "sh", "-c",
+		`(trap '' TERM; trap 'echo abrt >> abrt.marker' ABRT; while :; do sleep 0.1; done) & sleep 300`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
 	time.Sleep(500 * time.Millisecond)
+	out, _ := exec.Command("systemctl", "--user", "show", "-p", "TimeoutStopFailureMode", "--value",
+		"aqtest-"+string(spec.ID)+".service").Output()
+	if s := strings.TrimSpace(string(out)); s != "kill" {
+		t.Fatalf("TimeoutStopFailureMode=%q", s)
+	}
 	start := time.Now()
 	if err := e.Stop(ctx, spec.ID); err != nil {
 		t.Fatal(err)
@@ -194,9 +201,13 @@ func TestIntegStopKillsTermIgnoringDescendant(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	t.Logf("dead after %v", time.Since(start))
 	// the descendant survived TERM, so only the KILL after TimeoutStopSec ended it
 	if el := time.Since(start); el < spec.KillGrace-500*time.Millisecond {
 		t.Fatalf("stopped after %v, before KillGrace: TERM was not ignored", el)
+	}
+	if _, err := os.Stat(filepath.Join(spec.Cwd, "abrt.marker")); !os.IsNotExist(err) {
+		t.Fatalf("descendant got SIGABRT (abort instead of kill): %v", err)
 	}
 }
 

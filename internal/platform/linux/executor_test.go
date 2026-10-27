@@ -311,3 +311,56 @@ func TestLaunchSystemdRunErrorStopsUnit(t *testing.T) {
 		t.Fatalf("unit not stopped: %q", f.calls)
 	}
 }
+
+func TestEnsureSliceWritesKillDropIn(t *testing.T) {
+	rt := t.TempDir()
+	e := newExecutor(ExecutorConfig{SliceName: "aqtest.slice", UnitPrefix: "aqtest-", RuntimeDir: rt}, "u")
+	f := &fakeRunner{}
+	e.runCmd = f.run
+	if err := e.EnsureSlice(t.Context(), 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(rt, "systemd", "user", "aqtest-.service.d")
+	path := filepath.Join(dir, "99-aq-kill.conf")
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "[Service]\nTimeoutStopFailureMode=kill\n" {
+		t.Fatalf("drop-in %q %v", b, err)
+	}
+	if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
+		t.Errorf("dir mode %v", st.Mode().Perm())
+	}
+	st1, _ := os.Stat(path)
+	if st1.Mode().Perm() != 0o644 {
+		t.Errorf("file mode %v", st1.Mode().Perm())
+	}
+	if !f.ran("systemctl", "start") || !f.ran("systemctl", "set-property") {
+		t.Fatalf("calls %q", f.calls)
+	}
+
+	// unchanged content is not rewritten; different content is replaced
+	if err := e.EnsureSlice(t.Context(), 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	if st2, _ := os.Stat(path); !os.SameFile(st1, st2) || !st2.ModTime().Equal(st1.ModTime()) {
+		t.Error("identical drop-in was rewritten")
+	}
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.EnsureSlice(t.Context(), 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "[Service]\nTimeoutStopFailureMode=kill\n" {
+		t.Fatalf("stale drop-in kept: %q", b)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 1 {
+		t.Fatalf("leftover temp files: %v", ents)
+	}
+}
+
+func TestRuntimeDirDefaultsToXDG(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/4242")
+	if e := newExecutor(ExecutorConfig{}, "u"); e.cfg.RuntimeDir != "/run/user/4242" {
+		t.Fatalf("got %q", e.cfg.RuntimeDir)
+	}
+}
