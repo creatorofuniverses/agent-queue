@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -111,6 +112,7 @@ func TestReserveRejects(t *testing.T) {
 		"cpus above pool":      func(r *ReserveRequest) { r.CPUs, r.TaskMemory, r.TaskCPUs = 10, gib, 7 },
 		"negative stand cpus":  func(r *ReserveRequest) { r.CPUs = -1 },
 		"memory overflow pool": func(r *ReserveRequest) { r.Memory, r.TaskMemory, r.TaskCPUs = ^uint64(0), gib, 1 },
+		"cpus overflow pool":   func(r *ReserveRequest) { r.CPUs, r.TaskMemory, r.TaskCPUs = 1, 64*mib, math.MaxInt },
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {

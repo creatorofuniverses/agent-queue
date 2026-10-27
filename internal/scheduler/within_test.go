@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -146,6 +147,19 @@ func TestWithinOverBudgetCPU(t *testing.T) {
 	if !strings.Contains(it.Diagnostic, "cpus") {
 		t.Fatalf("diagnostic %q, want cpus", it.Diagnostic)
 	}
+}
+
+// Final review F1: cpus near MaxInt must not wrap the budget check.
+func TestWithinCPUOverflow(t *testing.T) {
+	e := newEnv(t, nil)
+	res := e.grantBudget(t, 100*mib, 500*mib, 2)
+	running := e.submit(t, e.within(res.ID, 100*mib))
+	e.tick(t)
+	e.wantState(t, running.ID, model.StateRunning, model.ReasonNone)
+
+	r := e.within(res.ID, 100*mib)
+	r.CPUs = math.MaxInt
+	e.wantRejected(t, r, "task budget")
 }
 
 func TestWithinLimitAboveBudget(t *testing.T) {

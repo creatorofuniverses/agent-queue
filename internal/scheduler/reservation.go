@@ -77,7 +77,7 @@ func (s *Scheduler) validateReserve(r ReserveRequest) error {
 		return fmt.Errorf("ttl %s exceeds max_ttl %s", r.TTL, cfg.Reservations.MaxTTL)
 	case r.Memory > cfg.PoolMemory || r.TaskMemory > cfg.PoolMemory-r.Memory:
 		return fmt.Errorf("stand memory %d plus task memory %d exceeds pool memory %d", r.Memory, r.TaskMemory, cfg.PoolMemory)
-	case r.CPUs+r.TaskCPUs > cfg.PoolCPUs:
+	case r.CPUs > cfg.PoolCPUs || r.TaskCPUs > cfg.PoolCPUs-r.CPUs:
 		return fmt.Errorf("stand cpus %d plus task cpus %d exceed pool cpus %d", r.CPUs, r.TaskCPUs, cfg.PoolCPUs)
 	case len(r.Teardown) == 0:
 		return errors.New("teardown script is empty")
@@ -220,7 +220,7 @@ func (s *Scheduler) nestedRejectionLocked(ctx context.Context, it *model.Item) (
 		return fmt.Sprintf("task budget: memory %s expected plus %s of nested tasks exceeds task memory %s of reservation %s",
 			units.FormatSize(it.Expected), units.FormatSize(mem), units.FormatSize(parent.TaskMemory), pid), nil
 	}
-	if cpus+it.CPUs > parent.TaskCPUs {
+	if cpus > parent.TaskCPUs || it.CPUs > parent.TaskCPUs-cpus {
 		return fmt.Sprintf("task budget: cpus %d plus %d of nested tasks exceed task cpus %d of reservation %s",
 			it.CPUs, cpus, parent.TaskCPUs, pid), nil
 	}
