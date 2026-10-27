@@ -322,8 +322,9 @@ func (s *Scheduler) grantLocked(ctx context.Context, it *model.Item, now time.Ti
 // Release ends a reservation without running its teardown script: GRANTED or EXPIRING
 // with no unfinished nested task becomes RELEASED, QUEUED becomes CANCELLED and a
 // terminal one is returned unchanged; with force, TEARDOWN_FAILED and TEARDOWN_UNKNOWN
-// also become RELEASED ("released by operator (--force)"). Anything else (TEARING_DOWN
-// included, force or not) is ErrBadState, item unchanged. The nested check and the
+// also become RELEASED ("released by operator (--force)") unless, as for RetryTeardown,
+// a Stop of the teardown unit is in flight or the unit has processes. Anything else
+// (TEARING_DOWN included, force or not) is ErrBadState, item unchanged. The nested check and the
 // change share one critical section, so a concurrent --within submit cannot slip in.
 func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*model.Item, error) {
 	s.mu.Lock()
@@ -352,6 +353,9 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 		}
 		diag := ""
 		if it.State == model.StateTeardownFailed || it.State == model.StateTeardownUnknown {
+			if err := s.teardownUnitGoneLocked(ctx, id); err != nil {
+				return it, err
+			}
 			diag = "released by operator (--force)"
 		}
 		s.endLocked(it, model.StateReleased, model.ReasonNone, diag)

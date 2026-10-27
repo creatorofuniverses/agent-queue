@@ -333,22 +333,15 @@ func (s *Scheduler) RetryTeardown(ctx context.Context, id model.ItemID) (*model.
 	if err != nil {
 		return nil, err
 	}
-	uid := model.TeardownUnitID(id)
 	switch {
 	case !it.IsReservation():
 		return it, fmt.Errorf("%w: %s is a task, not a reservation", ErrBadState, id)
 	case it.State != model.StateTeardownFailed && it.State != model.StateTeardownUnknown:
 		return it, fmt.Errorf("%w: reservation %s is %s; only TEARDOWN_FAILED or TEARDOWN_UNKNOWN can be retried",
 			ErrBadState, id, it.State)
-	case s.stopping[uid]:
-		return it, fmt.Errorf("%w: reservation %s: previous teardown attempt is still stopping; retry shortly", ErrBadState, id)
 	}
-	alive, err := s.d.Exec.Alive(ctx, uid)
-	if err != nil {
-		return it, fmt.Errorf("read teardown unit liveness of %s: %w", id, err)
-	}
-	if alive {
-		return it, fmt.Errorf("%w: teardown unit of reservation %s is still running", ErrBadState, id)
+	if err := s.teardownUnitGoneLocked(ctx, id); err != nil {
+		return it, err
 	}
 	it.State, it.ExpiresAt, it.WarnAt, it.TTLHeld = model.StateExpiring, s.d.Now(), time.Time{}, false
 	if err := s.persistLocked(ctx, it); err != nil {
@@ -356,4 +349,21 @@ func (s *Scheduler) RetryTeardown(ctx context.Context, id model.ItemID) (*model.
 	}
 	s.Kick()
 	return it, nil
+}
+
+// teardownUnitGoneLocked is ErrBadState while a Stop of id's teardown unit is in flight
+// or the unit has processes: a new attempt or a release must not race the old one.
+func (s *Scheduler) teardownUnitGoneLocked(ctx context.Context, id model.ItemID) error {
+	uid := model.TeardownUnitID(id)
+	if s.stopping[uid] {
+		return fmt.Errorf("%w: reservation %s: previous teardown attempt is still stopping; retry shortly", ErrBadState, id)
+	}
+	alive, err := s.d.Exec.Alive(ctx, uid)
+	if err != nil {
+		return fmt.Errorf("read teardown unit liveness of %s: %w", id, err)
+	}
+	if alive {
+		return fmt.Errorf("%w: teardown unit of reservation %s is still running", ErrBadState, id)
+	}
+	return nil
 }

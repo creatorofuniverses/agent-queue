@@ -649,6 +649,41 @@ func TestForceRelease(t *testing.T) {
 	e.wantState(t, task.ID, model.StateRunning, model.ReasonNone)
 }
 
+// Final review F3: --force does not release a stand whose teardown unit still runs or
+// is still being stopped, as RetryTeardown does not retry it.
+func TestForceReleaseFencedByTeardownUnit(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	e.tearDown(t, res)
+	e.ex.SetAlive(uid, false)
+	e.tick(t)
+	e.clk.Advance(e.cfg.CancelGrace)
+	e.tick(t)
+	e.wantState(t, res.ID, model.StateTeardownUnknown, model.ReasonLost)
+
+	e.ex.SetAlive(uid, true)
+	_, err := e.s.Release(e.ctx, res.ID, true)
+	wantBadState(t, err, "still running")
+	e.wantState(t, res.ID, model.StateTeardownUnknown, model.ReasonLost)
+	e.ex.SetAlive(uid, false)
+
+	e.s.mu.Lock()
+	e.s.stopping[uid] = true
+	e.s.mu.Unlock()
+	_, err = e.s.Release(e.ctx, res.ID, true)
+	wantBadState(t, err, "still stopping")
+	e.wantState(t, res.ID, model.StateTeardownUnknown, model.ReasonLost)
+	e.s.mu.Lock()
+	delete(e.s.stopping, uid)
+	e.s.mu.Unlock()
+
+	if _, err := e.s.Release(e.ctx, res.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	e.wantState(t, res.ID, model.StateReleased, model.ReasonNone)
+}
+
 // The teardown unit is not a task: Tick never stops a healthy one.
 func TestTeardownNotStoppedAsTaskOrphan(t *testing.T) {
 	e := newEnv(t, nil)
