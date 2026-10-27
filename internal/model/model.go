@@ -24,7 +24,8 @@ type Kind string
 
 const (
 	KindTask Kind = "task"
-	// KindReservation is reserved for plan 2.
+	// KindReservation is a stand reservation: it holds pool resources until
+	// released or torn down.
 	KindReservation Kind = "reservation"
 )
 
@@ -40,11 +41,37 @@ const (
 	StateFailed     State = "FAILED"
 	StateCancelled  State = "CANCELLED"
 	StateRejected   State = "REJECTED"
+
+	// Reservation states.
+	StateGranted         State = "GRANTED"
+	StateExpiring        State = "EXPIRING"
+	StateTearingDown     State = "TEARING_DOWN"
+	StateTornDown        State = "TORN_DOWN"
+	StateTeardownFailed  State = "TEARDOWN_FAILED"
+	StateTeardownUnknown State = "TEARDOWN_UNKNOWN"
+	StateReleased        State = "RELEASED"
 )
 
+// TerminalStates is the single list of states that free the pool; the store
+// builds its SQL from it.
+func TerminalStates() []State {
+	return []State{StateSucceeded, StateFailed, StateCancelled, StateRejected, StateTornDown, StateReleased}
+}
+
 func (s State) Terminal() bool {
+	for _, t := range TerminalStates() {
+		if s == t {
+			return true
+		}
+	}
+	return false
+}
+
+// Held reports whether a reservation in this state counts against the pool.
+// TEARDOWN_FAILED and TEARDOWN_UNKNOWN are non-terminal and keep their accounting.
+func (s State) Held() bool {
 	switch s {
-	case StateSucceeded, StateFailed, StateCancelled, StateRejected:
+	case StateGranted, StateExpiring, StateTearingDown, StateTeardownFailed, StateTeardownUnknown:
 		return true
 	}
 	return false
@@ -135,11 +162,73 @@ type Item struct {
 	CancelReason    string
 	LogsTruncated   bool
 	Diagnostic      string
+
+	// ParentID is the reservation a nested task runs within.
+	ParentID ItemID
+	// Reservation fields. For a reservation Limit = Expected = stand memory,
+	// CPUs = stand CPUs, Timeout = TTL, Cwd = original cwd, Argv = nil.
+	TaskMemory uint64
+	TaskCPUs   int
+	ExpiresAt  time.Time
+	WarnAt     time.Time
+	// DockerProject is the compose project measured for the stand ("" if none).
+	DockerProject string
+	// TeardownAttempt counts launched teardown attempts (first is 1).
+	TeardownAttempt int
+	// TeardownLaunchError is the Launch error of the current attempt; reset on every attempt+1.
+	TeardownLaunchError  string
+	NotifyGrant          bool
+	TTLHeld              bool
+	OverDeclaredNotified bool
 }
 
-// Committed is the resources this item holds against the pool.
+func (it *Item) IsReservation() bool { return it.Kind == KindReservation }
+
+// Committed is the resources this item holds against the pool, regardless of
+// state (the scheduler decides which states count). A nested task is paid for
+// by its reservation's task budget; a reservation holds stand plus budget.
 func (it *Item) Committed() Resources {
+	switch {
+	case it.ParentID != "":
+		return Resources{}
+	case it.IsReservation():
+		return Resources{MemoryBytes: it.Expected + it.TaskMemory, CPUs: it.CPUs + it.TaskCPUs}
+	}
 	return Resources{MemoryBytes: it.Expected, CPUs: it.CPUs}
+}
+
+// TeardownUnitID is the executor id of a reservation's teardown unit.
+func TeardownUnitID(id ItemID) ItemID { return "teardown-" + id }
+
+type EventKind string
+
+const (
+	EventReservationGranted    EventKind = "reservation_granted"
+	EventReservationExpiring   EventKind = "reservation_expiring"
+	EventReservationHeldByTask EventKind = "reservation_held_by_tasks"
+	EventTeardownSucceeded     EventKind = "teardown_succeeded"
+	EventTeardownFailed        EventKind = "teardown_failed"
+	EventTeardownUnknown       EventKind = "teardown_unknown"
+	EventStandOverDeclared     EventKind = "stand_over_declared"
+)
+
+type Audience string
+
+const (
+	AudienceSession  Audience = "session"
+	AudienceOperator Audience = "operator"
+)
+
+// Event is a notification recorded in the same transaction as the item change
+// that caused it; delivery is a separate concern.
+type Event struct {
+	ID                 string
+	ItemID             ItemID
+	Kind               EventKind
+	Audience           Audience
+	SessionID          string
+	ClientType, Detail string
+	CreatedAt          time.Time
 }
 
 type Incident struct {

@@ -31,3 +31,15 @@ open_after = "30s"
 # Максимальный размер сохраняемого stdout/stderr задачи.
 max_stdout = "64M"
 max_stderr = "64M"
+
+[reservations]
+# Максимальный срок резерва (TTL отсчитывается от выдачи).
+max_ttl = "24h"
+# За сколько до истечения резерв переходит в EXPIRING и шлётся предупреждение.
+expiry_warning = "15m"
+# Предел времени на выполнение скрипта снятия.
+teardown_timeout = "5m"
+# Память одного снятия (от 64M до pool_memory).
+teardown_memory = "512M"
+# Сколько снятий может идти одновременно (не меньше 1).
+teardown_concurrency = 2

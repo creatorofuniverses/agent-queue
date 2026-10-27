@@ -64,3 +64,18 @@ func (p Paths) SliceLock(slice string) string {
 
 func (p Paths) JobDir(id model.ItemID) string { return filepath.Join(p.StateDir, "jobs", string(id)) }
 func (p Paths) TmpDir(id model.ItemID) string { return filepath.Join(p.StateDir, "tmp", string(id)) }
+
+// TeardownScript is the daemon's copy of a reservation's teardown script.
+func (p Paths) TeardownScript(id model.ItemID) string {
+	return filepath.Join(p.JobDir(id), "teardown.sh")
+}
+
+// TeardownDir holds logs and result.json of one teardown attempt (attempt starts at 1).
+func (p Paths) TeardownDir(id model.ItemID, attempt int) string {
+	return filepath.Join(p.JobDir(id), fmt.Sprintf("teardown-%d", attempt))
+}
+
+// TeardownTmpDir is the per-attempt temporary directory, removed after the attempt ends.
+func (p Paths) TeardownTmpDir(id model.ItemID, attempt int) string {
+	return filepath.Join(p.StateDir, "tmp", fmt.Sprintf("teardown-%s-%d", id, attempt))
+}

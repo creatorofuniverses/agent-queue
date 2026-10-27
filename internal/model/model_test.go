@@ -51,3 +51,55 @@ func TestCommitted(t *testing.T) {
 		t.Errorf("Committed() = %+v", r)
 	}
 }
+
+func TestReservationStatesTerminal(t *testing.T) {
+	for _, s := range []State{StateTornDown, StateReleased} {
+		if !s.Terminal() || s.Held() {
+			t.Errorf("%s: Terminal=%v Held=%v, want true/false", s, s.Terminal(), s.Held())
+		}
+	}
+	for _, s := range []State{StateGranted, StateExpiring, StateTearingDown, StateTeardownFailed, StateTeardownUnknown} {
+		if s.Terminal() || !s.Held() {
+			t.Errorf("%s: Terminal=%v Held=%v, want false/true", s, s.Terminal(), s.Held())
+		}
+	}
+	if StateQueued.Held() {
+		t.Error("QUEUED must not be Held")
+	}
+	// TerminalStates is the single source for SQL and must agree with Terminal().
+	got := map[State]bool{}
+	for _, s := range TerminalStates() {
+		if !s.Terminal() {
+			t.Errorf("TerminalStates has non-terminal %s", s)
+		}
+		got[s] = true
+	}
+	if len(got) != 6 {
+		t.Errorf("TerminalStates = %v, want 6 distinct states", TerminalStates())
+	}
+}
+
+func TestCommittedByKind(t *testing.T) {
+	const g = uint64(1) << 30
+	task := &Item{Kind: KindTask, Expected: 2 * g, CPUs: 2}
+	if r := task.Committed(); r != (Resources{2 * g, 2}) {
+		t.Errorf("task: %+v", r)
+	}
+	task.ParentID = "res"
+	if r := task.Committed(); r != (Resources{}) {
+		t.Errorf("nested task: %+v", r)
+	}
+	res := &Item{Kind: KindReservation, Expected: g, CPUs: 1, TaskMemory: 3 * g, TaskCPUs: 4}
+	if !res.IsReservation() || task.IsReservation() {
+		t.Error("IsReservation wrong")
+	}
+	if r := res.Committed(); r != (Resources{4 * g, 5}) {
+		t.Errorf("reservation: %+v", r)
+	}
+}
+
+func TestTeardownUnitID(t *testing.T) {
+	if got := TeardownUnitID("abc"); got != "teardown-abc" {
+		t.Errorf("got %q", got)
+	}
+}

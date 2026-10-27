@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -304,5 +305,153 @@ func TestOpenKeepsDBPrivate(t *testing.T) {
 	s.Close()
 	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
 		t.Fatalf("existing db mode %v, want 0600", st.Mode().Perm())
+	}
+}
+
+func TestReservationRoundTrip(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	it := &model.Item{
+		ID: model.NewID(), Kind: model.KindReservation, State: model.StateGranted, NodeID: "local",
+		Limit: 1 << 30, Expected: 1 << 30, CPUs: 1, Timeout: time.Hour, Cwd: "/src", CreatedAt: base,
+		ParentID: "parent", TaskMemory: 3 << 30, TaskCPUs: 4,
+		ExpiresAt: base.Add(time.Hour), WarnAt: base.Add(45 * time.Minute),
+		DockerProject: "stand", TeardownAttempt: 2, TeardownLaunchError: "boom",
+		NotifyGrant: true, TTLHeld: true, OverDeclaredNotified: true,
+	}
+	got, _, err := s.InsertItem(ctx, it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, it) {
+		t.Fatalf("insert returned %+v want %+v", got, it)
+	}
+	it.ParentID, it.TaskMemory, it.TaskCPUs = "", 5<<30, 6
+	it.ExpiresAt, it.WarnAt = base.Add(2*time.Hour), time.Time{}
+	it.DockerProject, it.TeardownAttempt, it.TeardownLaunchError = "other", 3, ""
+	it.NotifyGrant, it.TTLHeld, it.OverDeclaredNotified = false, false, false
+	if err := s.Update(ctx, it); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get(ctx, it.ID)
+	if err != nil || !reflect.DeepEqual(got, it) {
+		t.Fatalf("after update %+v err=%v want %+v", got, err, it)
+	}
+}
+
+func TestUpdateWithEventsAtomic(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	it := newItem(0, base)
+	it.Kind, it.State = model.KindReservation, model.StateGranted
+	if _, _, err := s.InsertItem(ctx, it); err != nil {
+		t.Fatal(err)
+	}
+	ev := func(id string, kind model.EventKind, aud model.Audience, at time.Duration) model.Event {
+		return model.Event{ID: id, ItemID: it.ID, Kind: kind, Audience: aud,
+			SessionID: "sess", ClientType: "claude", Detail: "d-" + id, CreatedAt: base.Add(at)}
+	}
+	it.State = model.StateExpiring
+	bad := []model.Event{ev("e1", model.EventReservationExpiring, model.AudienceSession, 0),
+		ev("e1", model.EventReservationExpiring, model.AudienceOperator, 0)}
+	if err := s.UpdateWithEvents(ctx, it, bad); err == nil {
+		t.Fatal("duplicate event id must fail")
+	}
+	got, _ := s.Get(ctx, it.ID)
+	if got.State != model.StateGranted {
+		t.Fatalf("item updated despite failed event insert: %s", got.State)
+	}
+	if evs, _ := s.Events(ctx, it.ID); len(evs) != 0 {
+		t.Fatalf("events leaked: %+v", evs)
+	}
+	good := []model.Event{
+		ev("e3", model.EventTeardownFailed, model.AudienceOperator, 2*time.Second),
+		ev("e2", model.EventReservationExpiring, model.AudienceSession, time.Second),
+	}
+	if err := s.UpdateWithEvents(ctx, it, good); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get(ctx, it.ID)
+	if got.State != model.StateExpiring {
+		t.Fatalf("state %s", got.State)
+	}
+	evs, err := s.Events(ctx, it.ID)
+	if err != nil || len(evs) != 2 || !reflect.DeepEqual(evs[0], good[1]) || !reflect.DeepEqual(evs[1], good[0]) {
+		t.Fatalf("events %+v err=%v", evs, err)
+	}
+	// Empty evs behaves like Update.
+	it.State = model.StateReleased
+	if err := s.UpdateWithEvents(ctx, it, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, it.ID); got.State != model.StateReleased {
+		t.Fatalf("state %s", got.State)
+	}
+	if err := s.UpdateWithEvents(ctx, &model.Item{ID: "missing"}, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMigration0002OnExistingDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aq.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m1, err := migrationsFS.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(string(m1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO items (id, kind, state, created_at) VALUES ('old','task','QUEUED','2026-01-02T03:04:05.000000000Z')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.Get(context.Background(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ParentID != "" || got.TaskMemory != 0 || got.TaskCPUs != 0 || !got.ExpiresAt.IsZero() || !got.WarnAt.IsZero() ||
+		got.DockerProject != "" || got.TeardownAttempt != 0 || got.TeardownLaunchError != "" ||
+		got.NotifyGrant || got.TTLHeld || got.OverDeclaredNotified {
+		t.Fatalf("new fields not zero: %+v", got)
+	}
+}
+
+func TestListActiveExcludesNewTerminal(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+	base := time.Now().UTC()
+	ids := map[model.State]model.ItemID{}
+	for i, st := range []model.State{model.StateTornDown, model.StateReleased, model.StateTeardownFailed, model.StateGranted} {
+		it := newItem(0, base.Add(time.Duration(i)*time.Second))
+		it.State = st
+		ids[st] = it.ID
+		if _, _, err := s.InsertItem(ctx, it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	act, err := s.ListActive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := map[model.ItemID]bool{}
+	for _, it := range act {
+		in[it.ID] = true
+	}
+	if in[ids[model.StateTornDown]] || in[ids[model.StateReleased]] || !in[ids[model.StateTeardownFailed]] || !in[ids[model.StateGranted]] {
+		t.Fatalf("active set wrong: %v", in)
 	}
 }

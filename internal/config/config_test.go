@@ -217,3 +217,76 @@ func TestValidateSliceAndPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestReservationsConfigDefaults(t *testing.T) {
+	r := Default().Reservations
+	want := ReservationsConfig{MaxTTL: 24 * time.Hour, ExpiryWarning: 15 * time.Minute,
+		TeardownTimeout: 5 * time.Minute, TeardownMemory: 512 << 20, TeardownConcurrency: 2}
+	if r != want {
+		t.Fatalf("got %+v want %+v", r, want)
+	}
+}
+
+func TestTeardownSliceName(t *testing.T) {
+	for in, want := range map[string]string{"aq.slice": "aqtd.slice", "aqe2e.slice": "aqe2etd.slice", "aqtest.slice": "aqtesttd.slice"} {
+		c := Default()
+		c.SliceName = in
+		if got := c.TeardownSliceName(); got != want {
+			t.Errorf("%s: got %s want %s", in, got, want)
+		}
+	}
+}
+
+func TestLoadReservations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	body := "[reservations]\nmax_ttl = \"2h\"\nexpiry_warning = \"1m\"\nteardown_timeout = \"30s\"\nteardown_memory = \"1G\"\nteardown_concurrency = 3\n"
+	os.WriteFile(path, []byte(body), 0o600)
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ReservationsConfig{MaxTTL: 2 * time.Hour, ExpiryWarning: time.Minute,
+		TeardownTimeout: 30 * time.Second, TeardownMemory: 1 << 30, TeardownConcurrency: 3}
+	if c.Reservations != want {
+		t.Fatalf("got %+v", c.Reservations)
+	}
+}
+
+func TestValidateReservations(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mut  func(*Config)
+		want string
+	}{
+		"memory too small":  {func(c *Config) { c.Reservations.TeardownMemory = 32 << 20 }, "teardown_memory"},
+		"memory above pool": {func(c *Config) { c.Reservations.TeardownMemory = c.PoolMemory + 1 }, "teardown_memory"},
+		"concurrency 0":     {func(c *Config) { c.Reservations.TeardownConcurrency = 0 }, "teardown_concurrency"},
+		"warning >= ttl":    {func(c *Config) { c.Reservations.ExpiryWarning = 25 * time.Hour }, "expiry_warning"},
+		"ttl 0":             {func(c *Config) { c.Reservations.MaxTTL = 0 }, "max_ttl"},
+		"timeout 0":         {func(c *Config) { c.Reservations.TeardownTimeout = 0 }, "teardown_timeout"},
+		"warning 0":         {func(c *Config) { c.Reservations.ExpiryWarning = 0 }, "expiry_warning"},
+	} {
+		c := Default()
+		tc.mut(&c)
+		if err := c.Validate(64*gib, 20); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v", name, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(path, []byte("[reservations]\nbogus = 1\n"), 0o600)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "reservations.bogus") {
+		t.Fatalf("unknown key: got %v", err)
+	}
+}
+
+func TestTeardownPaths(t *testing.T) {
+	p := Paths{StateDir: "/s"}
+	if got := p.TeardownScript("x"); got != "/s/jobs/x/teardown.sh" {
+		t.Error(got)
+	}
+	if got := p.TeardownDir("x", 2); got != "/s/jobs/x/teardown-2" {
+		t.Error(got)
+	}
+	if got := p.TeardownTmpDir("x", 2); got != "/s/tmp/teardown-x-2" {
+		t.Error(got)
+	}
+}

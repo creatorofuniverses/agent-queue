@@ -24,6 +24,12 @@ type LogsConfig struct {
 	MaxStdout, MaxStderr uint64
 }
 
+type ReservationsConfig struct {
+	MaxTTL, ExpiryWarning, TeardownTimeout time.Duration
+	TeardownMemory                         uint64
+	TeardownConcurrency                    int
+}
+
 type Config struct {
 	PoolMemory          uint64
 	PoolCPUs            int
@@ -33,6 +39,7 @@ type Config struct {
 	CancelGrace         time.Duration
 	Pressure            PressureConfig
 	Logs                LogsConfig
+	Reservations        ReservationsConfig
 	SliceName           string
 	UnitPrefix          string
 }
@@ -53,7 +60,14 @@ func Default() Config {
 			OpenFullAvg10:  1.0,
 			OpenAfter:      30 * time.Second,
 		},
-		Logs:       LogsConfig{MaxStdout: 64 << 20, MaxStderr: 64 << 20},
+		Logs: LogsConfig{MaxStdout: 64 << 20, MaxStderr: 64 << 20},
+		Reservations: ReservationsConfig{
+			MaxTTL:              24 * time.Hour,
+			ExpiryWarning:       15 * time.Minute,
+			TeardownTimeout:     5 * time.Minute,
+			TeardownMemory:      512 << 20,
+			TeardownConcurrency: 2,
+		},
 		SliceName:  "aq.slice",
 		UnitPrefix: "aq-",
 	}
@@ -79,6 +93,13 @@ type rawConfig struct {
 		MaxStdout *string `toml:"max_stdout"`
 		MaxStderr *string `toml:"max_stderr"`
 	} `toml:"logs"`
+	Reservations struct {
+		MaxTTL              *string `toml:"max_ttl"`
+		ExpiryWarning       *string `toml:"expiry_warning"`
+		TeardownTimeout     *string `toml:"teardown_timeout"`
+		TeardownMemory      *string `toml:"teardown_memory"`
+		TeardownConcurrency *int    `toml:"teardown_concurrency"`
+	} `toml:"reservations"`
 }
 
 // Load reads the TOML file at path over Default(). A missing file yields defaults.
@@ -126,6 +147,10 @@ func Load(path string) (Config, error) {
 	size("min_disk_free", raw.MinDiskFree, &c.MinDiskFree)
 	size("logs.max_stdout", raw.Logs.MaxStdout, &c.Logs.MaxStdout)
 	size("logs.max_stderr", raw.Logs.MaxStderr, &c.Logs.MaxStderr)
+	size("reservations.teardown_memory", raw.Reservations.TeardownMemory, &c.Reservations.TeardownMemory)
+	dur("reservations.max_ttl", raw.Reservations.MaxTTL, &c.Reservations.MaxTTL)
+	dur("reservations.expiry_warning", raw.Reservations.ExpiryWarning, &c.Reservations.ExpiryWarning)
+	dur("reservations.teardown_timeout", raw.Reservations.TeardownTimeout, &c.Reservations.TeardownTimeout)
 	dur("cancel_grace", raw.CancelGrace, &c.CancelGrace)
 	dur("pressure.close_after", raw.Pressure.CloseAfter, &c.Pressure.CloseAfter)
 	dur("pressure.open_after", raw.Pressure.OpenAfter, &c.Pressure.OpenAfter)
@@ -146,6 +171,9 @@ func Load(path string) (Config, error) {
 	}
 	if raw.UnitPrefix != nil {
 		c.UnitPrefix = *raw.UnitPrefix
+	}
+	if raw.Reservations.TeardownConcurrency != nil {
+		c.Reservations.TeardownConcurrency = *raw.Reservations.TeardownConcurrency
 	}
 	if raw.Pressure.CloseFullAvg10 != nil {
 		c.Pressure.CloseFullAvg10 = *raw.Pressure.CloseFullAvg10
@@ -182,7 +210,31 @@ func (c Config) Validate(memTotal uint64, numCPU int) error {
 	if !strings.HasSuffix(c.UnitPrefix, "-") || !unitWord(strings.TrimSuffix(c.UnitPrefix, "-")) {
 		return fmt.Errorf("unit_prefix %q must be [A-Za-z0-9_-] ending in \"-\", not starting with \"-\"", c.UnitPrefix)
 	}
+	return c.validateReservations()
+}
+
+func (c Config) validateReservations() error {
+	r := c.Reservations
+	switch {
+	case r.MaxTTL <= 0:
+		return fmt.Errorf("max_ttl %v must be > 0", r.MaxTTL)
+	case r.ExpiryWarning <= 0 || r.ExpiryWarning >= r.MaxTTL:
+		return fmt.Errorf("expiry_warning %v must be > 0 and less than max_ttl %v", r.ExpiryWarning, r.MaxTTL)
+	case r.TeardownTimeout <= 0:
+		return fmt.Errorf("teardown_timeout %v must be > 0", r.TeardownTimeout)
+	case r.TeardownMemory < 64<<20 || r.TeardownMemory > c.PoolMemory:
+		return fmt.Errorf("teardown_memory %s must be within 64M..pool_memory (%s)",
+			units.FormatSize(r.TeardownMemory), units.FormatSize(c.PoolMemory))
+	case r.TeardownConcurrency < 1:
+		return fmt.Errorf("teardown_concurrency %d must be >= 1", r.TeardownConcurrency)
+	}
 	return nil
+}
+
+// TeardownSliceName is the slice for teardown units, separate from the task
+// slice so the pool and host guard do not apply to it: "aq.slice" -> "aqtd.slice".
+func (c Config) TeardownSliceName() string {
+	return strings.TrimSuffix(c.SliceName, ".slice") + "td.slice"
 }
 
 // reservedSlices are the user manager's own slices (and init.scope): the daemon

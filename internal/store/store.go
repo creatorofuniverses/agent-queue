@@ -156,7 +156,9 @@ mem_limit, mem_expected, cpus, timeout_ns,
 session_id, client_type, project, idem_key, request_hash, node_id,
 created_at, admitted_at, started_at, ended_at,
 exit_code, signal, memory_peak, unit_name, job_dir, git_rev, git_dirty,
-cancel_requested, cancel_reason, logs_truncated, diagnostic`
+cancel_requested, cancel_reason, logs_truncated, diagnostic,
+parent_id, task_memory, task_cpus, expires_at, warn_at, docker_project,
+teardown_attempt, teardown_launch_error, notify_grant, ttl_held, over_declared_notified`
 
 func fmtTime(t time.Time) string {
 	if t.IsZero() {
@@ -205,6 +207,8 @@ func itemArgs(it *model.Item) ([]any, error) {
 		fmtTime(it.CreatedAt), fmtTime(it.AdmittedAt), fmtTime(it.StartedAt), fmtTime(it.EndedAt),
 		exit, it.Signal, int64(it.MemoryPeak), it.UnitName, it.JobDir, it.GitRev, it.GitDirty,
 		it.CancelRequested, it.CancelReason, it.LogsTruncated, it.Diagnostic,
+		string(it.ParentID), int64(it.TaskMemory), it.TaskCPUs, fmtTime(it.ExpiresAt), fmtTime(it.WarnAt), it.DockerProject,
+		it.TeardownAttempt, it.TeardownLaunchError, it.NotifyGrant, it.TTLHeld, it.OverDeclaredNotified,
 	}, nil
 }
 
@@ -219,18 +223,24 @@ func scanItem(r scanner) (*model.Item, error) {
 		limit, expected, timeout, peak    int64
 		created, admitted, started, ended string
 		exit                              sql.NullInt64
+		parent                            string
+		taskMem                           int64
+		expires, warn                     string
 	)
 	err := r.Scan(&id, &kind, &it.Name, &state, &reason, &prio, &argv, &it.Cwd, &env,
 		&limit, &expected, &it.CPUs, &timeout,
 		&it.SessionID, &it.ClientType, &it.Project, &it.IdemKey, &it.RequestHash, &it.NodeID,
 		&created, &admitted, &started, &ended,
 		&exit, &it.Signal, &peak, &it.UnitName, &it.JobDir, &it.GitRev, &it.GitDirty,
-		&it.CancelRequested, &it.CancelReason, &it.LogsTruncated, &it.Diagnostic)
+		&it.CancelRequested, &it.CancelReason, &it.LogsTruncated, &it.Diagnostic,
+		&parent, &taskMem, &it.TaskCPUs, &expires, &warn, &it.DockerProject,
+		&it.TeardownAttempt, &it.TeardownLaunchError, &it.NotifyGrant, &it.TTLHeld, &it.OverDeclaredNotified)
 	if err != nil {
 		return nil, err
 	}
 	it.ID, it.Kind, it.State, it.Reason = model.ItemID(id), model.Kind(kind), model.State(state), model.Reason(reason)
 	it.Priority = model.Priority(prio)
+	it.ParentID, it.TaskMemory = model.ItemID(parent), uint64(taskMem)
 	it.Limit, it.Expected, it.Timeout, it.MemoryPeak = uint64(limit), uint64(expected), time.Duration(timeout), uint64(peak)
 	if err := json.Unmarshal([]byte(argv), &it.Argv); err != nil {
 		return nil, err
@@ -248,7 +258,8 @@ func scanItem(r scanner) (*model.Item, error) {
 	for _, p := range []struct {
 		dst *time.Time
 		src string
-	}{{&it.CreatedAt, created}, {&it.AdmittedAt, admitted}, {&it.StartedAt, started}, {&it.EndedAt, ended}} {
+	}{{&it.CreatedAt, created}, {&it.AdmittedAt, admitted}, {&it.StartedAt, started}, {&it.EndedAt, ended},
+		{&it.ExpiresAt, expires}, {&it.WarnAt, warn}} {
 		if *p.dst, err = parseTime(p.src); err != nil {
 			return nil, err
 		}
@@ -260,7 +271,15 @@ func scanItem(r scanner) (*model.Item, error) {
 	return &it, nil
 }
 
-var insertSQL = `INSERT INTO items (` + itemCols + `) VALUES (?` + strings.Repeat(",?", 33) + `)`
+var insertSQL = `INSERT INTO items (` + itemCols + `) VALUES (?` + strings.Repeat(",?", strings.Count(itemCols, ",")) + `)`
+
+var updateSQL = func() string {
+	var sets []string
+	for _, c := range strings.Split(itemCols, ",")[1:] {
+		sets = append(sets, strings.TrimSpace(c)+"=?")
+	}
+	return `UPDATE items SET ` + strings.Join(sets, ", ") + ` WHERE id=?`
+}()
 
 // InsertItem stores it. With a non-empty IdemKey the lookup and insert are one
 // BEGIN IMMEDIATE transaction; an existing row with the same hash is returned
@@ -327,13 +346,7 @@ func (s *Store) Update(ctx context.Context, it *model.Item) error {
 	if err != nil {
 		return err
 	}
-	cols := strings.Split(itemCols, ",")
-	var sets []string
-	for _, c := range cols[1:] {
-		sets = append(sets, strings.TrimSpace(c)+"=?")
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE items SET `+strings.Join(sets, ", ")+` WHERE id=?`,
-		append(args[1:], args[0])...)
+	res, err := s.db.ExecContext(ctx, updateSQL, append(args[1:], args[0])...)
 	if err != nil {
 		return err
 	}
@@ -341,6 +354,59 @@ func (s *Store) Update(ctx context.Context, it *model.Item) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// UpdateWithEvents overwrites the row for it.ID and inserts evs in one
+// BEGIN IMMEDIATE transaction; with no events it is Update.
+func (s *Store) UpdateWithEvents(ctx context.Context, it *model.Item, evs []model.Event) error {
+	if len(evs) == 0 {
+		return s.Update(ctx, it)
+	}
+	args, err := itemArgs(it)
+	if err != nil {
+		return err
+	}
+	return s.immediate(ctx, func(c *sql.Conn) error {
+		res, err := c.ExecContext(ctx, updateSQL, append(args[1:], args[0])...)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		for _, e := range evs {
+			if _, err := c.ExecContext(ctx, `INSERT INTO events (id, item_id, kind, audience, session_id, client_type, detail, created_at)
+VALUES (?,?,?,?,?,?,?,?)`, e.ID, string(e.ItemID), string(e.Kind), string(e.Audience),
+				e.SessionID, e.ClientType, e.Detail, fmtTime(e.CreatedAt)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// Events returns the events of an item, oldest first.
+func (s *Store) Events(ctx context.Context, itemID model.ItemID) ([]model.Event, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, item_id, kind, audience, session_id, client_type, detail, created_at
+FROM events WHERE item_id=? ORDER BY created_at ASC, rowid ASC`, string(itemID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Event
+	for rows.Next() {
+		var e model.Event
+		var item, kind, aud, at string
+		if err := rows.Scan(&e.ID, &item, &kind, &aud, &e.SessionID, &e.ClientType, &e.Detail, &at); err != nil {
+			return nil, err
+		}
+		e.ItemID, e.Kind, e.Audience = model.ItemID(item), model.EventKind(kind), model.Audience(aud)
+		if e.CreatedAt, err = parseTime(at); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) queryItems(ctx context.Context, q string, args ...any) ([]*model.Item, error) {
@@ -360,7 +426,14 @@ func (s *Store) queryItems(ctx context.Context, q string, args ...any) ([]*model
 	return out, rows.Err()
 }
 
-const terminalStates = `('SUCCEEDED','FAILED','CANCELLED','REJECTED')`
+// terminalStates is the SQL list built from model.TerminalStates().
+var terminalStates = func() string {
+	q := make([]string, 0, len(model.TerminalStates()))
+	for _, s := range model.TerminalStates() {
+		q = append(q, "'"+string(s)+"'")
+	}
+	return "(" + strings.Join(q, ",") + ")"
+}()
 
 // ListActive returns non-terminal items in queue order.
 func (s *Store) ListActive(ctx context.Context) ([]*model.Item, error) {
