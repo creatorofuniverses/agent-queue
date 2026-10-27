@@ -32,6 +32,10 @@ import (
 // ErrRejected: the request failed validation; the item is stored as REJECTED.
 var ErrRejected = errors.New("request rejected")
 
+// ErrBadState: the operation does not apply to the item in its current state; it is
+// returned wrapped with an explanation and the item is unchanged.
+var ErrBadState = errors.New("operation not allowed in this state")
+
 // launchFailedCancel is the CancelReason of a unit stopped because its launch
 // failed; such an item settles as LAUNCH_FAILED rather than CANCELLED.
 const launchFailedCancel = "launch failed"
@@ -206,12 +210,17 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 // Cancel is idempotent: QUEUED becomes CANCELLED at once; STARTING/RUNNING get
 // CancelRequested and a background Stop (the outcome is recorded at finalization
 // by Tick); others are returned unchanged. It never waits for the Stop.
+// A reservation past the queue is not cancelled but released: ErrBadState.
 func (s *Scheduler) Cancel(ctx context.Context, id model.ItemID, reason string) (*model.Item, error) {
 	s.mu.Lock()
 	it, err := s.d.Store.Get(ctx, id)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
+	}
+	if it.IsReservation() && it.State != model.StateQueued && !it.State.Terminal() {
+		s.mu.Unlock()
+		return it, fmt.Errorf("%w: reservation %s is %s; use aq release", ErrBadState, id, it.State)
 	}
 	switch it.State {
 	case model.StateQueued:
@@ -310,9 +319,9 @@ func (s *Scheduler) stopAsyncLocked(id model.ItemID) {
 	})
 }
 
-// Tick runs one scheduling pass: reap finished or vanished units, update the pressure
-// gate, admit queue heads while they fit (granting reservations at once), then launch
-// the admitted tasks outside the lock.
+// Tick runs one scheduling pass: reap finished or vanished units, warn about and hold
+// expiring reservations, update the pressure gate, admit queue heads while they fit
+// (granting reservations at once), then launch the admitted tasks outside the lock.
 func (s *Scheduler) Tick(ctx context.Context) error {
 	s.mu.Lock()
 	items, err := s.d.Store.ListActive(ctx)
@@ -322,6 +331,7 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		return err
 	}
 	s.reapLocked(ctx, items)
+	s.expireLocked(ctx, items, s.d.Now()) // reservations due for teardown stay as they are for now
 	admitted, err := s.admitLocked(ctx, items)
 	s.endPassLocked()
 	s.mu.Unlock()

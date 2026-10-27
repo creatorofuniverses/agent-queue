@@ -313,6 +313,165 @@ func (s *Scheduler) grantLocked(ctx context.Context, it *model.Item, now time.Ti
 	return s.persistLocked(ctx, it, evs...)
 }
 
+// Release ends a reservation without running its teardown script: GRANTED or EXPIRING
+// with no unfinished nested task becomes RELEASED, QUEUED becomes CANCELLED and a
+// terminal one is returned unchanged; anything else is ErrBadState, item unchanged.
+// The nested check and the change share one critical section, so a concurrent
+// --within submit cannot slip in between. force does not lift these rules (its way out
+// of TEARDOWN_FAILED and TEARDOWN_UNKNOWN comes with teardown).
+func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*model.Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, err := s.d.Store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !it.IsReservation() {
+		return it, fmt.Errorf("%w: %s is a task, not a reservation; use aq cancel", ErrBadState, id)
+	}
+	switch {
+	case it.State.Terminal():
+		return it, nil
+	case it.State == model.StateQueued:
+		s.endLocked(it, model.StateCancelled, model.ReasonCancelled, "")
+	case it.State == model.StateGranted || it.State == model.StateExpiring:
+		active, err := s.d.Store.ListActive(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if n := countNested(active, id); n > 0 {
+			return it, fmt.Errorf("%w: reservation %s has %d unfinished nested task(s); wait for them or cancel them first",
+				ErrBadState, id, n)
+		}
+		s.endLocked(it, model.StateReleased, model.ReasonNone, "")
+	default:
+		return it, fmt.Errorf("%w: reservation %s is %s", ErrBadState, id, it.State)
+	}
+	if err := s.persistLocked(ctx, it); err != nil {
+		return nil, err
+	}
+	s.Kick() // the pool has room again
+	return it, nil
+}
+
+// countNested is the number of items in active (non-terminal by now) running within id.
+func countNested(active []*model.Item, id model.ItemID) int {
+	n := 0
+	for _, x := range active {
+		if x.ParentID == id && !x.State.Terminal() {
+			n++
+		}
+	}
+	return n
+}
+
+// Extend makes a GRANTED or EXPIRING reservation last at least ttl from now:
+// ExpiresAt = max(ExpiresAt, now+ttl), so a repeat does not add up. It becomes GRANTED,
+// no longer held, with WarnAt recomputed. A ttl outside (0, max_ttl] is ErrRejected and
+// any other state ErrBadState; the item is then unchanged.
+func (s *Scheduler) Extend(ctx context.Context, id model.ItemID, ttl time.Duration) (*model.Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, err := s.d.Store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	maxTTL := s.d.Cfg.Reservations.MaxTTL
+	switch {
+	case !it.IsReservation():
+		return it, fmt.Errorf("%w: %s is a task, not a reservation", ErrBadState, id)
+	case ttl <= 0:
+		return it, fmt.Errorf("%w: ttl must be positive", ErrRejected)
+	case ttl > maxTTL:
+		return it, fmt.Errorf("%w: ttl %s exceeds max_ttl %s", ErrRejected, ttl, maxTTL)
+	case it.State != model.StateGranted && it.State != model.StateExpiring:
+		return it, fmt.Errorf("%w: reservation %s is %s, not granted", ErrBadState, id, it.State)
+	}
+	now := s.d.Now()
+	if exp := now.Add(ttl); exp.After(it.ExpiresAt) {
+		it.ExpiresAt = exp
+	}
+	it.State, it.TTLHeld = model.StateGranted, false
+	it.WarnAt = s.warnAt(it.ExpiresAt, now)
+	if err := s.persistLocked(ctx, it); err != nil {
+		return nil, err
+	}
+	return it, nil
+}
+
+// expireLocked warns about and holds expiring reservations and returns those due for
+// teardown. A GRANTED reservation whose WarnAt has come becomes EXPIRING with
+// reservation_expiring. One whose ExpiresAt has come while nested tasks are unfinished
+// is held (holdLocked) and reconsidered only once its new ExpiresAt comes. One with no
+// unfinished nested task is due: it is returned and left as it is.
+func (s *Scheduler) expireLocked(ctx context.Context, items []*model.Item, now time.Time) []*model.Item {
+	// The latest deadline of each reservation's unfinished nested tasks: started_at (now
+	// for one not started yet) + timeout + 2×cancel_grace.
+	deadline := map[model.ItemID]time.Time{}
+	nested := map[model.ItemID]int{}
+	for _, it := range items {
+		if it.ParentID == "" || it.State.Terminal() { // terminal: finalized by reapLocked in this pass
+			continue
+		}
+		start := it.StartedAt
+		if start.IsZero() {
+			start = now
+		}
+		if d := start.Add(it.Timeout + 2*s.d.Cfg.CancelGrace); d.After(deadline[it.ParentID]) {
+			deadline[it.ParentID] = d
+		}
+		nested[it.ParentID]++
+	}
+
+	var due []*model.Item
+	for _, it := range items {
+		if !it.IsReservation() || (it.State != model.StateGranted && it.State != model.StateExpiring) {
+			continue
+		}
+		if it.State == model.StateGranted && !it.WarnAt.IsZero() && !now.Before(it.WarnAt) {
+			it.State = model.StateExpiring
+			evs := newEvents(it, model.EventReservationExpiring,
+				fmt.Sprintf("reservation %s expires at %s; extend it with aq extend", it.ID, it.ExpiresAt.UTC().Format(time.RFC3339)),
+				model.AudienceSession, model.AudienceOperator)
+			if err := s.persistLocked(ctx, it, evs...); err != nil {
+				slog.Error("scheduler: record reservation expiring", "id", it.ID, "err", err)
+				it.State = model.StateGranted // not persisted: warn again next pass
+			}
+		}
+		if now.Before(it.ExpiresAt) {
+			continue
+		}
+		if n := nested[it.ID]; n > 0 {
+			s.holdLocked(ctx, it, deadline[it.ID], n)
+			continue
+		}
+		due = append(due, it)
+	}
+	return due
+}
+
+// holdLocked keeps an expired reservation while n nested tasks are unfinished: EXPIRING,
+// TTLHeld, ExpiresAt = max(ExpiresAt, until). Becoming held, and every move of
+// ExpiresAt to a later value, records reservation_held_by_tasks for the operator.
+func (s *Scheduler) holdLocked(ctx context.Context, it *model.Item, until time.Time, n int) {
+	if it.TTLHeld && it.State == model.StateExpiring && !until.After(it.ExpiresAt) {
+		return // held already, and no nested deadline moved past it
+	}
+	prev := *it
+	if until.After(it.ExpiresAt) {
+		it.ExpiresAt = until
+	}
+	it.State, it.TTLHeld = model.StateExpiring, true
+	evs := newEvents(it, model.EventReservationHeldByTask,
+		fmt.Sprintf("reservation %s expired with %d unfinished nested task(s); held until %s",
+			it.ID, n, it.ExpiresAt.UTC().Format(time.RFC3339)),
+		model.AudienceOperator)
+	if err := s.persistLocked(ctx, it, evs...); err != nil {
+		slog.Error("scheduler: record reservation held by tasks", "id", it.ID, "err", err)
+		*it = prev // not persisted: hold again next pass
+	}
+}
+
 // warnAt is when to warn about expiry: expiry_warning before expires, or zero if
 // that moment is not after now.
 func (s *Scheduler) warnAt(expires, now time.Time) time.Time {
