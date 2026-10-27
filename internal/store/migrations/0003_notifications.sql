@@ -1,0 +1,11 @@
+ALTER TABLE events ADD COLUMN channel TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN next_attempt_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN sent_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN acked_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
+UPDATE events SET status='skipped', channel='none' WHERE channel='';
+CREATE INDEX events_due ON events(channel, next_attempt_at) WHERE status='pending';
+CREATE INDEX events_session ON events(session_id) WHERE session_id<>'';
+ALTER TABLE items ADD COLUMN no_notify INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE items ADD COLUMN finish_notified INTEGER NOT NULL DEFAULT 0;

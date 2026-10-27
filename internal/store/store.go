@@ -158,7 +158,7 @@ created_at, admitted_at, started_at, ended_at,
 exit_code, signal, memory_peak, unit_name, job_dir, git_rev, git_dirty,
 cancel_requested, cancel_reason, logs_truncated, diagnostic,
 parent_id, task_memory, task_cpus, expires_at, warn_at, docker_project,
-teardown_attempt, teardown_launch_error, notify_grant, ttl_held, over_declared_notified`
+teardown_attempt, teardown_launch_error, notify_grant, ttl_held, over_declared_notified, no_notify, finish_notified`
 
 func fmtTime(t time.Time) string {
 	if t.IsZero() {
@@ -208,7 +208,7 @@ func itemArgs(it *model.Item) ([]any, error) {
 		exit, it.Signal, int64(it.MemoryPeak), it.UnitName, it.JobDir, it.GitRev, it.GitDirty,
 		it.CancelRequested, it.CancelReason, it.LogsTruncated, it.Diagnostic,
 		string(it.ParentID), int64(it.TaskMemory), it.TaskCPUs, fmtTime(it.ExpiresAt), fmtTime(it.WarnAt), it.DockerProject,
-		it.TeardownAttempt, it.TeardownLaunchError, it.NotifyGrant, it.TTLHeld, it.OverDeclaredNotified,
+		it.TeardownAttempt, it.TeardownLaunchError, it.NotifyGrant, it.TTLHeld, it.OverDeclaredNotified, it.NoNotify, it.FinishNotified,
 	}, nil
 }
 
@@ -234,7 +234,7 @@ func scanItem(r scanner) (*model.Item, error) {
 		&exit, &it.Signal, &peak, &it.UnitName, &it.JobDir, &it.GitRev, &it.GitDirty,
 		&it.CancelRequested, &it.CancelReason, &it.LogsTruncated, &it.Diagnostic,
 		&parent, &taskMem, &it.TaskCPUs, &expires, &warn, &it.DockerProject,
-		&it.TeardownAttempt, &it.TeardownLaunchError, &it.NotifyGrant, &it.TTLHeld, &it.OverDeclaredNotified)
+		&it.TeardownAttempt, &it.TeardownLaunchError, &it.NotifyGrant, &it.TTLHeld, &it.OverDeclaredNotified, &it.NoNotify, &it.FinishNotified)
 	if err != nil {
 		return nil, err
 	}
@@ -374,39 +374,13 @@ func (s *Store) UpdateWithEvents(ctx context.Context, it *model.Item, evs []mode
 		if n, _ := res.RowsAffected(); n == 0 {
 			return ErrNotFound
 		}
-		for _, e := range evs {
-			if _, err := c.ExecContext(ctx, `INSERT INTO events (id, item_id, kind, audience, session_id, client_type, detail, created_at)
-VALUES (?,?,?,?,?,?,?,?)`, e.ID, string(e.ItemID), string(e.Kind), string(e.Audience),
-				e.SessionID, e.ClientType, e.Detail, fmtTime(e.CreatedAt)); err != nil {
-				return err
-			}
-		}
-		return nil
+		return insertEvents(ctx, c, evs)
 	})
 }
 
-// Events returns the events of an item, oldest first.
+// Events returns all event fields, oldest first.
 func (s *Store) Events(ctx context.Context, itemID model.ItemID) ([]model.Event, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, item_id, kind, audience, session_id, client_type, detail, created_at
-FROM events WHERE item_id=? ORDER BY created_at ASC, rowid ASC`, string(itemID))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []model.Event
-	for rows.Next() {
-		var e model.Event
-		var item, kind, aud, at string
-		if err := rows.Scan(&e.ID, &item, &kind, &aud, &e.SessionID, &e.ClientType, &e.Detail, &at); err != nil {
-			return nil, err
-		}
-		e.ItemID, e.Kind, e.Audience = model.ItemID(item), model.EventKind(kind), model.Audience(aud)
-		if e.CreatedAt, err = parseTime(at); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return queryEvents(ctx, s.db, `SELECT `+eventCols+` FROM events WHERE item_id=? ORDER BY created_at,rowid`, string(itemID))
 }
 
 func (s *Store) queryItems(ctx context.Context, q string, args ...any) ([]*model.Item, error) {
@@ -442,6 +416,7 @@ func (s *Store) ListActive(ctx context.Context) ([]*model.Item, error) {
 }
 
 type ListFilter struct {
+	WithUnacked     bool
 	SessionID       string
 	IncludeTerminal bool
 	Limit           int
@@ -456,7 +431,11 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]*model.Item, error) {
 		args = append(args, f.SessionID)
 	}
 	if !f.IncludeTerminal {
-		q += ` AND state NOT IN ` + terminalStates
+		if f.WithUnacked && f.SessionID != "" {
+			q += ` AND (state NOT IN ` + terminalStates + ` OR EXISTS (SELECT 1 FROM events WHERE events.item_id=items.id AND events.session_id=items.session_id AND audience='session' AND status<>'acked'))`
+		} else {
+			q += ` AND state NOT IN ` + terminalStates
+		}
 	}
 	limit := f.Limit
 	if limit <= 0 {

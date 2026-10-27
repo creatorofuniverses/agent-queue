@@ -350,7 +350,7 @@ func TestUpdateWithEventsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := func(id string, kind model.EventKind, aud model.Audience, at time.Duration) model.Event {
-		return model.Event{ID: id, ItemID: it.ID, Kind: kind, Audience: aud,
+		return model.Event{ID: id, ItemID: it.ID, Kind: kind, Audience: aud, Status: model.EventPending,
 			SessionID: "sess", ClientType: "claude", Detail: "d-" + id, CreatedAt: base.Add(at)}
 	}
 	it.State = model.StateExpiring
