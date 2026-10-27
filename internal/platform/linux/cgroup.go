@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -127,6 +128,18 @@ func (e *Executor) SliceCurrent() (uint64, error) {
 
 func (e *Executor) SliceOOMKills() (uint64, error) {
 	return readEvent(filepath.Join(e.sliceDir(), "memory.events"), "oom_kill")
+}
+
+// SliceCeiling reads the slice's actual memory.max ("max" means unlimited).
+func (e *Executor) SliceCeiling() (uint64, error) {
+	b, err := os.ReadFile(filepath.Join(e.sliceDir(), "memory.max"))
+	if err != nil {
+		return 0, err
+	}
+	if v := strings.TrimSpace(string(b)); v != "max" {
+		return strconv.ParseUint(v, 10, 64)
+	}
+	return math.MaxUint64, nil
 }
 
 // SetSliceCeiling writes the slice cgroup directly (no systemd round trip); EnsureSlice resets it.

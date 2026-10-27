@@ -83,3 +83,45 @@ func TestGuardKeepsCeilingOnError(t *testing.T) {
 		t.Fatalf("%v", c)
 	}
 }
+
+func TestGuardRewritesAfterExternalReset(t *testing.T) {
+	g, ex, _, _ := newGuardTest(4*gib, 2*gib)
+	g.step()
+	g.step()
+	if n := len(ex.Ceilings()); n != 1 {
+		t.Fatalf("steady state rewrote: %d", n)
+	}
+	ex.ResetSliceCeiling(16 * gib) // systemd re-realized the slice
+	g.step()
+	c := ex.Ceilings()
+	if len(c) != 2 || c[1] != [2]uint64{3 * gib, 3 * gib} {
+		t.Fatalf("%v", c)
+	}
+}
+
+func TestGuardRewritesWhenUsageAboveCeiling(t *testing.T) {
+	g, ex, _, _ := newGuardTest(4*gib, 2*gib)
+	g.step()
+	ex.SetSlice(4*gib, 0) // reclaim was skipped, usage still above 3G
+	g.step()
+	if n := len(ex.Ceilings()); n != 2 {
+		t.Fatalf("writes %d", n)
+	}
+}
+
+func TestGuardSetCeilingFailureRetries(t *testing.T) {
+	g, ex, _, calls := newGuardTest(4*gib, 2*gib)
+	ex.FailSetCeiling(errTest)
+	g.step()
+	if len(ex.Ceilings()) != 0 || g.have {
+		t.Fatal("failed write must leave applied unchanged")
+	}
+	if got := *calls; got[len(got)-1] != false {
+		t.Fatalf("active left set after failed first write: %v", got)
+	}
+	ex.FailSetCeiling(nil)
+	g.step()
+	if c := ex.Ceilings(); len(c) != 1 || c[0][0] != 3*gib {
+		t.Fatalf("%v", c)
+	}
+}

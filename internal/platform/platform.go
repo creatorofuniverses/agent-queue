@@ -46,6 +46,7 @@ type Executor interface {
 	ListManaged(ctx context.Context) ([]model.ItemID, error)  // ids by prefixed cgroup/unit
 	SliceCurrent() (uint64, error)
 	SliceOOMKills() (uint64, error)
+	SliceCeiling() (uint64, error) // actual memory.max; math.MaxUint64 when unlimited
 	SetSliceCeiling(max, high uint64) error
 	EnsureSlice(ctx context.Context, poolMemory uint64) error // slice exists, MemorySwapMax=0, MemoryMax=pool
 }

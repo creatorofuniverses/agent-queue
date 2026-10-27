@@ -50,17 +50,38 @@ func (g *guard) step() {
 		slog.Warn("host guard: read slice usage", "err", err)
 		return
 	}
+	actual, err := g.exec.SliceCeiling()
+	if err != nil {
+		slog.Warn("host guard: read slice ceiling", "err", err)
+		return
+	}
 	next, _ := admission.GuardCeiling(admission.GuardInput{
 		Pool: g.cfg.PoolMemory, SliceCurrent: cur, MemAvailable: mem.Available,
 		Floor: g.cfg.ReserveFloor(mem.Total), Min: guardMin,
 	})
+	target := g.applied
 	if !g.have || admission.GuardApply(g.applied, next) {
-		// memory.high == memory.max: a soft limit below max only throttles without swap.
-		if err := g.exec.SetSliceCeiling(next, next); err != nil {
-			slog.Warn("host guard: set slice ceiling", "err", err)
-			return
-		}
-		g.applied, g.have = next, true
+		target = next
 	}
-	g.setActive(g.applied < g.cfg.PoolMemory)
+	// systemd resets memory.max when units start or stop in the slice, and a
+	// signal can make the kernel set the limit without reclaiming: rewrite then.
+	if g.have && target == g.applied && actual == g.applied && cur <= g.applied {
+		g.setActive(g.applied < g.cfg.PoolMemory)
+		return
+	}
+	active := target < g.cfg.PoolMemory
+	if active {
+		g.setActive(true) // before the write: the OOM kill happens inside it
+	}
+	// memory.high == memory.max: a soft limit below max only throttles without swap.
+	// The write blocks for reclaim/OOM; bounded, but may take seconds.
+	if err := g.exec.SetSliceCeiling(target, target); err != nil {
+		slog.Warn("host guard: set slice ceiling", "err", err)
+		g.setActive(g.have && g.applied < g.cfg.PoolMemory)
+		return
+	}
+	g.applied, g.have = target, true
+	if !active {
+		g.setActive(false)
+	}
 }

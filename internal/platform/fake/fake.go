@@ -3,6 +3,7 @@ package fake
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"resource-dispatcher/internal/model"
@@ -23,6 +24,8 @@ type Executor struct {
 	sliceCur     uint64
 	sliceOOM     uint64
 	ceilings     [][2]uint64
+	actualMax    uint64
+	ceilingErr   error
 	poolMemory   uint64
 }
 
@@ -165,9 +168,38 @@ func (e *Executor) SliceOOMKills() (uint64, error) {
 
 func (e *Executor) SetSliceCeiling(max, high uint64) error {
 	e.mu.Lock()
+	if e.ceilingErr != nil {
+		defer e.mu.Unlock()
+		return e.ceilingErr
+	}
+	e.actualMax = max
 	e.ceilings = append(e.ceilings, [2]uint64{max, high})
 	e.mu.Unlock()
 	return nil
+}
+
+// SliceCeiling is the last applied max, or the externally set one; unlimited before any.
+func (e *Executor) SliceCeiling() (uint64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.ceilings) == 0 && e.actualMax == 0 {
+		return math.MaxUint64, nil
+	}
+	return e.actualMax, nil
+}
+
+// ResetSliceCeiling simulates systemd resetting memory.max behind the guard's back.
+func (e *Executor) ResetSliceCeiling(max uint64) {
+	e.mu.Lock()
+	e.actualMax = max
+	e.mu.Unlock()
+}
+
+// FailSetCeiling makes SetSliceCeiling return err (nil clears it).
+func (e *Executor) FailSetCeiling(err error) {
+	e.mu.Lock()
+	e.ceilingErr = err
+	e.mu.Unlock()
 }
 
 func (e *Executor) Ceilings() [][2]uint64 {
