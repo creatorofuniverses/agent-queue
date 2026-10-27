@@ -38,6 +38,8 @@ func newTestExecutor(t *testing.T, extra ...string) *Executor {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Registered first, so it runs after the tests' own unit cleanups.
+	t.Cleanup(func() { _ = exec.Command("systemctl", "--user", "stop", "aqtest.slice").Run() })
 	if err := e.EnsureSlice(t.Context(), testPool); err != nil {
 		t.Fatal(err)
 	}
