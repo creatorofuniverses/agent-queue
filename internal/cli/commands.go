@@ -15,6 +15,7 @@ import (
 	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/daemon"
+	"resource-dispatcher/internal/hook"
 	"resource-dispatcher/internal/mcp"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform/linux"
@@ -380,4 +381,28 @@ func cmdMCP(c *cmdCtx, args []string) error {
 	ctx, cancel := signal.NotifyContext(c.ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	return mcp.Serve(ctx, os.Stdin, c.stdout, func(ctx context.Context, op string, args, out any) error { return callOn(ctx, p, op, args, out) }, cfg.Agents, c.env, daemon.Version)
+}
+
+func cmdHook(c *cmdCtx, args []string) error {
+	if len(args) != 1 || args[0] != "pretooluse" {
+		return usagef("hook: expected pretooluse")
+	}
+	p, err := c.paths()
+	cfg := config.Default()
+	if err == nil {
+		if loaded, e := config.Load(p.ConfigFile); e == nil {
+			cfg = loaded
+		}
+	}
+	patterns, e := hook.Compile(cfg.Hook.Patterns)
+	if e != nil {
+		patterns, _ = hook.Compile(config.Default().Hook.Patterns)
+	}
+	id, _ := client.DetectIdentity(cfg.Agents, c.env, "", "")
+	hook.PreToolUse(os.Stdin, c.stdout, patterns, func(idx int) {
+		if err == nil {
+			_ = hook.AppendHit(p.StateDir, time.Now(), idx, id.ClientType)
+		}
+	})
+	return nil
 }

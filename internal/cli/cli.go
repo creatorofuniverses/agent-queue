@@ -53,6 +53,7 @@ func init() {
 		"wait":     cmdWait,
 		"ack":      cmdAck,
 		"mcp":      cmdMCP,
+		"hook":     cmdHook,
 		"reserve":  cmdReserve,
 		"extend":   cmdExtend,
 		"release":  cmdRelease,
