@@ -165,6 +165,32 @@ func TestSecondDaemonOnSameSliceRefused(t *testing.T) {
 	other.start(t)
 }
 
+// The teardown slice is locked too: a daemon whose task slice is another daemon's
+// teardown slice would stop that daemon's teardown units as orphans.
+func TestTeardownSliceLocked(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.SliceName = "aq.slice"
+	e.start(t)
+	if pool, td := e.ex.Ensured(); pool != e.cfg.PoolMemory ||
+		td != uint64(e.cfg.Reservations.TeardownConcurrency)*e.cfg.Reservations.TeardownMemory {
+		t.Fatalf("A ensured pool %d teardown %d", pool, td)
+	}
+	other := newEnv(t)
+	other.paths.SliceLockDir = e.paths.SliceLockDir
+	other.cfg.SliceName = "aqtd.slice"
+	ex := fake.NewExecutor()
+	err := Run(context.Background(), other.paths, other.cfg, ex, other.host)
+	if err == nil || !strings.Contains(err.Error(), "already manages slice aqtd.slice") {
+		t.Fatalf("second Run: %v", err)
+	}
+	if pool, td := ex.Ensured(); pool != 0 || td != 0 {
+		t.Fatalf("B ensured pool %d teardown %d before failing", pool, td)
+	}
+	if err := e.call(t, "ping", nil, nil); err != nil {
+		t.Fatalf("first daemon not alive: %v", err)
+	}
+}
+
 func TestStateDirMadePrivate(t *testing.T) {
 	e := newEnv(t)
 	if err := os.MkdirAll(e.paths.StateDir, 0o755); err != nil {

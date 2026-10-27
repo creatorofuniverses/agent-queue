@@ -21,12 +21,14 @@ type Executor struct {
 	jobDir       map[model.ItemID]string
 	failErr      error
 	beforeLaunch func(platform.LaunchSpec)
+	beforeStop   func(model.ItemID)
 	sliceCur     uint64
 	sliceOOM     uint64
 	ceilings     [][2]uint64
 	actualMax    uint64
 	ceilingErr   error
 	poolMemory   uint64
+	teardownMax  uint64
 }
 
 func NewExecutor() *Executor {
@@ -49,6 +51,13 @@ func (e *Executor) Capabilities() platform.Capabilities {
 func (e *Executor) SetBeforeLaunch(f func(platform.LaunchSpec)) {
 	e.mu.Lock()
 	e.beforeLaunch = f
+	e.mu.Unlock()
+}
+
+// SetBeforeStop installs a hook called at the start of Stop, before the stop is recorded.
+func (e *Executor) SetBeforeStop(f func(model.ItemID)) {
+	e.mu.Lock()
+	e.beforeStop = f
 	e.mu.Unlock()
 }
 
@@ -118,6 +127,12 @@ func (e *Executor) MemoryCurrent(id model.ItemID) (uint64, error) {
 }
 
 func (e *Executor) Stop(_ context.Context, id model.ItemID) error {
+	e.mu.Lock()
+	hook := e.beforeStop
+	e.mu.Unlock()
+	if hook != nil {
+		hook(id) // outside the lock so the hook may call back into the fake
+	}
 	e.mu.Lock()
 	e.stopped = append(e.stopped, id)
 	e.mu.Unlock()
@@ -213,6 +228,21 @@ func (e *Executor) EnsureSlice(_ context.Context, poolMemory uint64) error {
 	e.poolMemory = poolMemory
 	e.mu.Unlock()
 	return nil
+}
+
+func (e *Executor) EnsureTeardownSlice(_ context.Context, max uint64) error {
+	e.mu.Lock()
+	e.teardownMax = max
+	e.mu.Unlock()
+	return nil
+}
+
+// Ensured is the pool memory of the last EnsureSlice and the max of the last
+// EnsureTeardownSlice (0 for one never called).
+func (e *Executor) Ensured() (poolMemory, teardownMax uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.poolMemory, e.teardownMax
 }
 
 type Host struct {

@@ -103,3 +103,11 @@ func TestTeardownUnitID(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestIsTeardownUnitID(t *testing.T) {
+	for id, want := range map[ItemID]bool{TeardownUnitID("abc"): true, "abc": false, "teardow-x": false, "": false} {
+		if got := IsTeardownUnitID(id); got != want {
+			t.Errorf("IsTeardownUnitID(%q) = %v, want %v", id, got, want)
+		}
+	}
+}

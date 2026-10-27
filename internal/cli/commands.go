@@ -42,7 +42,8 @@ func cmdDaemon(c *cmdCtx, args []string) error {
 	if err != nil {
 		return err
 	}
-	ex, err := linux.NewExecutor(linux.ExecutorConfig{SliceName: cfg.SliceName, UnitPrefix: cfg.UnitPrefix, AqBinary: bin})
+	ex, err := linux.NewExecutor(linux.ExecutorConfig{SliceName: cfg.SliceName, TeardownSlice: cfg.TeardownSliceName(),
+		UnitPrefix: cfg.UnitPrefix, AqBinary: bin})
 	if err != nil {
 		return err
 	}

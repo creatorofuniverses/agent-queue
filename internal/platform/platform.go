@@ -43,7 +43,7 @@ type Executor interface {
 	Capabilities() Capabilities
 	Launch(ctx context.Context, spec LaunchSpec) (unitName string, err error)
 	ReadResult(jobDir string) (*ExitInfo, error)              // (nil, nil) while not finished
-	Alive(ctx context.Context, id model.ItemID) (bool, error) // task cgroup tree has processes
+	Alive(ctx context.Context, id model.ItemID) (bool, error) // unit cgroup tree has processes
 	MemoryCurrent(id model.ItemID) (uint64, error)            // 0, nil if no cgroup
 	Stop(ctx context.Context, id model.ItemID) error          // TERM all, KILL after KillGrace
 	ListManaged(ctx context.Context) ([]model.ItemID, error)  // ids by prefixed cgroup/unit
@@ -52,6 +52,9 @@ type Executor interface {
 	SliceCeiling() (uint64, error) // actual memory.max; math.MaxUint64 when unlimited
 	SetSliceCeiling(max, high uint64) error
 	EnsureSlice(ctx context.Context, poolMemory uint64) error // slice exists, MemorySwapMax=0, MemoryMax=pool
+	// EnsureTeardownSlice: the teardown slice exists with MemorySwapMax=0, MemoryMax=max.
+	// Teardown units (model.IsTeardownUnitID) run there; the guard never touches it.
+	EnsureTeardownSlice(ctx context.Context, max uint64) error
 }
 
 type HostMetrics interface {

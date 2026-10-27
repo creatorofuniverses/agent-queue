@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -50,18 +51,18 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		return err
 	}
 	// A daemon with other state/runtime dirs on the same slice would stop this
-	// one's units as orphans, so the slice gets its own lock at a fixed place.
+	// one's units as orphans, so each slice (tasks and teardown) gets its own lock
+	// at a fixed place.
 	if paths.SliceLockDir == "" {
 		return errors.New("slice lock directory is not set")
 	}
-	sliceLock, err := flock(paths.SliceLock(cfg.SliceName))
-	if err != nil {
-		if errors.Is(err, unix.EWOULDBLOCK) {
-			return fmt.Errorf("another aq daemon already manages slice %s (lock %s held)", cfg.SliceName, paths.SliceLock(cfg.SliceName))
+	for _, slice := range []string{cfg.SliceName, cfg.TeardownSliceName()} {
+		l, err := lockSlice(paths, slice)
+		if err != nil {
+			return err
 		}
-		return err
+		defer l.Close()
 	}
-	defer sliceLock.Close()
 	st, err := store.Open(paths.DB())
 	if err != nil {
 		return err
@@ -69,6 +70,9 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	defer st.Close()
 	if err := exec.EnsureSlice(ctx, cfg.PoolMemory); err != nil {
 		return fmt.Errorf("ensure slice: %w", err)
+	}
+	if err := exec.EnsureTeardownSlice(ctx, teardownSliceMax(cfg)); err != nil {
+		return fmt.Errorf("ensure teardown slice: %w", err)
 	}
 
 	sched := scheduler.New(scheduler.Deps{Store: st, Exec: exec, Host: host, Cfg: cfg, Paths: paths})
@@ -112,6 +116,24 @@ type server struct {
 	st         *store.Store
 	paths      config.Paths
 	recovering atomic.Bool
+}
+
+func lockSlice(paths config.Paths, slice string) (*os.File, error) {
+	f, err := flock(paths.SliceLock(slice))
+	if errors.Is(err, unix.EWOULDBLOCK) {
+		return nil, fmt.Errorf("another aq daemon already manages slice %s (lock %s held)", slice, paths.SliceLock(slice))
+	}
+	return f, err
+}
+
+// teardownSliceMax is teardown_concurrency × teardown_memory, saturating.
+func teardownSliceMax(cfg config.Config) uint64 {
+	r := cfg.Reservations
+	n := uint64(max(r.TeardownConcurrency, 1))
+	if r.TeardownMemory > math.MaxUint64/n {
+		return math.MaxUint64
+	}
+	return n * r.TeardownMemory
 }
 
 // flock opens (creating) path and takes an exclusive non-blocking lock on it.

@@ -136,7 +136,7 @@ func TestSliceCgroupPath(t *testing.T) {
 func fakeCgroup(t *testing.T) (*Executor, string) {
 	t.Helper()
 	root := t.TempDir()
-	e := newExecutor(ExecutorConfig{SliceName: "aqtest.slice", UnitPrefix: "aqtest-", AqBinary: "/bin/aq", CgroupRoot: root},
+	e := newExecutor(ExecutorConfig{SliceName: "aqtest.slice", TeardownSlice: "aqtesttd.slice", UnitPrefix: "aqtest-", AqBinary: "/bin/aq", CgroupRoot: root},
 		"user.slice/user-1000.slice/user@1000.service")
 	slice := e.sliceDir()
 	write := func(rel, s string) {
@@ -375,5 +375,91 @@ func TestRuntimeDirDefaultsToXDG(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/4242")
 	if e := newExecutor(ExecutorConfig{}, "u"); e.cfg.RuntimeDir != "/run/user/4242" {
 		t.Fatalf("got %q", e.cfg.RuntimeDir)
+	}
+}
+
+func TestSystemdRunArgsTeardownSlice(t *testing.T) {
+	cfg := ExecutorConfig{SliceName: "aqtest.slice", TeardownSlice: "aqtesttd.slice", UnitPrefix: "aqtest-", AqBinary: "/bin/aq"}
+	id := model.NewID()
+	s := testSpec()
+	s.ID = model.TeardownUnitID(id)
+	args := SystemdRunArgs(cfg, s)
+	if !hasPair(args, "--slice", "aqtesttd.slice") || !hasPair(args, "--unit", "aqtest-teardown-"+string(id)) {
+		t.Fatalf("teardown unit: %q", args)
+	}
+	s.ID = id
+	args = SystemdRunArgs(cfg, s)
+	if !hasPair(args, "--slice", "aqtest.slice") || !hasPair(args, "--unit", "aqtest-"+string(id)) {
+		t.Fatalf("task unit: %q", args)
+	}
+}
+
+func TestNewExecutorNeedsSeparateTeardownSlice(t *testing.T) {
+	for _, td := range []string{"", "aqtest.slice"} {
+		_, err := NewExecutor(ExecutorConfig{SliceName: "aqtest.slice", TeardownSlice: td, UnitPrefix: "aqtest-", AqBinary: "/bin/aq"})
+		if err == nil || !strings.Contains(err.Error(), "TeardownSlice") {
+			t.Errorf("TeardownSlice %q: err %v", td, err)
+		}
+	}
+}
+
+// Teardown units live in their own slice: liveness, memory and listing read it there,
+// while the guard's slice reads stay on the task slice.
+func TestTeardownCgroupReads(t *testing.T) {
+	e, slice := fakeCgroup(t)
+	td := filepath.Join(filepath.Dir(slice), "aqtesttd.slice")
+	write := func(rel, s string) {
+		p := filepath.Join(td, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("memory.current", "999999\n")
+	write("aqtest-teardown-r1.service/cgroup.events", "populated 1\nfrozen 0\n")
+	write("aqtest-teardown-r1.service/memory.current", "555\n")
+	// a task-shaped id in the task slice must not be looked up in the teardown slice
+	write("aqtest-one.service/cgroup.events", "populated 0\nfrozen 0\n")
+
+	if v, err := e.MemoryCurrent("teardown-r1"); err != nil || v != 555 {
+		t.Fatalf("MemoryCurrent %d %v", v, err)
+	}
+	if ok, err := e.Alive(t.Context(), "teardown-r1"); err != nil || !ok {
+		t.Fatalf("Alive teardown %v %v", ok, err)
+	}
+	if ok, err := e.Alive(t.Context(), "one"); err != nil || !ok {
+		t.Fatalf("Alive task %v %v (read from the wrong slice?)", ok, err)
+	}
+	ids, err := e.ListManaged(t.Context())
+	slices.Sort(ids)
+	if err != nil || !slices.Equal(ids, []model.ItemID{"nested", "one", "teardown-r1", "two"}) {
+		t.Fatalf("ListManaged %v %v", ids, err)
+	}
+	if v, err := e.SliceCurrent(); err != nil || v != 1234 {
+		t.Fatalf("SliceCurrent %d %v: must read the task slice", v, err)
+	}
+}
+
+func TestEnsureTeardownSlice(t *testing.T) {
+	rt := t.TempDir()
+	e := newExecutor(ExecutorConfig{SliceName: "aqtest.slice", TeardownSlice: "aqtesttd.slice", UnitPrefix: "aqtest-", RuntimeDir: rt}, "u")
+	f := &fakeRunner{}
+	e.runCmd = f.run
+	if err := e.EnsureTeardownSlice(t.Context(), 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"systemctl", "--user", "start", "aqtesttd.slice"},
+		{"systemctl", "--user", "set-property", "--runtime", "aqtesttd.slice", "MemoryMax=1073741824", "MemorySwapMax=0"},
+	}
+	if len(f.calls) != len(want) {
+		t.Fatalf("calls %q", f.calls)
+	}
+	for i := range want {
+		if !slices.Equal(f.calls[i], want[i]) {
+			t.Fatalf("call %d %q, want %q", i, f.calls[i], want[i])
+		}
 	}
 }

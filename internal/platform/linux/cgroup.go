@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -46,8 +47,21 @@ func sliceCgroupPath(slice string) string {
 	return filepath.Join(dirs...)
 }
 
-func (e *Executor) sliceDir() string {
-	return filepath.Join(e.cfg.CgroupRoot, e.manager, sliceCgroupPath(e.cfg.SliceName))
+// sliceDir is the task slice's cgroup: the pool and the guard's ceiling.
+func (e *Executor) sliceDir() string { return e.sliceDirOf(e.cfg.SliceName) }
+
+func (e *Executor) teardownSliceDir() string { return e.sliceDirOf(e.cfg.TeardownSlice) }
+
+func (e *Executor) sliceDirOf(slice string) string {
+	return filepath.Join(e.cfg.CgroupRoot, e.manager, sliceCgroupPath(slice))
+}
+
+// unitSlice is the slice a unit runs in: teardown units have their own.
+func (c ExecutorConfig) unitSlice(id model.ItemID) string {
+	if model.IsTeardownUnitID(id) {
+		return c.TeardownSlice
+	}
+	return c.SliceName
 }
 
 func (e *Executor) unitName(id model.ItemID) string {
@@ -55,7 +69,7 @@ func (e *Executor) unitName(id model.ItemID) string {
 }
 
 func (e *Executor) unitDir(id model.ItemID) string {
-	return filepath.Join(e.sliceDir(), e.unitName(id))
+	return filepath.Join(e.sliceDirOf(e.cfg.unitSlice(id)), e.unitName(id))
 }
 
 func readUint(path string) (uint64, error) {
@@ -105,23 +119,31 @@ func (e *Executor) MemoryCurrent(id model.ItemID) (uint64, error) {
 	return v, err
 }
 
+// ListManaged lists the prefixed units of the task slice and of the teardown slice
+// (sorted; Stop finds a unit by name whatever its slice).
 func (e *Executor) ListManaged(_ context.Context) ([]model.ItemID, error) {
-	ents, err := os.ReadDir(e.sliceDir())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var ids []model.ItemID
-	for _, ent := range ents {
-		name := ent.Name()
-		if !ent.IsDir() || !strings.HasPrefix(name, e.cfg.UnitPrefix) || !strings.HasSuffix(name, ".service") {
+	for _, slice := range []string{e.cfg.SliceName, e.cfg.TeardownSlice} {
+		if slice == "" {
 			continue
 		}
-		ids = append(ids, model.ItemID(strings.TrimSuffix(strings.TrimPrefix(name, e.cfg.UnitPrefix), ".service")))
+		ents, err := os.ReadDir(e.sliceDirOf(slice))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, ent := range ents {
+			name := ent.Name()
+			if !ent.IsDir() || !strings.HasPrefix(name, e.cfg.UnitPrefix) || !strings.HasSuffix(name, ".service") {
+				continue
+			}
+			ids = append(ids, model.ItemID(strings.TrimSuffix(strings.TrimPrefix(name, e.cfg.UnitPrefix), ".service")))
+		}
 	}
-	return ids, nil
+	slices.Sort(ids)
+	return slices.Compact(ids), nil // a stray unit of one name in both slices is listed once
 }
 
 func (e *Executor) SliceCurrent() (uint64, error) {

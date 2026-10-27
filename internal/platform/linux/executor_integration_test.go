@@ -33,7 +33,7 @@ func buildAq(t *testing.T) string {
 
 func newTestExecutor(t *testing.T, extra ...string) *Executor {
 	t.Helper()
-	e, err := NewExecutor(ExecutorConfig{SliceName: "aqtest.slice", UnitPrefix: "aqtest-",
+	e, err := NewExecutor(ExecutorConfig{SliceName: "aqtest.slice", TeardownSlice: "aqtesttd.slice", UnitPrefix: "aqtest-",
 		AqBinary: buildAq(t), ExtraProperties: extra})
 	if err != nil {
 		t.Fatal(err)
@@ -264,5 +264,61 @@ func TestIntegJobDeletesItsCwd(t *testing.T) {
 	}
 	if _, err := os.Stat(spec.Cwd); !os.IsNotExist(err) {
 		t.Fatalf("cwd not deleted by the job: %v", err)
+	}
+}
+
+// A teardown unit runs in the teardown slice, not the task slice, and is still listed.
+func TestIntegTeardownUnitInOwnSlice(t *testing.T) {
+	e := newTestExecutor(t)
+	ctx := t.Context()
+	t.Cleanup(func() {
+		_ = exec.Command("systemctl", "--user", "stop", "aqtesttd.slice").Run()
+	})
+	if err := e.EnsureTeardownSlice(ctx, 128<<20); err != nil {
+		t.Fatal(err)
+	}
+	d := t.TempDir()
+	id := model.TeardownUnitID(model.NewID())
+	spec := platform.LaunchSpec{
+		ID: id, Argv: []string{"sh", "-c", "cat /proc/self/cgroup; exec sleep 30"}, Cwd: d,
+		Env:   map[string]string{"PATH": os.Getenv("PATH")},
+		Limit: 64 << 20, MemoryHigh: 64 << 20, CPUs: 1,
+		Timeout: time.Minute, KillGrace: 2 * time.Second,
+		JobDir: filepath.Join(d, "job"), TmpDir: filepath.Join(d, "tmp"),
+		MaxStdout: 1 << 20, MaxStderr: 1 << 20,
+	}
+	unit := "aqtest-" + string(id) + ".service"
+	t.Cleanup(func() {
+		_ = exec.Command("systemctl", "--user", "stop", unit).Run()
+		_ = exec.Command("systemctl", "--user", "reset-failed", unit).Run()
+	})
+	if _, err := e.Launch(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	var out []byte
+	for len(out) == 0 && time.Now().Before(deadline) {
+		out, _ = os.ReadFile(filepath.Join(spec.JobDir, "stdout.log"))
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(string(out), "/aqtesttd.slice/"+unit) {
+		t.Fatalf("cgroup %q, want it under aqtesttd.slice", out)
+	}
+	if alive, err := e.Alive(ctx, id); err != nil || !alive {
+		t.Fatalf("Alive %v %v", alive, err)
+	}
+	ids, err := e.ListManaged(ctx)
+	if err != nil || !slices.Contains(ids, id) {
+		t.Fatalf("ListManaged %v %v, want %s", ids, err, id)
+	}
+	b, err := os.ReadFile(filepath.Join(e.teardownSliceDir(), "memory.max"))
+	if err != nil || strings.TrimSpace(string(b)) != "134217728" {
+		t.Fatalf("teardown slice memory.max %q %v", b, err)
+	}
+	if err := e.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if alive, err := e.Alive(ctx, id); err != nil || alive {
+		t.Fatalf("Alive after Stop %v %v", alive, err)
 	}
 }

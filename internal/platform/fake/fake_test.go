@@ -131,3 +131,33 @@ func TestFakeMeter(t *testing.T) {
 		t.Fatal("Run ignored ctx")
 	}
 }
+
+func TestFakeStopHookAndTeardownSlice(t *testing.T) {
+	ctx := context.Background()
+	e := fake.NewExecutor()
+	var seen []model.ItemID
+	e.SetBeforeStop(func(id model.ItemID) {
+		seen = append(seen, id)
+		if len(e.Stopped()) != 0 { // the hook runs before the stop is recorded, outside the lock
+			t.Error("stop recorded before the hook")
+		}
+	})
+	if err := e.Stop(ctx, "teardown-x"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(seen, []model.ItemID{"teardown-x"}) || !slices.Equal(e.Stopped(), []model.ItemID{"teardown-x"}) {
+		t.Fatalf("hook %v stopped %v", seen, e.Stopped())
+	}
+	if pool, td := e.Ensured(); pool != 0 || td != 0 {
+		t.Fatalf("ensured %d %d before any call", pool, td)
+	}
+	if err := e.EnsureSlice(ctx, 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.EnsureTeardownSlice(ctx, 1<<29); err != nil {
+		t.Fatal(err)
+	}
+	if pool, td := e.Ensured(); pool != 1<<30 || td != 1<<29 {
+		t.Fatalf("ensured %d %d", pool, td)
+	}
+}

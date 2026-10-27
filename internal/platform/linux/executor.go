@@ -22,6 +22,7 @@ import (
 
 type ExecutorConfig struct {
 	SliceName, UnitPrefix, AqBinary string
+	TeardownSlice                   string   // slice of teardown units (model.IsTeardownUnitID)
 	CgroupRoot                      string   // "/sys/fs/cgroup" when empty
 	RuntimeDir                      string   // $XDG_RUNTIME_DIR when empty
 	ExtraProperties                 []string // tests only: appended as -p after the standard properties
@@ -42,6 +43,9 @@ var _ platform.Executor = (*Executor)(nil)
 func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 	if cfg.SliceName == "" || cfg.UnitPrefix == "" || cfg.AqBinary == "" {
 		return nil, errors.New("linux executor: SliceName, UnitPrefix and AqBinary are required")
+	}
+	if cfg.TeardownSlice == "" || cfg.TeardownSlice == cfg.SliceName {
+		return nil, errors.New("linux executor: TeardownSlice is required and must differ from SliceName")
 	}
 	self, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
@@ -92,7 +96,7 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 		high = spec.Limit // an unset or oversized MemoryHigh must not throttle below the limit
 	}
 	args := []string{"--user", "--quiet", "--collect", "--expand-environment=no",
-		"--unit", cfg.UnitPrefix + string(spec.ID), "--slice", cfg.SliceName}
+		"--unit", cfg.UnitPrefix + string(spec.ID), "--slice", cfg.unitSlice(spec.ID)}
 	props := []string{
 		"MemoryMax=" + strconv.FormatUint(spec.Limit, 10),
 		"MemoryHigh=" + strconv.FormatUint(high, 10),
@@ -297,9 +301,19 @@ func (e *Executor) EnsureSlice(ctx context.Context, poolMemory uint64) error {
 	if err := e.writeKillDropIn(); err != nil {
 		return err
 	}
-	if err := e.runCmd(ctx, "systemctl", "--user", "start", e.cfg.SliceName); err != nil {
+	return e.ensureSlice(ctx, e.cfg.SliceName, poolMemory)
+}
+
+// EnsureTeardownSlice starts the teardown slice and sets its limit. The drop-in from
+// EnsureSlice covers teardown units too: they share the unit prefix.
+func (e *Executor) EnsureTeardownSlice(ctx context.Context, max uint64) error {
+	return e.ensureSlice(ctx, e.cfg.TeardownSlice, max)
+}
+
+func (e *Executor) ensureSlice(ctx context.Context, slice string, max uint64) error {
+	if err := e.runCmd(ctx, "systemctl", "--user", "start", slice); err != nil {
 		return err
 	}
-	return e.runCmd(ctx, "systemctl", "--user", "set-property", "--runtime", e.cfg.SliceName,
-		"MemoryMax="+strconv.FormatUint(poolMemory, 10), "MemorySwapMax=0")
+	return e.runCmd(ctx, "systemctl", "--user", "set-property", "--runtime", slice,
+		"MemoryMax="+strconv.FormatUint(max, 10), "MemorySwapMax=0")
 }

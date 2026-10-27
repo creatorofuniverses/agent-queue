@@ -4,6 +4,7 @@ package model
 import (
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -198,7 +199,12 @@ func (it *Item) Committed() Resources {
 }
 
 // TeardownUnitID is the executor id of a reservation's teardown unit.
-func TeardownUnitID(id ItemID) ItemID { return "teardown-" + id }
+func TeardownUnitID(id ItemID) ItemID { return teardownPrefix + id }
+
+const teardownPrefix = "teardown-"
+
+// IsTeardownUnitID reports whether id names a teardown unit rather than a task.
+func IsTeardownUnitID(id ItemID) bool { return strings.HasPrefix(string(id), teardownPrefix) }
 
 type EventKind string
 
