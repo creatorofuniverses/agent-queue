@@ -113,6 +113,7 @@ func TestReserveRejects(t *testing.T) {
 		"negative stand cpus":  func(r *ReserveRequest) { r.CPUs = -1 },
 		"memory overflow pool": func(r *ReserveRequest) { r.Memory, r.TaskMemory, r.TaskCPUs = ^uint64(0), gib, 1 },
 		"cpus overflow pool":   func(r *ReserveRequest) { r.CPUs, r.TaskMemory, r.TaskCPUs = 1, 64*mib, math.MaxInt },
+		"teardown not utf-8":   func(r *ReserveRequest) { r.Teardown = []byte("#!/bin/bash\necho \xff\xfe\n") },
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -85,6 +85,17 @@ func TestReserveUsageErrors(t *testing.T) {
 	}
 }
 
+// Final review F5: JSON would silently replace invalid UTF-8 in the script.
+func TestReserveRejectsNonUTF8Teardown(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemonCfg(t, bigPool)
+	td := h.script(t, "#!/bin/bash\necho \xff\xfe\n")
+	code, _, errOut := h.run("reserve", "--memory", "1G", "--ttl", "1h", "--teardown", td)
+	if code != 64 || !strings.Contains(errOut, "teardown script must be valid UTF-8") {
+		t.Fatalf("exit %d stderr %q, want 64 with a UTF-8 message", code, errOut)
+	}
+}
+
 func TestReserveCapturesDockerEnv(t *testing.T) {
 	h := newHarness(t)
 	h.startDaemonCfg(t, bigPool)

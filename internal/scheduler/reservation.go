@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/store"
@@ -83,6 +84,8 @@ func (s *Scheduler) validateReserve(r ReserveRequest) error {
 		return errors.New("teardown script is empty")
 	case len(r.Teardown) > maxTeardownScript:
 		return fmt.Errorf("teardown script is %d bytes, over the 64 KiB maximum", len(r.Teardown))
+	case !utf8.Valid(r.Teardown):
+		return errors.New("teardown script must be valid UTF-8")
 	case r.DockerProject != "" && !dockerProjectRe.MatchString(r.DockerProject):
 		return fmt.Errorf("docker project %q does not match %s", r.DockerProject, dockerProjectRe)
 	}

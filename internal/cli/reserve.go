@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/model"
@@ -81,6 +82,9 @@ func cmdReserve(c *cmdCtx, args []string) error {
 	}
 	if len(script) == 0 || len(script) > maxTeardownScript {
 		return usagef("reserve: --teardown script must be 1 byte to 64 KiB")
+	}
+	if !utf8.Valid(script) {
+		return usagef("reserve: teardown script must be valid UTF-8")
 	}
 	env, err := captureEnv(c, "reserve", reserveCapturedEnv, envs)
 	if err != nil {
