@@ -34,6 +34,17 @@ type ItemView struct {
 	Diagnostic     string       `json:"diagnostic,omitempty"`
 	NodeID         string       `json:"node_id"`
 
+	// Reservation fields. Neither env nor the teardown script is ever part of a view.
+	Kind            model.Kind   `json:"kind"`
+	Within          model.ItemID `json:"within,omitempty"`
+	TaskMemory      uint64       `json:"task_memory"`
+	TaskCPUs        int          `json:"task_cpus"`
+	ExpiresAt       *time.Time   `json:"expires_at,omitempty"`
+	DockerProject   string       `json:"docker_project,omitempty"`
+	StandMeasured   *uint64      `json:"stand_measured,omitempty"`
+	TeardownAttempt int          `json:"teardown_attempt,omitempty"`
+	TTLHeld         bool         `json:"ttl_held"`
+
 	// Set by list for QUEUED items only.
 	Position      int               `json:"position,omitempty"`
 	BlockedBy     admission.Blocker `json:"blocked_by,omitempty"`
@@ -63,6 +74,9 @@ func viewOf(it *model.Item, now time.Time) ItemView {
 		CreatedAt: it.CreatedAt, StartedAt: optTime(it.StartedAt), EndedAt: optTime(it.EndedAt),
 		ExitCode: it.ExitCode, Signal: it.Signal, MemoryPeak: it.MemoryPeak,
 		GitRev: it.GitRev, GitDirty: it.GitDirty, Diagnostic: it.Diagnostic, NodeID: it.NodeID,
+		Kind: it.Kind, Within: it.ParentID, TaskMemory: it.TaskMemory, TaskCPUs: it.TaskCPUs,
+		ExpiresAt: optTime(it.ExpiresAt), DockerProject: it.DockerProject,
+		TeardownAttempt: it.TeardownAttempt, TTLHeld: it.TTLHeld,
 	}
 	// Wait runs from creation to start (or to the end/now if it never started).
 	waitEnd := it.StartedAt

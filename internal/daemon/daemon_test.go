@@ -28,6 +28,7 @@ type env struct {
 	cfg   config.Config
 	ex    *fake.Executor
 	host  *fake.Host
+	meter *fake.Meter
 	cwd   string
 	done  chan error
 	stop  context.CancelFunc
@@ -46,6 +47,7 @@ func newEnv(t *testing.T) *env {
 		cfg:   config.Default(),
 		ex:    fake.NewExecutor(),
 		host:  fake.NewHost(),
+		meter: fake.NewMeter(),
 		cwd:   t.TempDir(),
 	}
 	e.cfg.PoolMemory = gib
@@ -60,7 +62,7 @@ func (e *env) start(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	e.stop = cancel
 	e.done = make(chan error, 1)
-	go func() { e.done <- Run(ctx, e.paths, e.cfg, e.ex, e.host) }()
+	go func() { e.done <- Run(ctx, e.paths, e.cfg, e.ex, e.host, e.meter) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -135,7 +137,7 @@ func code(err error) string {
 func TestSecondDaemonRefused(t *testing.T) {
 	e := newEnv(t)
 	e.start(t)
-	err := Run(context.Background(), e.paths, e.cfg, fake.NewExecutor(), e.host)
+	err := Run(context.Background(), e.paths, e.cfg, fake.NewExecutor(), e.host, nil)
 	if err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -152,7 +154,7 @@ func TestSecondDaemonOnSameSliceRefused(t *testing.T) {
 	other := newEnv(t)
 	other.paths.SliceLockDir = e.paths.SliceLockDir
 	ex := fake.NewExecutor()
-	err := Run(context.Background(), other.paths, other.cfg, ex, other.host)
+	err := Run(context.Background(), other.paths, other.cfg, ex, other.host, nil)
 	if err == nil || !strings.Contains(err.Error(), e.cfg.SliceName) {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -179,7 +181,7 @@ func TestTeardownSliceLocked(t *testing.T) {
 	other.paths.SliceLockDir = e.paths.SliceLockDir
 	other.cfg.SliceName = "aqtd.slice"
 	ex := fake.NewExecutor()
-	err := Run(context.Background(), other.paths, other.cfg, ex, other.host)
+	err := Run(context.Background(), other.paths, other.cfg, ex, other.host, nil)
 	if err == nil || !strings.Contains(err.Error(), "already manages slice aqtd.slice") {
 		t.Fatalf("second Run: %v", err)
 	}

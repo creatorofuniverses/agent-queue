@@ -60,7 +60,7 @@ func (h *harness) startDaemon(t *testing.T) {
 	cfg.PoolMemory = gib
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host) }()
+	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host, nil) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

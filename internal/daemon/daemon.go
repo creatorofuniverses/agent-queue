@@ -27,7 +27,7 @@ const Version = "0.1.0"
 // Run starts the daemon and blocks until ctx ends (returning nil) or startup
 // or serving fails. A recovery error is fatal: admission must not open on
 // unreconciled state.
-func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platform.Executor, host platform.HostMetrics) error {
+func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platform.Executor, host platform.HostMetrics, meter platform.StandMeter) error {
 	if err := os.MkdirAll(paths.RuntimeDir, 0o700); err != nil {
 		return err
 	}
@@ -75,7 +75,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		return fmt.Errorf("ensure teardown slice: %w", err)
 	}
 
-	sched := scheduler.New(scheduler.Deps{Store: st, Exec: exec, Host: host, Cfg: cfg, Paths: paths})
+	sched := scheduler.New(scheduler.Deps{Store: st, Exec: exec, Host: host, Meter: meter, Cfg: cfg, Paths: paths})
 	d := &server{sched: sched, st: st, paths: paths}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {
@@ -91,6 +91,13 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		sched.Run(runCtx)
 	}()
 	var loops sync.WaitGroup
+	if meter != nil {
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			meter.Run(runCtx)
+		}()
+	}
 	loops.Add(2)
 	go func() {
 		defer loops.Done()

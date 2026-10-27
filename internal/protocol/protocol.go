@@ -27,6 +27,7 @@ const (
 	CodeNotFound            = "NOT_FOUND"
 	CodeRejected            = "REJECTED"
 	CodeIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
+	CodeBadState            = "BAD_STATE"
 	CodeInternal            = "INTERNAL"
 )
 

@@ -35,6 +35,36 @@ type SubmitArgs struct {
 	IdemKey        string            `json:"idem_key"`
 	GitRev         string            `json:"git_rev"`
 	GitDirty       bool              `json:"git_dirty"`
+	Within         model.ItemID      `json:"within"`
+}
+
+// ReserveArgs is the reserve request. Sizes are bytes; Teardown is the script's content.
+type ReserveArgs struct {
+	Name          string            `json:"name"`
+	Cwd           string            `json:"cwd"`
+	Env           map[string]string `json:"env"`
+	Memory        uint64            `json:"memory"`
+	CPUs          int               `json:"cpus"`
+	TaskMemory    uint64            `json:"task_memory"`
+	TaskCPUs      int               `json:"task_cpus"`
+	TTLSeconds    int64             `json:"ttl_seconds"`
+	Teardown      string            `json:"teardown"`
+	DockerProject string            `json:"docker_project"`
+	Priority      string            `json:"priority"`
+	SessionID     string            `json:"session_id"`
+	ClientType    string            `json:"client_type"`
+	Project       string            `json:"project"`
+	IdemKey       string            `json:"idem_key"`
+}
+
+type releaseArgs struct {
+	ID    model.ItemID `json:"id"`
+	Force bool         `json:"force"`
+}
+
+type extendArgs struct {
+	ID         model.ItemID `json:"id"`
+	TTLSeconds int64        `json:"ttl_seconds"`
 }
 
 type idArgs struct {
@@ -100,6 +130,8 @@ func mapErr(err error) error {
 		return &protocol.Error{Code: protocol.CodeIdempotencyConflict, Message: err.Error()}
 	case errors.Is(err, scheduler.ErrRejected):
 		return &protocol.Error{Code: protocol.CodeRejected, Message: err.Error()}
+	case errors.Is(err, scheduler.ErrBadState):
+		return &protocol.Error{Code: protocol.CodeBadState, Message: err.Error()}
 	}
 	return err
 }
@@ -115,6 +147,38 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 		return pingResult{Version: Version, PID: os.Getpid(), Recovering: d.recovering.Load()}, nil
 	case "submit":
 		return d.submit(ctx, args)
+	case "reserve":
+		return d.reserve(ctx, args)
+	case "release":
+		var a releaseArgs
+		if err := decode(args, &a); err != nil {
+			return nil, err
+		}
+		it, err := d.sched.Release(ctx, a.ID, a.Force)
+		if err != nil {
+			return nil, err
+		}
+		return d.view(it, time.Now()), nil
+	case "extend":
+		var a extendArgs
+		if err := decode(args, &a); err != nil {
+			return nil, err
+		}
+		it, err := d.sched.Extend(ctx, a.ID, time.Duration(a.TTLSeconds)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		return d.view(it, time.Now()), nil
+	case "teardown_retry":
+		var a idArgs
+		if err := decode(args, &a); err != nil {
+			return nil, err
+		}
+		it, err := d.sched.RetryTeardown(ctx, a.ID)
+		if err != nil {
+			return nil, err
+		}
+		return d.view(it, time.Now()), nil
 	case "status", "result":
 		var a idArgs
 		if err := decode(args, &a); err != nil {
@@ -136,7 +200,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 		if err != nil {
 			return nil, err
 		}
-		return viewOf(it, time.Now()), nil
+		return d.view(it, time.Now()), nil
 	case "wait":
 		var a idArgs
 		if err := decode(args, &a); err != nil {
@@ -146,7 +210,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 		if err != nil {
 			return nil, err
 		}
-		return viewOf(it, time.Now()), nil
+		return d.view(it, time.Now()), nil
 	case "logs":
 		return d.logs(ctx, args, w)
 	}
@@ -154,15 +218,96 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 }
 
 func (d *server) itemResult(full bool, it *model.Item) any {
-	v := viewOf(it, time.Now())
+	v := d.view(it, time.Now())
 	if !full {
 		return v
 	}
-	dir := d.paths.JobDir(it.ID)
-	return ResultView{
-		ItemView:   v,
-		StdoutPath: filepath.Join(dir, "stdout.log"), StderrPath: filepath.Join(dir, "stderr.log"),
-		LogsTruncated: it.LogsTruncated,
+	rv := ResultView{ItemView: v, LogsTruncated: it.LogsTruncated}
+	if dir := d.logDir(it); dir != "" {
+		rv.StdoutPath, rv.StderrPath = filepath.Join(dir, "stdout.log"), filepath.Join(dir, "stderr.log")
+	}
+	return rv
+}
+
+// logDir is where the item's logs live: the job directory of a task, the latest
+// teardown attempt's directory of a reservation ("" before the first attempt).
+func (d *server) logDir(it *model.Item) string {
+	if !it.IsReservation() {
+		return d.paths.JobDir(it.ID)
+	}
+	if it.TeardownAttempt == 0 {
+		return ""
+	}
+	return d.paths.TeardownDir(it.ID, it.TeardownAttempt)
+}
+
+// view is viewOf plus the stand measurement of a reservation.
+func (d *server) view(it *model.Item, now time.Time) ItemView {
+	v := viewOf(it, now)
+	if it.IsReservation() {
+		if used, ok := d.sched.StandUsage(it.ID); ok {
+			v.StandMeasured = &used
+		}
+	}
+	return v
+}
+
+func (d *server) reserve(ctx context.Context, raw json.RawMessage) (any, error) {
+	var a ReserveArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, err
+	}
+	prio, err := model.ParsePriority(a.Priority)
+	if err != nil {
+		return nil, badRequest("%v", err)
+	}
+	it, err := d.sched.Reserve(ctx, scheduler.ReserveRequest{
+		Name: a.Name, Cwd: a.Cwd, Env: a.Env, Memory: a.Memory, CPUs: a.CPUs,
+		TaskMemory: a.TaskMemory, TaskCPUs: a.TaskCPUs, TTL: time.Duration(a.TTLSeconds) * time.Second,
+		Teardown: []byte(a.Teardown), DockerProject: a.DockerProject, Priority: prio,
+		SessionID: a.SessionID, ClientType: a.ClientType, Project: a.Project, IdemKey: a.IdemKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Answer after the nearest finished admission pass: granted, or queued with its blocker.
+	if err := d.sched.AfterNextPass(ctx); err != nil {
+		return nil, err
+	}
+	if it, err = d.st.Get(ctx, it.ID); err != nil {
+		return nil, err
+	}
+	v := d.view(it, time.Now())
+	if it.State == model.StateQueued {
+		pos, err := d.queuePositions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d.markQueued(&v, it, pos)
+	}
+	return v, nil
+}
+
+// queuePositions numbers the queued items in admission order, over all sessions.
+// Nested tasks start outside the queue and take no position.
+func (d *server) queuePositions(ctx context.Context) (map[model.ItemID]int, error) {
+	active, err := d.st.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pos := map[model.ItemID]int{}
+	for _, it := range active {
+		if it.State == model.StateQueued && it.ParentID == "" {
+			pos[it.ID] = len(pos) + 1
+		}
+	}
+	return pos, nil
+}
+
+func (d *server) markQueued(v *ItemView, it *model.Item, pos map[model.ItemID]int) {
+	v.Position = pos[it.ID]
+	if headID, dec := d.sched.HeadDecision(); it.ID == headID && !dec.Admit {
+		v.BlockedBy, v.BlockedDetail = dec.Blocker, dec.Detail
 	}
 }
 
@@ -179,12 +324,12 @@ func (d *server) submit(ctx context.Context, raw json.RawMessage) (any, error) {
 		Name: a.Name, Argv: a.Argv, Cwd: a.Cwd, Env: a.Env, Limit: a.Limit, Expected: a.Expected, CPUs: a.CPUs,
 		Timeout:  time.Duration(a.TimeoutSeconds) * time.Second,
 		Priority: prio, SessionID: a.SessionID, ClientType: a.ClientType, Project: a.Project,
-		IdemKey: a.IdemKey, GitRev: a.GitRev, GitDirty: a.GitDirty,
+		IdemKey: a.IdemKey, GitRev: a.GitRev, GitDirty: a.GitDirty, ParentID: a.Within,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return viewOf(it, time.Now()), nil
+	return d.view(it, time.Now()), nil
 }
 
 func (d *server) list(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -196,27 +341,16 @@ func (d *server) list(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Queue positions follow admission order, over all sessions.
-	active, err := d.st.ListActive(ctx)
+	pos, err := d.queuePositions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	pos := map[model.ItemID]int{}
-	for _, it := range active {
-		if it.State == model.StateQueued {
-			pos[it.ID] = len(pos) + 1
-		}
-	}
-	headID, dec := d.sched.HeadDecision()
 	now := time.Now()
 	views := make([]ItemView, 0, len(items))
 	for _, it := range items {
-		v := viewOf(it, now)
+		v := d.view(it, now)
 		if it.State == model.StateQueued {
-			v.Position = pos[it.ID]
-			if it.ID == headID && !dec.Admit {
-				v.BlockedBy, v.BlockedDetail = dec.Blocker, dec.Detail
-			}
+			d.markQueued(&v, it, pos)
 		}
 		views = append(views, v)
 	}
@@ -240,10 +374,14 @@ func (d *server) logs(ctx context.Context, raw json.RawMessage, w protocol.Strea
 	if a.Tail < 0 {
 		return nil, badRequest("tail must not be negative")
 	}
-	if _, err := d.st.Get(ctx, a.ID); err != nil {
+	it, err := d.st.Get(ctx, a.ID)
+	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(d.paths.JobDir(a.ID), name)
+	path := ""
+	if dir := d.logDir(it); dir != "" {
+		path = filepath.Join(dir, name)
+	}
 
 	f, err := os.Open(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -272,12 +410,24 @@ func (d *server) logs(ctx context.Context, raw json.RawMessage, w protocol.Strea
 		}
 		return LogLines{Lines: splitLines(string(buf))}, nil
 	}
-	return LogLines{}, d.follow(ctx, a.ID, path, off, w)
+	return LogLines{}, d.follow(ctx, a.ID, path, off, followDone(it), w)
 }
 
-// follow streams complete lines appended from off until the item is terminal
-// and the file is drained.
-func (d *server) follow(ctx context.Context, id model.ItemID, path string, off int64, w protocol.StreamWriter) error {
+// followDone says when a follow of it's logs is over (once the file is drained):
+// a task at a terminal state, a reservation once it is not tearing down or its
+// attempt changed.
+func followDone(it *model.Item) func(*model.Item) bool {
+	if !it.IsReservation() {
+		return func(x *model.Item) bool { return x.State.Terminal() }
+	}
+	attempt := it.TeardownAttempt
+	return func(x *model.Item) bool {
+		return x.State != model.StateTearingDown || x.TeardownAttempt != attempt
+	}
+}
+
+// follow streams complete lines appended from off until done(item) and the file is drained.
+func (d *server) follow(ctx context.Context, id model.ItemID, path string, off int64, done func(*model.Item) bool, w protocol.StreamWriter) error {
 	var pending []byte
 	for {
 		// Sample the state first: whatever was written before it went terminal is read below.
@@ -285,7 +435,7 @@ func (d *server) follow(ctx context.Context, id model.ItemID, path string, off i
 		if err != nil {
 			return err
 		}
-		terminal := it.State.Terminal()
+		terminal := done(it)
 		chunk, err := readFrom(path, off)
 		if err != nil {
 			return err
