@@ -271,8 +271,9 @@ func (d *server) reserve(ctx context.Context, raw json.RawMessage) (any, error) 
 		return nil, err
 	}
 	// Answer after the nearest finished admission pass: granted, or queued with its blocker.
+	// The reservation is stored either way, so if ctx ends first it is still the answer.
 	if err := d.sched.AfterNextPass(ctx); err != nil {
-		return nil, err
+		ctx = context.WithoutCancel(ctx)
 	}
 	if it, err = d.st.Get(ctx, it.ID); err != nil {
 		return nil, err

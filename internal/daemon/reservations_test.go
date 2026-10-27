@@ -13,6 +13,7 @@ import (
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
 	"resource-dispatcher/internal/protocol"
+	"resource-dispatcher/internal/scheduler"
 	"resource-dispatcher/internal/store"
 )
 
@@ -57,6 +58,35 @@ func TestReserveQueuedShowsBlocker(t *testing.T) {
 	v := e.mustReserve(t, e.reserveArgs(256*mib))
 	if v.State != model.StateQueued || v.Position != 1 || v.BlockedBy != admission.BlockPoolMemory {
 		t.Fatalf("view: %+v", v)
+	}
+}
+
+// Final review F6: when the client's ctx ends while waiting for the admission pass, the
+// stored reservation is still the answer, so a retrying client or a log has its id.
+func TestReserveAnswersAfterContextEnds(t *testing.T) {
+	e := newEnv(t)
+	if err := os.MkdirAll(e.paths.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st := e.openStore(t)
+	sched := scheduler.New(scheduler.Deps{Store: st, Exec: e.ex, Host: e.host, Cfg: e.cfg, Paths: e.paths})
+	d := &server{sched: sched, st: st, paths: e.paths} // never Run: no admission pass finishes
+	raw, err := json.Marshal(e.reserveArgs(256 * mib))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	out, err := d.reserve(ctx, raw)
+	if err != nil {
+		t.Fatalf("reserve: %v, want the stored reservation", err)
+	}
+	v, ok := out.(ItemView)
+	if !ok || v.ID == "" || v.State != model.StateQueued || v.Position != 1 {
+		t.Fatalf("reply %+v, want a QUEUED view with an id and position 1", out)
+	}
+	if _, err := st.Get(context.Background(), v.ID); err != nil {
+		t.Fatalf("stored reservation %s: %v", v.ID, err)
 	}
 }
 
