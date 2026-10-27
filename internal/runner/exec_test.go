@@ -92,3 +92,17 @@ func TestParseExecArgs(t *testing.T) {
 		t.Fatal("want error")
 	}
 }
+
+func TestExecDescendantHoldsPipe(t *testing.T) {
+	start := time.Now()
+	done := make(chan int, 1)
+	go func() { _, c := run(t, 1<<20, "sleep 20 & exit 0"); done <- c }()
+	select {
+	case c := <-done:
+		if c != 0 || time.Since(start) > 10*time.Second {
+			t.Fatalf("code %d after %v", c, time.Since(start))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Exec hung on inherited pipe")
+	}
+}

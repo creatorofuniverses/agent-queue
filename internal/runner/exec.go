@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 type ExecArgs struct {
@@ -94,6 +95,8 @@ func Exec(a ExecArgs) int {
 	cmd.Env = append(os.Environ(), "TMPDIR="+a.TmpDir, "TMP="+a.TmpDir, "TEMP="+a.TmpDir)
 	cmd.Stdout = outW
 	cmd.Stderr = errW
+	// A descendant may keep the pipes open after the command exits.
+	cmd.WaitDelay = 2 * time.Second
 
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
@@ -113,19 +116,20 @@ func Exec(a ExecArgs) int {
 			}
 		}
 	}()
-	waitErr := cmd.Wait()
+	_ = cmd.Wait() // may be exec.ErrWaitDelay; the exit code comes from ProcessState
 	close(done)
 
 	meta, _ := json.Marshal(execMeta{LogsTruncated: outW.truncated || errW.truncated})
 	_ = os.WriteFile(filepath.Join(a.JobDir, "exec.json"), meta, 0o644)
 
-	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return 128 + int(ws.Signal())
-	}
-	if waitErr != nil && cmd.ProcessState == nil {
+	ps := cmd.ProcessState
+	if ps == nil {
 		return 127
 	}
-	return cmd.ProcessState.ExitCode()
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return ps.ExitCode()
 }
 
 func launchFail(a ExecArgs, err error) int {

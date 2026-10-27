@@ -22,9 +22,12 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	}
 	if len(p) > 0 {
 		if _, err := c.w.Write(p); err != nil {
-			return 0, err
+			// Keep draining: drop everything from now on.
+			c.truncated = true
+			c.remaining = 0
+		} else {
+			c.remaining -= uint64(len(p))
 		}
-		c.remaining -= uint64(len(p))
 	}
 	return n, nil
 }
