@@ -222,3 +222,244 @@ func TestRecoverAdoptedCancelRequestedIsStopped(t *testing.T) {
 	e.tick(t)
 	e.wantState(t, it.ID, model.StateCancelled, model.ReasonCancelled)
 }
+
+// registerTeardown makes the fake know a live teardown unit of attempt for reservation id.
+func (e *env) registerTeardown(t *testing.T, id model.ItemID, attempt int) {
+	t.Helper()
+	spec := platform.LaunchSpec{ID: model.TeardownUnitID(id), JobDir: e.paths.TeardownDir(id, attempt)}
+	if _, err := e.ex.Launch(e.ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoverTearingDownAlive(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	e.tearDown(t, res)
+	e.ex.SetAlive(uid, true)
+	launched := len(e.ex.Launched())
+
+	e.rebuild(t, e.ex, true)
+	e.settle()
+	it := e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone)
+	if it.TeardownAttempt != 1 {
+		t.Fatalf("attempt %d, want 1", it.TeardownAttempt)
+	}
+	if s := e.ex.Stopped(); len(s) != 0 {
+		t.Fatalf("stopped %v, want nothing", s)
+	}
+	if n := len(e.ex.Launched()); n != launched {
+		t.Fatalf("launched %d, want %d", n, launched)
+	}
+	// The reaper goes on with the adopted unit.
+	e.tick(t)
+	e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone)
+	e.finish(uid, exit0)
+	e.tick(t)
+	e.wantState(t, res.ID, model.StateTornDown, model.ReasonNone)
+}
+
+// §15: the teardown finished while the daemon was down.
+func TestRecoverTearingDownResult(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	e.tearDown(t, res)
+	e.finish(uid, exit0)
+	if r, _ := e.ex.ReadResult(e.paths.TeardownDir(res.ID, 1)); r == nil {
+		t.Fatal("result not in the attempt's dir")
+	}
+	tmp := e.paths.TeardownTmpDir(res.ID, 1)
+	writeFile(t, filepath.Join(tmp, "f"))
+
+	e.rebuild(t, e.ex, true)
+	e.settle()
+	it := e.wantState(t, res.ID, model.StateTornDown, model.ReasonNone)
+	if it.ExitCode == nil || *it.ExitCode != 0 || it.Env != nil {
+		t.Fatalf("exit code %v env %v", it.ExitCode, it.Env)
+	}
+	e.wantEvent(t, res.ID, model.EventTeardownSucceeded, "torn down")
+	if exists(t, tmp) {
+		t.Fatal("teardown temp dir kept")
+	}
+	task := e.submit(t, e.req(e.cfg.PoolMemory))
+	e.tick(t)
+	e.wantState(t, task.ID, model.StateRunning, model.ReasonNone)
+}
+
+// §15: neither the unit nor a result survived the restart.
+func TestRecoverTearingDownGone(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	e.tearDown(t, res)
+	e.ex = fake.NewExecutor() // nothing of the previous daemon's units is left
+
+	e.rebuild(t, e.ex, true)
+	e.settle()
+	it := e.wantState(t, res.ID, model.StateTeardownUnknown, model.ReasonLost)
+	if !strings.Contains(it.Diagnostic, "without a result") {
+		t.Fatalf("diagnostic %q", it.Diagnostic)
+	}
+	e.wantEvent(t, res.ID, model.EventTeardownUnknown, "may still be up")
+	if l := e.ex.Launched(); len(l) != 0 {
+		t.Fatalf("launched %v during Recover", l)
+	}
+	e.wantPoolBlocked(t)
+	if l := e.ex.Launched(); len(l) != 0 {
+		t.Fatalf("launched %v after Recover", l)
+	}
+}
+
+func TestRecoverKeepsGranted(t *testing.T) {
+	e := newEnv(t, nil)
+	failed, _ := e.grantStand(t, time.Hour, nil)
+	e.tearDown(t, failed)
+	e.finish(model.TeardownUnitID(failed.ID), exit1)
+	e.tick(t)
+	e.wantState(t, failed.ID, model.StateTeardownFailed, model.ReasonCommandFailed)
+
+	unknown, _ := e.grantStand(t, time.Hour, nil)
+	e.tearDown(t, unknown)
+	e.ex.SetAlive(model.TeardownUnitID(unknown.ID), false)
+	e.tick(t)
+	e.clk.Advance(e.cfg.CancelGrace)
+	e.tick(t)
+	e.wantState(t, unknown.ID, model.StateTeardownUnknown, model.ReasonLost)
+
+	expiring, _ := e.grantStand(t, time.Hour, nil)
+	e.tickAt(t, expiring.ExpiresAt.Add(-time.Second))
+	e.wantState(t, expiring.ID, model.StateExpiring, model.ReasonNone)
+	granted, _ := e.grantStand(t, 3*time.Hour, nil)
+	queued := e.reserve(t, e.rreq(700*mib))
+	e.tick(t)
+	e.wantState(t, queued.ID, model.StateQueued, model.ReasonNone)
+
+	ids := []model.ItemID{failed.ID, unknown.ID, expiring.ID, granted.ID, queued.ID}
+	before := map[model.ItemID]*model.Item{}
+	for _, id := range ids {
+		before[id] = e.get(t, id)
+	}
+	launched := len(e.ex.Launched())
+	e.rebuild(t, e.ex, true)
+	e.settle()
+	for _, id := range ids {
+		b, a := before[id], e.get(t, id)
+		if a.State != b.State || a.Reason != b.Reason || a.Diagnostic != b.Diagnostic ||
+			!a.ExpiresAt.Equal(b.ExpiresAt) || a.TeardownAttempt != b.TeardownAttempt {
+			t.Fatalf("%s changed by Recover: %s %s %q -> %s %s %q", id, b.State, b.Reason, b.Diagnostic, a.State, a.Reason, a.Diagnostic)
+		}
+	}
+	if s := e.ex.Stopped(); len(s) != 0 {
+		t.Fatalf("stopped %v", s)
+	}
+	if n := len(e.ex.Launched()); n != launched {
+		t.Fatalf("launched %d, want %d", n, launched)
+	}
+}
+
+func TestRecoverExpiredDuringDowntime(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	e.rebuild(t, e.ex, false)
+	e.clk.Advance(res.ExpiresAt.Add(time.Minute).Sub(e.clk.Now()))
+	if err := e.s.Recover(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.wantState(t, res.ID, model.StateGranted, model.ReasonNone)
+	if n := len(teardownSpecs(e)); n != 0 {
+		t.Fatalf("%d teardown launches during Recover", n)
+	}
+	e.tick(t)
+	e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone)
+	if n := len(teardownSpecs(e)); n != 1 {
+		t.Fatalf("%d teardown launches, want 1", n)
+	}
+}
+
+func TestRecoverStopsOrphanTeardownUnit(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	e.tearDown(t, res)
+	e.finish(uid, exit0)
+	e.tick(t)
+	e.wantState(t, res.ID, model.StateTornDown, model.ReasonNone)
+	e.ex.SetAlive(uid, true) // a unit of a torn down reservation lingers
+	stranger := model.NewID()
+	e.registerTeardown(t, stranger, 1) // and one of a reservation the store does not know
+
+	e.rebuild(t, e.ex, true)
+	stopped := e.ex.Stopped()
+	if !contains(stopped, uid) || !contains(stopped, model.TeardownUnitID(stranger)) {
+		t.Fatalf("stopped %v, want %s and the stranger's unit", stopped, uid)
+	}
+	e.wantState(t, res.ID, model.StateTornDown, model.ReasonNone)
+}
+
+// Codex r2: an attempt whose launch failed is stopped by Recover and never trusted.
+func TestRecoverTearingDownAfterLaunchError(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	e.launchErrorAlive(t, res)
+	e.ex.FailLaunch(nil)
+	e.settle()
+	stops := len(e.ex.Stopped())
+
+	e.rebuild(t, e.ex, true)
+	e.settle()
+	if s := e.ex.Stopped(); len(s) != stops+1 || s[len(s)-1] != uid {
+		t.Fatalf("stopped %v, want one more stop of %s", s, uid)
+	}
+	it := e.wantState(t, res.ID, model.StateTearingDown, model.ReasonNone)
+	if it.TeardownLaunchError == "" || it.TeardownAttempt != 1 {
+		t.Fatalf("launch error %q attempt %d", it.TeardownLaunchError, it.TeardownAttempt)
+	}
+	// Recover's stop counts for the reaper's cancel_grace.
+	e.tick(t)
+	e.settle()
+	if n := len(e.ex.Stopped()); n != stops+1 {
+		t.Fatalf("%d stops within cancel_grace of Recover's, want %d", n, stops+1)
+	}
+
+	e.ex.SetAlive(uid, false)
+	e.ex.Finish(uid, exit0)
+	e.tick(t)
+	e.wantState(t, res.ID, model.StateTeardownFailed, model.ReasonLaunchFailed)
+	e.wantEvent(t, res.ID, model.EventTeardownFailed, "without its memory limit")
+}
+
+// The same with the unit already gone at restart: a result of that attempt is not trusted.
+func TestRecoverLaunchErrorGoneFails(t *testing.T) {
+	e := newEnv(t, nil)
+	res, _ := e.grantStand(t, time.Hour, nil)
+	uid := model.TeardownUnitID(res.ID)
+	e.launchErrorAlive(t, res)
+	e.ex.FailLaunch(nil)
+	e.finish(uid, exit0)
+
+	e.rebuild(t, e.ex, true)
+	e.wantState(t, res.ID, model.StateTeardownFailed, model.ReasonLaunchFailed)
+	e.wantEvent(t, res.ID, model.EventTeardownFailed, "without its memory limit")
+}
+
+func TestRecoverNestedTask(t *testing.T) {
+	e := newEnv(t, nil)
+	res := e.grantBudget(t, 100*mib, 500*mib, 2)
+	nested := e.submit(t, e.within(res.ID, 400*mib))
+	e.tick(t)
+	e.wantState(t, nested.ID, model.StateRunning, model.ReasonNone)
+
+	e.rebuild(t, e.ex, true)
+	e.settle()
+	e.wantState(t, nested.ID, model.StateRunning, model.ReasonNone)
+	e.wantState(t, res.ID, model.StateGranted, model.ReasonNone)
+	if s := e.ex.Stopped(); len(s) != 0 {
+		t.Fatalf("stopped %v", s)
+	}
+	e.wantRejected(t, e.within(res.ID, 200*mib), "task budget")
+	fits := e.submit(t, e.within(res.ID, 100*mib))
+	e.tick(t)
+	e.wantState(t, fits.ID, model.StateRunning, model.ReasonNone)
+}

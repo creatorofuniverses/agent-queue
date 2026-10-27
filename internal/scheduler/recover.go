@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"resource-dispatcher/internal/model"
+	"resource-dispatcher/internal/platform"
 )
 
 // Recover reconciles stored items with units left by a previous daemon. Admission,
-// closed since New (BlockRecovering), opens only when it succeeds; orphan units are stopped.
+// closed since New (BlockRecovering), opens only when it succeeds; orphan units (task
+// units and teardown-<id> units no active item owns) are stopped.
 func (s *Scheduler) Recover(ctx context.Context) error {
 	s.mu.Lock()
 	s.recovering = true
@@ -38,7 +40,9 @@ func (s *Scheduler) Recover(ctx context.Context) error {
 	return nil
 }
 
-// reconcileLocked settles each non-terminal item and returns the ids still active.
+// reconcileLocked settles each non-terminal item and returns the unit ids still owned:
+// those of active tasks and of adopted teardowns. Reservations go their own way;
+// nested tasks are tasks.
 func (s *Scheduler) reconcileLocked(ctx context.Context) (map[model.ItemID]bool, error) {
 	items, err := s.d.Store.ListActive(ctx)
 	if err != nil {
@@ -46,6 +50,12 @@ func (s *Scheduler) reconcileLocked(ctx context.Context) (map[model.ItemID]bool,
 	}
 	known := map[model.ItemID]bool{}
 	for _, it := range items {
+		if it.IsReservation() {
+			if err := s.recoverReservationLocked(ctx, it, known); err != nil {
+				return nil, fmt.Errorf("recover %s: %w", it.ID, err)
+			}
+			continue
+		}
 		if it.State == model.StateQueued {
 			known[it.ID] = true
 			continue
@@ -97,4 +107,38 @@ func (s *Scheduler) reconcileLocked(ctx context.Context) (map[model.ItemID]bool,
 		}
 	}
 	return known, nil
+}
+
+// recoverReservationLocked settles a reservation left by a previous daemon. Only a
+// TEARING_DOWN one has a unit: a live unit is adopted (and, after a launch error, stopped
+// again, which also starts the reaper's cancel_grace); a gone one is settled as the
+// reaper would, from its result, and TEARDOWN_UNKNOWN at once without one: the daemon
+// was down, so there is no grace to wait for. No teardown is launched here. QUEUED,
+// GRANTED, EXPIRING, TEARDOWN_FAILED and TEARDOWN_UNKNOWN have no unit and stay as they
+// are; expiry that passed during the downtime is handled by the next Tick.
+func (s *Scheduler) recoverReservationLocked(ctx context.Context, it *model.Item, known map[model.ItemID]bool) error {
+	if it.State != model.StateTearingDown {
+		return nil
+	}
+	uid := model.TeardownUnitID(it.ID)
+	// Alive before the result, as in reapTeardownLocked.
+	alive, err := s.d.Exec.Alive(ctx, uid)
+	if err != nil {
+		return err
+	}
+	if alive {
+		known[uid] = true
+		if it.TeardownLaunchError != "" {
+			s.stopAsyncLocked(uid)
+		}
+		return nil
+	}
+	var (
+		ei   *platform.ExitInfo
+		rerr error
+	)
+	if it.TeardownLaunchError == "" { // a launch error fails the attempt whatever it recorded
+		ei, rerr = s.d.Exec.ReadResult(s.d.Paths.TeardownDir(it.ID, it.TeardownAttempt))
+	}
+	return s.settleGoneTeardownLocked(ctx, it, ei, rerr)
 }

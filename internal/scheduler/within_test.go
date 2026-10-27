@@ -106,7 +106,9 @@ func TestWithinStartsDespiteHostReadError(t *testing.T) {
 	res := e.grantBudget(t, 100*mib, 500*mib, 1)
 	e.s.bg.Wait()
 	e.s = New(Deps{Store: e.st, Exec: e.ex, Host: memErrHost{e.host}, Meter: e.meter, Cfg: e.cfg, Paths: e.paths, Now: e.clk.Now})
-	e.s.recovering = false // Recover does not know reservations yet (a later task)
+	if err := e.s.Recover(e.ctx); err != nil { // the granted parent survives it
+		t.Fatal(err)
+	}
 	plain := e.submit(t, e.req(100*mib))
 	nested := e.submit(t, e.within(res.ID, 100*mib))
 	if err := e.s.Tick(e.ctx); err == nil || !strings.Contains(err.Error(), "meminfo unreadable") {
@@ -299,6 +301,14 @@ func TestWithinNotAdmittedWhileRecovering(t *testing.T) {
 	if contains(launchedIDs(e.ex), nested.ID) {
 		t.Fatal("nested task launched while recovering")
 	}
+	// Recover keeps the granted parent and the queued nested task; then it starts.
+	if err := e.s.Recover(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.wantState(t, res.ID, model.StateGranted, model.ReasonNone)
+	e.wantState(t, nested.ID, model.StateQueued, model.ReasonNone)
+	e.tick(t)
+	e.wantState(t, nested.ID, model.StateRunning, model.ReasonNone)
 }
 
 func TestWithinParentGoneCancelsNested(t *testing.T) {

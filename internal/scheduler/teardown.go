@@ -152,7 +152,7 @@ func (s *Scheduler) launchTeardown(ctx context.Context, it *model.Item) {
 		}
 		s.stopAsyncLocked(uid)
 	default:
-		s.failTeardownLocked(pctx, cur, *cur, model.ReasonLaunchFailed, "launch failed: "+lerr.Error(), false)
+		_ = s.failTeardownLocked(pctx, cur, *cur, model.ReasonLaunchFailed, "launch failed: "+lerr.Error(), false)
 	}
 }
 
@@ -169,7 +169,6 @@ func (s *Scheduler) reapTeardownLocked(ctx context.Context, it *model.Item, now 
 		slog.Warn("scheduler: read teardown unit liveness", "id", it.ID, "err", err)
 		return
 	}
-	prev := *it
 	if it.TeardownLaunchError != "" {
 		if alive {
 			if last, ok := s.lastStop[uid]; !s.stopping[uid] && (!ok || now.Sub(last) >= s.d.Cfg.CancelGrace) {
@@ -177,7 +176,7 @@ func (s *Scheduler) reapTeardownLocked(ctx context.Context, it *model.Item, now 
 			}
 			return
 		}
-		s.failTeardownLocked(ctx, it, prev, model.ReasonLaunchFailed, "launch failed: "+it.TeardownLaunchError, false)
+		_ = s.settleGoneTeardownLocked(ctx, it, nil, nil) // logged; retried next pass
 		return
 	}
 	ei, rerr := s.d.Exec.ReadResult(s.d.Paths.TeardownDir(it.ID, it.TeardownAttempt))
@@ -194,15 +193,7 @@ func (s *Scheduler) reapTeardownLocked(ctx context.Context, it *model.Item, now 
 		if now.Sub(since) < s.d.Cfg.CancelGrace {
 			return
 		}
-		cause := "teardown unit gone without a result"
-		if rerr != nil {
-			cause += fmt.Sprintf(" (unreadable result: %v)", rerr)
-		}
-		it.State, it.Reason, it.Diagnostic = model.StateTeardownUnknown, model.ReasonLost, cause
-		evs := newEvents(it, model.EventTeardownUnknown,
-			fmt.Sprintf("teardown of stand %s: %s; the stand may still be up", standLabel(it), cause),
-			model.AudienceOperator)
-		s.settleTeardownLocked(ctx, it, prev, evs)
+		_ = s.settleGoneTeardownLocked(ctx, it, nil, rerr)
 		return
 	}
 	delete(s.goneSince, it.ID)
@@ -217,41 +208,64 @@ func (s *Scheduler) reapTeardownLocked(ctx context.Context, it *model.Item, now 
 		}
 		return
 	}
+	_ = s.settleGoneTeardownLocked(ctx, it, ei, nil)
+}
+
+// settleGoneTeardownLocked records the outcome of a TEARING_DOWN attempt with no
+// processes left: TEARDOWN_FAILED after a launch error, whatever the attempt recorded;
+// otherwise from its result ei (exit 0 TORN_DOWN, anything else TEARDOWN_FAILED), and
+// TEARDOWN_UNKNOWN without one (rerr says why it was unreadable). On a failed write it
+// stays TEARING_DOWN and the error is returned.
+func (s *Scheduler) settleGoneTeardownLocked(ctx context.Context, it *model.Item, ei *platform.ExitInfo, rerr error) error {
+	prev := *it
+	switch {
+	case it.TeardownLaunchError != "":
+		return s.failTeardownLocked(ctx, it, prev, model.ReasonLaunchFailed, "launch failed: "+it.TeardownLaunchError, false)
+	case ei == nil:
+		cause := "teardown unit gone without a result"
+		if rerr != nil {
+			cause += fmt.Sprintf(" (unreadable result: %v)", rerr)
+		}
+		it.State, it.Reason, it.Diagnostic = model.StateTeardownUnknown, model.ReasonLost, cause
+		evs := newEvents(it, model.EventTeardownUnknown,
+			fmt.Sprintf("teardown of stand %s: %s; the stand may still be up", standLabel(it), cause),
+			model.AudienceOperator)
+		return s.settleTeardownLocked(ctx, it, prev, evs)
+	}
 	it.ExitCode, it.Signal = exitDetails(*ei)
 	it.LogsTruncated = ei.LogsTruncated
 	st, reason := MapOutcome(*ei, false, false)
 	if st != model.StateSucceeded {
-		s.failTeardownLocked(ctx, it, prev, reason, s.outcomeCause(*ei, reason), true)
-		return
+		return s.failTeardownLocked(ctx, it, prev, reason, s.outcomeCause(*ei, reason), true)
 	}
 	s.endLocked(it, model.StateTornDown, model.ReasonNone, "")
 	if !ei.EndedAt.IsZero() {
 		it.EndedAt = ei.EndedAt
 	}
 	evs := newEvents(it, model.EventTeardownSucceeded, "torn down forgotten stand "+standLabel(it), model.AudienceOperator)
-	s.settleTeardownLocked(ctx, it, prev, evs)
+	return s.settleTeardownLocked(ctx, it, prev, evs)
 }
 
 // failTeardownLocked records the current attempt as TEARDOWN_FAILED with
 // teardown_failed; withLogs points at the attempt's stderr.log.
-func (s *Scheduler) failTeardownLocked(ctx context.Context, it *model.Item, prev model.Item, reason model.Reason, cause string, withLogs bool) {
+func (s *Scheduler) failTeardownLocked(ctx context.Context, it *model.Item, prev model.Item, reason model.Reason, cause string, withLogs bool) error {
 	if withLogs {
 		cause += "; see " + filepath.Join(s.d.Paths.TeardownDir(it.ID, it.TeardownAttempt), "stderr.log")
 	}
 	it.State, it.Reason, it.Diagnostic = model.StateTeardownFailed, reason, "teardown failed: "+cause
 	evs := newEvents(it, model.EventTeardownFailed,
 		fmt.Sprintf("teardown of stand %s failed: %s", standLabel(it), cause), model.AudienceOperator)
-	s.settleTeardownLocked(ctx, it, prev, evs)
+	return s.settleTeardownLocked(ctx, it, prev, evs)
 }
 
 // settleTeardownLocked persists the end of an attempt whose processes are gone and
 // removes that attempt's temp dir in the background (its logs stay). If the write
 // fails, it is restored to prev and stays TEARING_DOWN, in the accounting.
-func (s *Scheduler) settleTeardownLocked(ctx context.Context, it *model.Item, prev model.Item, evs []model.Event) {
+func (s *Scheduler) settleTeardownLocked(ctx context.Context, it *model.Item, prev model.Item, evs []model.Event) error {
 	if err := s.persistLocked(ctx, it, evs...); err != nil {
 		slog.Error("scheduler: record teardown outcome", "id", it.ID, "state", it.State, "err", err)
 		*it = prev
-		return
+		return err
 	}
 	uid := model.TeardownUnitID(it.ID)
 	delete(s.goneSince, it.ID)
@@ -263,6 +277,7 @@ func (s *Scheduler) settleTeardownLocked(ctx context.Context, it *model.Item, pr
 			slog.Warn("scheduler: remove teardown temp dir", "dir", tmp, "err", err)
 		}
 	})
+	return nil
 }
 
 // outcomeCause describes a failed teardown result.
