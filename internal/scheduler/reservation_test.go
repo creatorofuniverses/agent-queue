@@ -490,7 +490,7 @@ func TestWaitReturnsOnGrant(t *testing.T) {
 	}
 	ch := make(chan res, 1)
 	go func() {
-		got, err := e.s.Wait(e.ctx, it.ID)
+		got, err := e.s.Wait(e.ctx, it.ID, WaitDone)
 		ch <- res{got, err}
 	}()
 	waitRegistered(t, e.s, it.ID)
@@ -505,7 +505,7 @@ func TestWaitReturnsOnGrant(t *testing.T) {
 		t.Fatal("Wait did not return after the grant")
 	}
 	// Already granted: returns at once.
-	if got, err := e.s.Wait(e.ctx, it.ID); err != nil || got.State != model.StateGranted {
+	if got, err := e.s.Wait(e.ctx, it.ID, WaitDone); err != nil || got.State != model.StateGranted {
 		t.Fatalf("wait granted: %+v %v", got, err)
 	}
 }

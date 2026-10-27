@@ -27,6 +27,7 @@ var dockerProjectRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 // ReserveRequest asks for a stand (Memory, CPUs) plus a budget for nested tasks
 // (TaskMemory, TaskCPUs) for TTL from the grant. Teardown is the script's content.
 type ReserveRequest struct {
+	NoNotify      bool              `json:"no_notify,omitempty"`
 	Name          string            `json:"name"`
 	Cwd           string            `json:"cwd"`
 	Env           map[string]string `json:"env"`
@@ -108,7 +109,7 @@ func (s *Scheduler) Reserve(ctx context.Context, r ReserveRequest) (*model.Item,
 		Cwd: r.Cwd, Env: r.Env, Limit: r.Memory, Expected: r.Memory, CPUs: r.CPUs, Timeout: r.TTL,
 		TaskMemory: r.TaskMemory, TaskCPUs: r.TaskCPUs, DockerProject: r.DockerProject,
 		SessionID: r.SessionID, ClientType: r.ClientType, Project: r.Project, IdemKey: r.IdemKey,
-		RequestHash: hash, NodeID: "local", CreatedAt: now,
+		RequestHash: hash, NodeID: "local", CreatedAt: now, NoNotify: r.NoNotify,
 	}
 	if vErr := s.validateReserve(r); vErr != nil {
 		s.rejectItem(it, vErr.Error())
@@ -312,7 +313,7 @@ func (s *Scheduler) grantLocked(ctx context.Context, it *model.Item, now time.Ti
 	it.WarnAt = s.warnAt(it.ExpiresAt, now)
 	var evs []model.Event
 	if it.NotifyGrant {
-		evs = newEvents(it, model.EventReservationGranted,
+		evs = s.newEvents(it, model.EventReservationGranted,
 			fmt.Sprintf("reservation %s granted; expires at %s", it.ID, it.ExpiresAt.UTC().Format(time.RFC3339)),
 			model.AudienceSession)
 	}
@@ -336,6 +337,7 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 	if !it.IsReservation() {
 		return it, fmt.Errorf("%w: %s is a task, not a reservation; use aq cancel", ErrBadState, id)
 	}
+	var evs []model.Event
 	switch {
 	case it.State.Terminal():
 		return it, nil
@@ -356,6 +358,7 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 			if err := s.teardownUnitGoneLocked(ctx, id); err != nil {
 				return it, err
 			}
+			evs = s.newEvents(it, model.EventReservationForceReleased, fmt.Sprintf("stand %s released by operator after %s", standLabel(it), it.State), model.AudienceOperator)
 			diag = "released by operator (--force)"
 		}
 		s.endLocked(it, model.StateReleased, model.ReasonNone, diag)
@@ -365,7 +368,7 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 	default:
 		return it, fmt.Errorf("%w: reservation %s is %s", ErrBadState, id, it.State)
 	}
-	if err := s.persistLocked(ctx, it); err != nil {
+	if err := s.persistLocked(ctx, it, evs...); err != nil {
 		return nil, err
 	}
 	s.Kick() // the pool has room again
@@ -448,7 +451,7 @@ func (s *Scheduler) expireLocked(ctx context.Context, items []*model.Item, now t
 		}
 		if it.State == model.StateGranted && !it.WarnAt.IsZero() && !now.Before(it.WarnAt) {
 			it.State = model.StateExpiring
-			evs := newEvents(it, model.EventReservationExpiring,
+			evs := s.newEvents(it, model.EventReservationExpiring,
 				fmt.Sprintf("reservation %s expires at %s; extend it with aq extend", it.ID, it.ExpiresAt.UTC().Format(time.RFC3339)),
 				model.AudienceSession, model.AudienceOperator)
 			if err := s.persistLocked(ctx, it, evs...); err != nil {
@@ -482,7 +485,7 @@ func (s *Scheduler) holdLocked(ctx context.Context, it *model.Item, until time.T
 		it.ExpiresAt = until
 	}
 	it.State, it.TTLHeld = model.StateExpiring, true
-	evs := newEvents(it, model.EventReservationHeldByTask,
+	evs := s.newEvents(it, model.EventReservationHeldByTask,
 		fmt.Sprintf("reservation %s expired with %d unfinished nested task(s); held until %s",
 			it.ID, n, it.ExpiresAt.UTC().Format(time.RFC3339)),
 		model.AudienceOperator)
@@ -504,13 +507,18 @@ func (s *Scheduler) warnAt(expires, now time.Time) time.Time {
 
 // newEvents builds one event of kind per audience; the session audience is skipped
 // without a session. persistLocked stamps CreatedAt.
-func newEvents(it *model.Item, kind model.EventKind, detail string, aud ...model.Audience) []model.Event {
+func (s *Scheduler) newEvents(it *model.Item, kind model.EventKind, detail string, aud ...model.Audience) []model.Event {
 	var out []model.Event
 	for _, a := range aud {
-		if a == model.AudienceSession && it.SessionID == "" {
+		if a == model.AudienceSession && (it.SessionID == "" || it.NoNotify) {
 			continue
 		}
-		out = append(out, model.Event{
+		ch := s.d.Route(it.ClientType, a)
+		status := model.EventPending
+		if ch == model.ChannelNone {
+			status = model.EventSkipped
+		}
+		out = append(out, model.Event{Channel: ch, Status: status,
 			ID: string(model.NewID()), ItemID: it.ID, Kind: kind, Audience: a,
 			SessionID: it.SessionID, ClientType: it.ClientType, Detail: detail,
 		})

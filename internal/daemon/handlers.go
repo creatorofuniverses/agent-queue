@@ -206,7 +206,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 		if err := decode(args, &a); err != nil {
 			return nil, err
 		}
-		it, err := d.sched.Wait(ctx, a.ID)
+		it, err := d.sched.Wait(ctx, a.ID, scheduler.WaitDone)
 		if err != nil {
 			return nil, err
 		}

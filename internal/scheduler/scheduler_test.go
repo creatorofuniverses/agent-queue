@@ -658,7 +658,7 @@ func TestRunningVanishedWithoutResultBecomesLost(t *testing.T) {
 	next := e.submit(t, e.req(gib))
 	waited := make(chan *model.Item, 1)
 	go func() {
-		it, _ := e.s.Wait(e.ctx, a.ID)
+		it, _ := e.s.Wait(e.ctx, a.ID, WaitDone)
 		waited <- it
 	}()
 	waitRegistered(t, e.s, a.ID)
@@ -927,7 +927,7 @@ func TestWaitReturnsOnTerminal(t *testing.T) {
 	}
 	ch := make(chan res, 1)
 	go func() {
-		got, err := e.s.Wait(e.ctx, it.ID)
+		got, err := e.s.Wait(e.ctx, it.ID, WaitDone)
 		ch <- res{got, err}
 	}()
 	waitRegistered(t, e.s, it.ID)
@@ -944,7 +944,7 @@ func TestWaitReturnsOnTerminal(t *testing.T) {
 	}
 
 	// Already terminal: returns at once.
-	if got, err := e.s.Wait(e.ctx, it.ID); err != nil || got.State != model.StateFailed {
+	if got, err := e.s.Wait(e.ctx, it.ID, WaitDone); err != nil || got.State != model.StateFailed {
 		t.Fatalf("wait terminal: %+v %v", got, err)
 	}
 
@@ -952,7 +952,7 @@ func TestWaitReturnsOnTerminal(t *testing.T) {
 	other := e.submit(t, e.req(gib))
 	ctx, cancel := context.WithCancel(e.ctx)
 	go func() {
-		got, err := e.s.Wait(ctx, other.ID)
+		got, err := e.s.Wait(ctx, other.ID, WaitDone)
 		ch <- res{got, err}
 	}()
 	waitRegistered(t, e.s, other.ID)

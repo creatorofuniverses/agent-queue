@@ -108,6 +108,7 @@ func (s *Scheduler) reapLocked(ctx context.Context, items []*model.Item) {
 			}
 			continue
 		}
+		s.alertCleaningLocked(ctx, it, now)
 		if now.Sub(seen) >= 2*s.d.Cfg.CancelGrace {
 			s.resultSeen[it.ID] = now
 			if it.Diagnostic != lingerMsg {

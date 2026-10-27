@@ -254,7 +254,7 @@ func (s *Scheduler) settleGoneTeardownLocked(ctx context.Context, it *model.Item
 			cause += fmt.Sprintf(" (unreadable result: %v)", rerr)
 		}
 		it.State, it.Reason, it.Diagnostic = model.StateTeardownUnknown, model.ReasonLost, cause
-		evs := newEvents(it, model.EventTeardownUnknown,
+		evs := s.newEvents(it, model.EventTeardownUnknown,
 			fmt.Sprintf("teardown of stand %s: %s; the stand may still be up", standLabel(it), cause),
 			model.AudienceOperator)
 		return s.settleTeardownLocked(ctx, it, prev, evs)
@@ -269,7 +269,7 @@ func (s *Scheduler) settleGoneTeardownLocked(ctx context.Context, it *model.Item
 	if !ei.EndedAt.IsZero() {
 		it.EndedAt = ei.EndedAt
 	}
-	evs := newEvents(it, model.EventTeardownSucceeded, "torn down forgotten stand "+standLabel(it), model.AudienceOperator)
+	evs := s.newEvents(it, model.EventTeardownSucceeded, "torn down forgotten stand "+standLabel(it), model.AudienceOperator)
 	return s.settleTeardownLocked(ctx, it, prev, evs)
 }
 
@@ -280,7 +280,7 @@ func (s *Scheduler) failTeardownLocked(ctx context.Context, it *model.Item, prev
 		cause += "; see " + filepath.Join(s.d.Paths.TeardownDir(it.ID, it.TeardownAttempt), "stderr.log")
 	}
 	it.State, it.Reason, it.Diagnostic = model.StateTeardownFailed, reason, "teardown failed: "+cause
-	evs := newEvents(it, model.EventTeardownFailed,
+	evs := s.newEvents(it, model.EventTeardownFailed,
 		fmt.Sprintf("teardown of stand %s failed: %s", standLabel(it), cause), model.AudienceOperator)
 	return s.settleTeardownLocked(ctx, it, prev, evs)
 }

@@ -34,6 +34,8 @@ var ErrRejected = errors.New("request rejected")
 
 // ErrBadState: the operation does not apply to the item in its current state; it is
 // returned wrapped with an explanation and the item is unchanged.
+var ErrBadRequest = errors.New("bad request")
+
 var ErrBadState = errors.New("operation not allowed in this state")
 
 // launchFailedCancel is the CancelReason of a unit stopped because its launch
@@ -44,16 +46,19 @@ const launchFailedCancel = "launch failed"
 const minMemory = 64 << 20
 
 type Deps struct {
-	Store *store.Store
-	Exec  platform.Executor
-	Host  platform.HostMetrics
-	Meter platform.StandMeter // nil: no stand is ever measured
-	Cfg   config.Config
-	Paths config.Paths
-	Now   func() time.Time
+	Route    func(string, model.Audience) model.Channel
+	OnEvents func()
+	Store    *store.Store
+	Exec     platform.Executor
+	Host     platform.HostMetrics
+	Meter    platform.StandMeter // nil: no stand is ever measured
+	Cfg      config.Config
+	Paths    config.Paths
+	Now      func() time.Time
 }
 
 type SubmitRequest struct {
+	NoNotify   bool              `json:"no_notify,omitempty"`
 	Name       string            `json:"name"`
 	Argv       []string          `json:"argv"`
 	Cwd        string            `json:"cwd"`
@@ -101,7 +106,11 @@ type Scheduler struct {
 	teardownLaunching map[model.ItemID]bool
 	// launchFailed holds a teardown attempt's Launch error until TeardownLaunchError
 	// is stored: the reaper keeps treating that attempt as failed and records it.
-	launchFailed map[model.ItemID]launchFailure
+	launchFailed    map[model.ItemID]launchFailure
+	cleaningSince   map[model.ItemID]time.Time
+	cleaningAlerted map[model.ItemID]bool
+	closedSince     time.Time
+	closedAlerted   bool
 }
 
 // launchFailure is the Launch error of teardown attempt attempt.
@@ -115,10 +124,15 @@ func New(d Deps) *Scheduler {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
+	if d.Route == nil {
+		d.Route = func(string, model.Audience) model.Channel { return model.ChannelNone }
+	}
 	p := d.Cfg.Pressure
 	return &Scheduler{
-		d:    d,
-		kick: make(chan struct{}, 1),
+		d:               d,
+		cleaningSince:   map[model.ItemID]time.Time{},
+		cleaningAlerted: map[model.ItemID]bool{},
+		kick:            make(chan struct{}, 1),
 		gate: admission.PressureGate{
 			CloseAt: p.CloseFullAvg10, CloseAfter: p.CloseAfter,
 			OpenBelow: p.OpenFullAvg10, OpenAfter: p.OpenAfter,
@@ -193,7 +207,7 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 		Argv: r.Argv, Cwd: r.Cwd, Env: r.Env, Limit: r.Limit, Expected: r.Expected, CPUs: r.CPUs, Timeout: r.Timeout,
 		SessionID: r.SessionID, ClientType: r.ClientType, Project: r.Project, IdemKey: r.IdemKey,
 		RequestHash: hex.EncodeToString(sum[:]), NodeID: "local", CreatedAt: now,
-		GitRev: r.GitRev, GitDirty: r.GitDirty, ParentID: r.ParentID,
+		GitRev: r.GitRev, GitDirty: r.GitDirty, ParentID: r.ParentID, NoNotify: r.NoNotify,
 	}
 	var (
 		stored  *model.Item
@@ -274,6 +288,14 @@ func (s *Scheduler) endLocked(it *model.Item, st model.State, r model.Reason, di
 // only ever reached with no processes left, it drops the env and removes the item's
 // temp dir (never its JobDir).
 func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...model.Event) error {
+	prevNotified := it.FinishNotified
+	if it.State.Terminal() && it.State != model.StateRejected && !it.IsReservation() && !it.FinishNotified {
+		evs = append(evs, s.newEvents(it, model.EventTaskFinished, it.Diagnostic, model.AudienceSession)...)
+		if it.Reason.Infra() {
+			evs = append(evs, s.newEvents(it, model.EventTaskFailedInfra, string(it.Reason)+": "+it.Diagnostic, model.AudienceOperator)...)
+		}
+		it.FinishNotified = true
+	}
 	if it.State.Terminal() {
 		it.Env = nil // values may be secrets; a terminal item never needs them
 	}
@@ -284,15 +306,21 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...mo
 		}
 	}
 	if err := s.d.Store.UpdateWithEvents(ctx, it, evs); err != nil {
+		it.FinishNotified = prevNotified
 		return err
 	}
-	if waitDone(it) {
+	if len(evs) > 0 && s.d.OnEvents != nil {
+		s.d.OnEvents()
+	}
+	{
 		if ch, ok := s.waiters[it.ID]; ok {
 			close(ch)
 			delete(s.waiters, it.ID)
 		}
 	}
 	if it.State.Terminal() {
+		delete(s.cleaningSince, it.ID)
+		delete(s.cleaningAlerted, it.ID)
 		delete(s.resultSeen, it.ID)
 		delete(s.goneSince, it.ID)
 		delete(s.lastStop, it.ID)
@@ -402,6 +430,9 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 			}
 			admitted = append(admitted, it)
 		}
+		// Admission ends the previous closed episode, even if the next head blocks.
+		s.closedSince = time.Time{}
+		s.closedAlerted = false
 		// A just-admitted item has consumed nothing yet.
 		snap.Committed.MemoryBytes += req.MemoryBytes
 		snap.Committed.CPUs += req.CPUs
@@ -416,6 +447,7 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 			}
 		}
 	}
+	s.alertAdmissionLocked(ctx, s.headID, s.headDecision, now)
 	return admitted, nil
 }
 
@@ -510,7 +542,7 @@ func (s *Scheduler) standUnconsumedLocked(ctx context.Context, it *model.Item) u
 		it.OverDeclaredNotified = true
 		detail := fmt.Sprintf("stand of reservation %s (docker project %s) uses %s, declared %s",
 			it.ID, it.DockerProject, units.FormatSize(used), units.FormatSize(it.Expected))
-		evs := newEvents(it, model.EventStandOverDeclared, detail, model.AudienceSession, model.AudienceOperator)
+		evs := s.newEvents(it, model.EventStandOverDeclared, detail, model.AudienceSession, model.AudienceOperator)
 		if err := s.persistLocked(ctx, it, evs...); err != nil {
 			slog.Error("scheduler: record stand over declared", "id", it.ID, "err", err)
 		}
@@ -683,25 +715,56 @@ func waitDone(it *model.Item) bool {
 	return it.State.Terminal()
 }
 
-// Wait blocks until id is waitDone or ctx ends.
-func (s *Scheduler) Wait(ctx context.Context, id model.ItemID) (*model.Item, error) {
-	s.mu.Lock()
-	it, err := s.d.Store.Get(ctx, id)
-	if err != nil || waitDone(it) {
+type WaitUntil string
+
+const (
+	WaitDone     WaitUntil = ""
+	WaitExpiring WaitUntil = "expiring"
+)
+
+// Wait rechecks the condition after every persisted item change.
+func (s *Scheduler) Wait(ctx context.Context, id model.ItemID, until WaitUntil) (*model.Item, error) {
+	for {
+		s.mu.Lock()
+		it, err := s.d.Store.Get(ctx, id)
+		if err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+		if until != WaitDone && until != WaitExpiring {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: unknown wait condition %q", ErrBadRequest, until)
+		}
+		done := waitDone(it)
+		if until == WaitExpiring {
+			if !it.IsReservation() {
+				s.mu.Unlock()
+				return nil, fmt.Errorf("%w: --until expiring requires a reservation", ErrBadRequest)
+			}
+			done = it.State != model.StateQueued && it.State != model.StateGranted
+			if !done {
+				done, err = s.d.Store.HasPendingClientWait(ctx, id, model.EventStandOverDeclared)
+				if err != nil {
+					s.mu.Unlock()
+					return nil, err
+				}
+			}
+		}
+		if done {
+			s.mu.Unlock()
+			return it, nil
+		}
+		ch, ok := s.waiters[id]
+		if !ok {
+			ch = make(chan struct{})
+			s.waiters[id] = ch
+		}
 		s.mu.Unlock()
-		return it, err
-	}
-	ch, ok := s.waiters[id]
-	if !ok {
-		ch = make(chan struct{})
-		s.waiters[id] = ch
-	}
-	s.mu.Unlock()
-	select {
-	case <-ch:
-		return s.d.Store.Get(ctx, id)
-	case <-ctx.Done():
-		return nil, ctx.Err()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 }
 
