@@ -432,7 +432,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]*model.Item, error) {
 	}
 	if !f.IncludeTerminal {
 		if f.WithUnacked && f.SessionID != "" {
-			q += ` AND (state NOT IN ` + terminalStates + ` OR EXISTS (SELECT 1 FROM events WHERE events.item_id=items.id AND events.session_id=items.session_id AND audience='session' AND status<>'acked'))`
+			q += ` AND (state NOT IN ` + terminalStates + ` OR EXISTS (SELECT 1 FROM events WHERE events.item_id=items.id AND events.session_id=items.session_id AND audience='session' AND channel<>'none' AND status<>'acked'))`
 		} else {
 			q += ` AND state NOT IN ` + terminalStates
 		}

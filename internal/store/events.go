@@ -210,8 +210,12 @@ func (s *Store) Ack(ctx context.Context, id string, at time.Time) (model.Event, 
 	return out, err
 }
 func (s *Store) UnackedSessionEvents(ctx context.Context, session string) ([]model.Event, error) {
-	return queryEvents(ctx, s.db, `SELECT `+eventCols+` FROM events WHERE session_id=? AND audience='session' AND status<>'acked' ORDER BY created_at,rowid`, session)
+	return queryEvents(ctx, s.db, `SELECT `+eventCols+` FROM events WHERE `+unackedSessionEvent+` ORDER BY created_at,rowid`, session)
 }
+
+// unackedSessionEvent matches a session's routed events it has not acknowledged;
+// channel 'none' (skipped, including pre-notification events) has nothing to ack.
+const unackedSessionEvent = `session_id=? AND audience='session' AND channel<>'none' AND status<>'acked'`
 func (s *Store) LastDeliveryError(ctx context.Context, ch model.Channel) (string, error) {
 	var msg string
 	e := s.db.QueryRowContext(ctx, `SELECT last_error FROM events WHERE channel=? AND last_error<>'' AND status IN ('pending','failed') ORDER BY created_at DESC,rowid DESC LIMIT 1`, string(ch)).Scan(&msg)

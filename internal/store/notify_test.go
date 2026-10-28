@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"resource-dispatcher/internal/model"
+	"strings"
 	"testing"
 	"time"
 )
@@ -211,15 +212,18 @@ func TestListWithUnacked(t *testing.T) {
 	s := openTemp(t)
 	ctx := context.Background()
 	at := time.Now().UTC()
-	for i, st := range []model.State{model.StateSucceeded, model.StateFailed, model.StateRunning} {
+	for i, st := range []model.State{model.StateSucceeded, model.StateFailed, model.StateRunning, model.StateSucceeded} {
 		it := newItem(0, at)
 		it.SessionID = "S"
 		it.State = st
 		s.InsertItem(ctx, it)
 		e := event(string(rune('a'+i)), model.ChannelClientWait, at)
 		e.ItemID = it.ID
-		if i == 1 {
+		switch i {
+		case 1:
 			e.Status = model.EventAcked
+		case 3: // nothing routes it (a cli client, or a pre-notification event): nothing to ack
+			e.Channel, e.Status = model.ChannelNone, model.EventSkipped
 		}
 		s.AddEvents(ctx, []model.Event{e})
 	}
@@ -230,5 +234,23 @@ func TestListWithUnacked(t *testing.T) {
 	evs, e := s.UnackedSessionEvents(ctx, "S")
 	if e != nil || len(evs) != 2 {
 		t.Fatal(evs, e)
+	}
+}
+func TestSessionEventsUseIndex(t *testing.T) {
+	s := openTemp(t)
+	rows, e := s.db.Query(`EXPLAIN QUERY PLAN SELECT `+eventCols+` FROM events WHERE `+unackedSessionEvent, "S")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		rows.Scan(&id, &parent, &unused, &detail)
+		plan = append(plan, detail)
+	}
+	if !strings.Contains(strings.Join(plan, "; "), "events_session") {
+		t.Fatal(plan)
 	}
 }
