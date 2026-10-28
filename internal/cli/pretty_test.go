@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
@@ -116,5 +118,18 @@ func TestTableAlignsColoredCells(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
 	if visibleLen(lines[1]) != visibleLen(lines[2]) {
 		t.Fatalf("%q", lines)
+	}
+}
+
+// A long task name must not hide which reservation the task runs in.
+func TestPrettyListKeepsParentOfLongName(t *testing.T) {
+	var b strings.Builder
+	c := &cmdCtx{stdout: &b, ui: ui{pretty: true}}
+	c.prettyList([]daemon.ItemView{{
+		ID: "fe2d5266-44a4-48c5-96b7-06ca87ae08f3", Name: "slides-wave1-final-generations-long",
+		Kind: model.KindTask, State: model.StateRunning, Within: "ea25c840-44fb-4115-9403-6fe4f13cedc8",
+	}}, false)
+	if !strings.Contains(b.String(), "⊂ ea25c840") {
+		t.Fatal(b.String())
 	}
 }

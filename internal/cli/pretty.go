@@ -133,6 +133,8 @@ func (c *cmdCtx) prettyList(views []daemon.ItemView, all bool) {
 		if v.Kind == model.KindReservation {
 			name = strings.TrimSpace("▣ " + name)
 		}
+		// Truncate the name alone so the reservation a task runs in stays visible.
+		name = truncate(name, 32)
 		if v.Within != "" {
 			name = strings.TrimSpace(name + " ⊂ " + shortID(v.Within))
 		}
@@ -153,7 +155,7 @@ func (c *cmdCtx) prettyList(views []daemon.ItemView, all bool) {
 		if v.MemoryPeak > 0 && v.Kind == model.KindTask {
 			mem = u.dim(size(v.MemoryPeak)+" /") + " " + mem
 		}
-		t.add(u.dim(shortID(v.ID)), truncate(name, 32), u.stateText(v.State, v.Reason), mem, fmt.Sprint(v.CPUs), fmtSecs(v.WaitSeconds), fmtSecs(v.RunSeconds), note)
+		t.add(u.dim(shortID(v.ID)), name, u.stateText(v.State, v.Reason), mem, fmt.Sprint(v.CPUs), fmtSecs(v.WaitSeconds), fmtSecs(v.RunSeconds), note)
 	}
 	t.write(u, w)
 }
