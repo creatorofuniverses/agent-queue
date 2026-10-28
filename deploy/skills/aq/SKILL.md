@@ -3,8 +3,8 @@ name: aq
 description: Use before running heavy commands on this host — pytest with -n, docker compose stands, builds, long test suites — to queue work with memory and CPU budgets and receive its result without polling.
 ---
 
-Use `aq` for work likely to compete for host memory or CPU. Choose explicit
-memory and time limits based on the workload; small commands can run directly.
+Use `aq` for work likely to compete for host memory or CPU. Choose a time limit
+and explicit memory or a profile with usable history; small commands can run directly.
 If the socket is inaccessible from a sandbox, request the normal approval to
 run the particular `aq` command on the host. A ping grants no new permission.
 
@@ -14,6 +14,16 @@ Submit commands as argv. To expand AQ_CPUS inside the task, quote the shell:
 aq submit --memory 4G --cpus 4 --timeout 30m --name tests -- \
   bash -lc 'pytest -n "$AQ_CPUS" tests'
 ```
+
+Give repeated workloads a stable `--name` (or explicit `--profile`). The default
+profile shares history across worktrees of the same repository. After the first
+usable run, you may omit `--memory`; aq derives the limit and expected memory
+from history. OOM/timeouts/cancellations never automatically raise the limit.
+Before a heavy run, use `aq estimate --name tests --cpus 4 --timeout 30m` (or
+explicit `--memory`) and decide whether waiting is worthwhile. Estimates can
+be wrong. If everything is slow, inspect `aq top` for host memory, pressure,
+physical use, commitments and the blocked queue head. `aq profile show P`
+explains a profile; `aq stats --since 7d` summarizes its operational history.
 
 If tests start containers (including testcontainers), or run against a stand,
 reserve both the external stand memory and a task budget first:

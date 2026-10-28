@@ -26,7 +26,7 @@ Codex MCP 0.164 does not propagate session identity by default: pass `client` an
 `session_id` from the invoking session, or intentionally set `no_notify`.
 MCP `cwd` and `teardown_file` must be absolute; it captures the MCP process's
 environment, not a fresh shell's. `queue_logs` allows 1..2000 tail lines (default
-200), without follow, and at most 256 KiB of the newest output. MCP currently has ten queue tools; estimate is a later plan.
+200), without follow, and at most 256 KiB of the newest output. MCP has eleven queue tools, including `queue_estimate`.
 
 `aq wait ID` blocks on the socket until a task is terminal or a reservation
 leaves QUEUED. `aq wait RES_ID --until expiring` returns when it leaves
@@ -53,3 +53,29 @@ Only PATH/HOME/LANG/LC_*/VIRTUAL_ENV and explicit --env pairs are captured;
 reserve also captures DOCKER_HOST/DOCKER_CONTEXT/DOCKER_CONFIG. Notifications
 never embed env values, teardown scripts or log contents. Session death is not
 detected in v1. The soft hook reminds about heavy commands; it does not block.
+
+
+Profiles: `--profile P` is explicit; otherwise `--name N` derives a profile from
+`--project` or the main repository root (shared across worktrees), then `:N`.
+`aq profile list [--json]` and `aq profile show P [--json]` expose histories and
+estimates. An initial run needs `--memory`; later runs can use history. Limits
+use max usable peak × margin, expected uses pooled memory samples, duration
+uses the configured percentile capped by timeout. OOM does not increase limits.
+
+`aq estimate [--memory S] [--expected S] [--name N|--profile P] [--project P]
+[--cpus N] [--priority P] [--timeout D] [--json]` forecasts without saving an item.
+It reports starts_now/backfill, queue position, expected_start, blocked_by,
+confidence, and the sources of memory/duration estimates. MCP `queue_estimate`
+accepts memory/expected/timeout/priority/profile/name/cwd/project strings and
+integer cpus, with no session identity requirement. Supply memory or a profile
+with usable history; timeout is optional. Backfill uses the same admission pass.
+
+`aq top [--json]` is one memory/pressure/queue snapshot. Physical categories
+agents/docker/tasks/other and scheduler commitments are separate views.
+`aq stats [--since 7d] [--profile P] [--json]` summarizes history;
+`aq stats export --since 7d --format jsonl|csv [--table T]` exports raw rows
+(items/runs/host/incidents/events/hook). CSV requires a table. No commands,
+env, cwd, session IDs or delivery error text are exported. Logs of terminal
+items expire after 7d or oldest first above 5G; active logs are preserved.
+A pruned item has logs_pruned=true; logs exits 1 and result reports removal.
+History lasts 90d, host samples 30d (10-minute rows after 2d).

@@ -272,6 +272,7 @@ func TestE2ENotificationRSS(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
+	measureDaemonCPU(t, h.daemon.Process.Pid, "idle")
 	baseline := rss()
 	h.killDaemon()
 	st, e := store.Open(filepath.Join(h.dir, "state", "aq.db"))
@@ -303,5 +304,24 @@ func TestE2ENotificationRSS(t *testing.T) {
 	if e != nil || n != 10 {
 		t.Fatal(n, e)
 	}
-	t.Logf("daemon RSS idle=%s KiB; with 10 pending webhook events + one in flight=%s KiB", baseline, rss())
+	holder := h.submit([]string{"--memory", "64M", "--cpus", "4", "--timeout", "2m"}, "sleep", "90")
+	h.waitState(holder, model.StateRunning, 10*time.Second)
+	for i := 0; i < 10; i++ {
+		h.submit([]string{"--memory", "64M", "--timeout", "1m"}, "true")
+	}
+	eventually(t, 5*time.Second, "ten queued tasks", func() bool {
+		vs, e := h.list()
+		if e != nil {
+			return false
+		}
+		n := 0
+		for _, v := range vs {
+			if v.State == model.StateQueued {
+				n++
+			}
+		}
+		return n == 10
+	})
+	measureDaemonCPU(t, h.daemon.Process.Pid, "10 queued tasks + 10 pending webhook events")
+	t.Logf("daemon RSS idle=%s KiB; with 10 queued tasks + 10 pending webhook events + one in flight=%s KiB", baseline, rss())
 }
