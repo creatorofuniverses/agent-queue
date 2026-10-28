@@ -147,3 +147,29 @@ func TestPlanPassPrefixThenBackfill(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+// Codex branch review r2: with one teardown slot, a backfilled reservation that
+// expires first would take the slot the head's holder needs.
+func TestPlanPassReservationWaitsForTeardownSlot(t *testing.T) {
+	now := time.Now()
+	a := holder(8*fg, now.Add(15*time.Minute))
+	a.Teardown = true
+	q := []Waiting{wait(10*fg, time.Hour), wait(5*fg, 14*time.Minute)}
+	q[1].ExtraOnly = true
+	for _, tc := range []struct {
+		slots int
+		admit bool
+	}{{0, false}, {1, false}, {2, true}} {
+		pol := fp()
+		pol.TeardownSlots = tc.slots
+		p := PlanPass(pol, fsnap(), []Holder{a}, q, now, true)
+		if (len(p.Admitted) == 1) != tc.admit {
+			t.Fatal(tc, p)
+		}
+	}
+	// The head waits on no teardown: a task holder frees its memory.
+	pol := fp()
+	pol.TeardownSlots = 1
+	if p := PlanPass(pol, fsnap(), []Holder{holder(8*fg, now.Add(15*time.Minute))}, q, now, true); len(p.Admitted) != 1 {
+		t.Fatal(p)
+	}
+}

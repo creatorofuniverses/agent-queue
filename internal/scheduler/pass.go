@@ -75,7 +75,7 @@ func (s *Scheduler) holdersLocked(items []*model.Item, now time.Time) []admissio
 		if it.ParentID != "" || it.State == model.StateQueued || it.State.Terminal() {
 			continue
 		}
-		h := admission.Holder{ID: it.ID, Res: it.Committed(), Live: s.holderLive[it.ID]}
+		h := admission.Holder{ID: it.ID, Res: it.Committed(), Live: s.holderLive[it.ID], Teardown: it.IsReservation()}
 		w := s.waitingOf(it)
 		h.FromHistory = w.FromHistory
 		h.End = now

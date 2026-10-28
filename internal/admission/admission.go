@@ -20,6 +20,9 @@ type Policy struct {
 	Pool         model.Resources
 	ReserveFloor uint64
 	MinDiskFree  uint64
+	// TeardownSlots is teardown_concurrency; reservation backfill must not make
+	// a teardown the head waits on queue for a slot. Zero means one slot.
+	TeardownSlots int
 }
 
 type Snapshot struct {

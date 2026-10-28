@@ -58,6 +58,8 @@ type Holder struct {
 	Live               uint64
 	End                time.Time
 	Never, FromHistory bool
+	// Teardown: the holder releases through a teardown slot (a reservation).
+	Teardown bool
 }
 type Waiting struct {
 	ID                     model.ItemID
@@ -137,6 +139,24 @@ type Pass struct {
 	Holders      []Holder
 }
 
+// teardownSlotFree reports whether one more reservation can be backfilled without
+// its teardown delaying a teardown the head waits on: either the head waits on
+// none before the shadow, or every pending teardown, the new one included, gets a
+// slot at once (a user release can start any of them early).
+func teardownSlotFree(p Policy, holders []Holder, shadow time.Time) bool {
+	pending, needed := 0, false
+	for _, h := range holders {
+		if !h.Teardown || h.Never {
+			continue
+		}
+		pending++
+		if !h.End.After(shadow) {
+			needed = true
+		}
+	}
+	return !needed || pending+1 <= max(p.TeardownSlots, 1)
+}
+
 func PlanPass(p Policy, s Snapshot, holders []Holder, queue []Waiting, now time.Time, backfill bool) Pass {
 	out := Pass{Backfilled: make([]bool, len(queue)), Head: -1, HeadDecision: Decision{Admit: true}, After: s, Holders: slices.Clone(holders)}
 	admit := func(i int, bf bool) {
@@ -146,7 +166,7 @@ func PlanPass(p Policy, s Snapshot, holders []Holder, queue []Waiting, now time.
 		out.After.Committed.MemoryBytes = satAdd(out.After.Committed.MemoryBytes, q.Res.MemoryBytes)
 		out.After.Committed.CPUs += q.Res.CPUs
 		out.After.Unconsumed = satAdd(out.After.Unconsumed, q.Res.MemoryBytes)
-		out.Holders = append(out.Holders, Holder{ID: q.ID, Res: q.Res, Live: q.Res.MemoryBytes, End: now.Add(q.Duration), FromHistory: q.FromHistory})
+		out.Holders = append(out.Holders, Holder{ID: q.ID, Res: q.Res, Live: q.Res.MemoryBytes, End: now.Add(q.Duration), FromHistory: q.FromHistory, Teardown: q.ExtraOnly})
 	}
 	for i, q := range queue {
 		dec := Decide(p, out.After, q.Res)
@@ -167,6 +187,9 @@ func PlanPass(p Policy, s Snapshot, holders []Holder, queue []Waiting, now time.
 	for i := out.Head + 1; i < len(queue); i++ {
 		q := queue[i]
 		if !Decide(p, out.After, q.Res).Admit {
+			continue
+		}
+		if q.ExtraOnly && !teardownSlotFree(p, out.Holders, shadow) {
 			continue
 		}
 		byTime := !q.ExtraOnly && !now.Add(q.Duration).After(shadow)

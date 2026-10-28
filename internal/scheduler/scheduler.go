@@ -165,9 +165,10 @@ func New(d Deps) *Scheduler {
 
 func (s *Scheduler) policy(memTotal uint64) admission.Policy {
 	return admission.Policy{
-		Pool:         model.Resources{MemoryBytes: s.d.Cfg.PoolMemory, CPUs: s.d.Cfg.PoolCPUs},
-		ReserveFloor: s.d.Cfg.ReserveFloor(memTotal),
-		MinDiskFree:  s.d.Cfg.MinDiskFree,
+		Pool:          model.Resources{MemoryBytes: s.d.Cfg.PoolMemory, CPUs: s.d.Cfg.PoolCPUs},
+		ReserveFloor:  s.d.Cfg.ReserveFloor(memTotal),
+		MinDiskFree:   s.d.Cfg.MinDiskFree,
+		TeardownSlots: s.d.Cfg.Reservations.TeardownConcurrency,
 	}
 }
 
