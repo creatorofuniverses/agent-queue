@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"resource-dispatcher/internal/client"
+	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/model"
 )
@@ -78,7 +79,17 @@ func cmdExtend(c *cmdCtx, args []string) error {
 	if *ttl == "" || err != nil || d < time.Second {
 		return usagef("extend: --ttl is required and must be a duration of at least 1s")
 	}
-	return itemOp(c, "extend", map[string]any{"id": id, "ttl_seconds": int64(d / time.Second)}, *asJSON)
+	if err := itemOp(c, "extend", map[string]any{"id": id, "ttl_seconds": int64(d / time.Second)}, *asJSON); err != nil {
+		return err
+	}
+	// The next expiry warning only reaches a client-wait session through a fresh waiter.
+	cfg := c.clientConfig()
+	if who, err := client.DetectIdentity(cfg.Agents, c.env, "", ""); err == nil {
+		if a, ok := cfg.Agent(who.ClientType); ok && a.Delivery == config.DeliveryClientWait {
+			fmt.Fprintf(c.stderr, "hint: to get the next expiry warning, run in background: aq wait %s --until expiring\n", id)
+		}
+	}
+	return nil
 }
 
 func cmdRelease(c *cmdCtx, args []string) error {

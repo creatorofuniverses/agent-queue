@@ -116,6 +116,12 @@ func TestSubmitToolBuildsSameArgsAsCLI(t *testing.T) {
 	}
 }
 func TestMCPIdentityRequired(t *testing.T) {
+	// A Claude session started from a Codex shell sees both variables: same gate as no identity.
+	for _, env := range []map[string]string{nil, {"CODEX_THREAD_ID": "parent", "CLAUDE_CODE_SESSION_ID": "mine"}} {
+		testMCPIdentityRequired(t, env)
+	}
+}
+func testMCPIdentityRequired(t *testing.T, env map[string]string) {
 	for _, tc := range []struct {
 		c, s   string
 		no, ok bool
@@ -129,10 +135,18 @@ func TestMCPIdentityRequired(t *testing.T) {
 		}
 		args["no_notify"] = tc.no
 		called := false
-		out := serveText(t, tool("queue_submit", args), func(context.Context, string, any, any) error { called = true; return nil }, nil)
+		var sent daemon.SubmitArgs
+		out := serveText(t, tool("queue_submit", args), func(_ context.Context, _ string, a, _ any) error {
+			called = true
+			sent = a.(daemon.SubmitArgs)
+			return nil
+		}, env)
 		r := out[0]["result"].(map[string]any)
 		if called != tc.ok || (r["isError"] == true) == tc.ok {
-			t.Fatal(tc, called, r)
+			t.Fatal(env, tc, called, r)
+		}
+		if tc.c != "" && (sent.ClientType != tc.c || sent.SessionID != tc.s) {
+			t.Fatal(env, tc, sent)
 		}
 		if !tc.ok && !strings.Contains(r["content"].([]any)[0].(map[string]any)["text"].(string), "session identity unknown") {
 			t.Fatal(r)

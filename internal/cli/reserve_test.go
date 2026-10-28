@@ -159,9 +159,14 @@ func TestExtendReleaseTeardownCommands(t *testing.T) {
 	h := newHarness(t)
 	h.startDaemonCfg(t, bigPool)
 	res := h.view(t, "reserve", "--memory", "1G", "--ttl", "1h", "--teardown", h.script(t, "x"), "--json")
-	if code, _, e := h.run("extend", string(res.ID), "--ttl", "2h"); code != 0 {
+	if code, _, e := h.run("extend", string(res.ID), "--ttl", "2h"); code != 0 || strings.Contains(e, "hint:") {
 		t.Fatalf("extend: %d %s", code, e)
 	}
+	h.vars["CLAUDE_CODE_SESSION_ID"] = "c"
+	if code, _, e := h.run("extend", string(res.ID), "--ttl", "2h"); code != 0 || !strings.Contains(e, "aq wait "+string(res.ID)+" --until expiring") {
+		t.Fatalf("extend for a client-wait session: %d %s", code, e)
+	}
+	delete(h.vars, "CLAUDE_CODE_SESSION_ID")
 	if code, _, _ := h.run("extend", string(res.ID)); code != 64 {
 		t.Fatalf("extend without ttl: %d", code)
 	}

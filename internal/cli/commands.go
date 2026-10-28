@@ -230,8 +230,8 @@ func cmdList(c *cmdCtx, args []string) error {
 	} else if len(pos) > 0 {
 		return usagef("list: unexpected argument %q", pos[0])
 	}
-	if *mine {
-		id, err := client.DetectIdentity(c.clientConfig().Agents, c.env, "", *session)
+	if *mine && *session == "" {
+		id, err := client.DetectIdentity(c.clientConfig().Agents, c.env, "", "")
 		if err != nil {
 			return err
 		}
@@ -330,8 +330,11 @@ func cmdWait(c *cmdCtx, args []string) error {
 		line += fmt.Sprintf(" event=%s:%s", e.ID, e.Kind)
 	}
 	fmt.Fprintln(c.stdout, line)
-	if *until == "expiring" && v.State == model.StateGranted {
+	switch {
+	case *until == "expiring" && v.State == model.StateGranted:
 		fmt.Fprintf(c.stderr, "hint: reservation still held; re-run in background: aq wait %s --until expiring\n", v.ID)
+	case *until == "expiring" && v.State == model.StateExpiring:
+		fmt.Fprintf(c.stderr, "hint: after aq extend, re-run in background: aq wait %s --until expiring\n", v.ID)
 	}
 	if code := ExitCodeFor(v); code != exitOK {
 		return &exitError{code: code}

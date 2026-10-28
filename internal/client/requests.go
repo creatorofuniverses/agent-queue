@@ -14,10 +14,14 @@ import (
 	"unicode/utf8"
 )
 
-type UsageError struct{ Message string }
+type UsageError struct {
+	Message string
+	Err     error // optional cause, for errors.Is
+}
 
 func (e *UsageError) Error() string        { return e.Message }
-func usagef(format string, a ...any) error { return &UsageError{fmt.Sprintf(format, a...)} }
+func (e *UsageError) Unwrap() error        { return e.Err }
+func usagef(format string, a ...any) error { return &UsageError{Message: fmt.Sprintf(format, a...)} }
 
 type SubmitOptions struct {
 	Cwd, Name, Memory, Expected, Timeout, Priority, Key, Project, Within string

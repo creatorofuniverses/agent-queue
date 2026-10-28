@@ -192,15 +192,18 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 	switch name {
 	case "queue_submit", "queue_reserve":
 		auto, err := client.DetectIdentity(agents, env, "", "")
-		if err != nil {
+		ambiguous := errors.Is(err, client.ErrAmbiguousIdentity)
+		if err != nil && !ambiguous {
 			return toolError(err)
 		}
 		if auto.SessionID == "" && !a.NoNotify && (a.Client == "" || a.SessionID == "") {
 			return toolError(errors.New(identityUnknown))
 		}
-		id, err := client.DetectIdentity(agents, env, a.Client, a.SessionID)
-		if err != nil {
-			return toolError(err)
+		id := client.Identity{ClientType: "cli", SessionID: a.SessionID} // ambiguous env with no_notify
+		if !ambiguous || a.Client != "" {
+			if id, err = client.DetectIdentity(agents, env, a.Client, a.SessionID); err != nil {
+				return toolError(err)
+			}
 		}
 		cpus := 0
 		if name == "queue_submit" {
@@ -246,8 +249,8 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 		args = map[string]string{"event_id": a.EventID}
 	case "queue_list":
 		op = "list"
-		if a.Mine {
-			id, err := client.DetectIdentity(agents, env, "", a.SessionID)
+		if a.Mine && a.SessionID == "" {
+			id, err := client.DetectIdentity(agents, env, "", "")
 			if err != nil {
 				return toolError(err)
 			}

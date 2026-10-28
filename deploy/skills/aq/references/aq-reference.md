@@ -17,13 +17,16 @@ removed immediately. `extend --ttl` sets a minimum remaining lifetime without
 accumulating repeats.
 
 Notification identity: `--client NAME --session S` overrides discovery. Otherwise
-first configured nonempty identity_env wins (defaults: Codex, then Claude).
+the one configured adapter with a nonempty identity_env is used (Codex
+CODEX_THREAD_ID, Claude CLAUDE_CODE_SESSION_ID); when several are set the
+environment is ambiguous and submit/reserve need an explicit client.
+Claude Code passes CLAUDE_CODE_SESSION_ID to `aq mcp` itself.
 `--no-notify` suppresses session events, while operator alerts remain enabled.
 Codex MCP 0.164 does not propagate session identity by default: pass `client` and
 `session_id` from the invoking session, or intentionally set `no_notify`.
 MCP `cwd` and `teardown_file` must be absolute; it captures the MCP process's
 environment, not a fresh shell's. `queue_logs` allows 1..2000 tail lines (default
-200), without follow. MCP currently has ten queue tools; estimate is a later plan.
+200), without follow, and at most 256 KiB of the newest output. MCP currently has ten queue tools; estimate is a later plan.
 
 `aq wait ID` blocks on the socket until a task is terminal or a reservation
 leaves QUEUED. `aq wait RES_ID --until expiring` returns when it leaves

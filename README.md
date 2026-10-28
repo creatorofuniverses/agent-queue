@@ -315,10 +315,12 @@ aq release --force "$id"   # стенд убран вручную: освобо�
 
 ## Уведомления
 
-Клиент обнаруживает сессию по первому настроенному адаптеру с непустой
-`identity_env`: по умолчанию Codex (`CODEX_THREAD_ID`, push через `codex queue`),
-затем Claude (`CLAUDE_CODE_SESSION_ID`, client-wait через фоновый `aq wait`).
-`--client NAME --session S` задают их явно; `--no-notify` у submit/reserve
+Клиент обнаруживает сессию по настроенному адаптеру с непустой `identity_env`:
+Codex (`CODEX_THREAD_ID`, push через `codex queue`) или Claude
+(`CLAUDE_CODE_SESSION_ID`, client-wait через фоновый `aq wait`). Если непусты
+переменные нескольких адаптеров (сессия запущена из шелла другого агента и
+унаследовала его переменную), aq не угадывает: submit/reserve завершаются с кодом
+64, MCP требует явные `client` и `session_id`. `--client NAME --session S` задают их явно; `--no-notify` у submit/reserve
 отключает только уведомления сессии. Без обнаруженной сессии CLI работает как
 `cli`. Указанный push-адаптер без сессии — ошибка; отсутствующая в PATH демона
 команда доставки отклоняет заявку до сохранения. PATH сервиса включает

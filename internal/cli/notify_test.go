@@ -72,6 +72,26 @@ func TestReserveSendsIdentity(t *testing.T) {
 		t.Fatal(code, err)
 	}
 }
+func TestSubmitAmbiguousIdentity(t *testing.T) {
+	h := socketHarness(t, func(ctx context.Context, op string, raw json.RawMessage, w protocol.StreamWriter) (any, error) {
+		var a daemon.SubmitArgs
+		json.Unmarshal(raw, &a)
+		if a.ClientType != "claude" || a.SessionID != "mine" {
+			t.Error(a)
+		}
+		return daemon.ItemView{ID: "i"}, nil
+	})
+	h.vars["CODEX_THREAD_ID"] = "parent"
+	h.vars["CLAUDE_CODE_SESSION_ID"] = "mine"
+	code, _, err := h.run("submit", "--memory", "64M", "--timeout", "1m", "--", "true")
+	if code != 64 || !strings.Contains(err, "--client NAME") {
+		t.Fatal(code, err)
+	}
+	code, _, err = h.run("submit", "--memory", "64M", "--timeout", "1m", "--client", "claude", "--", "true")
+	if code != 0 {
+		t.Fatal(code, err)
+	}
+}
 func TestListMineShowsEvents(t *testing.T) {
 	h := socketHarness(t, func(ctx context.Context, op string, raw json.RawMessage, w protocol.StreamWriter) (any, error) {
 		var a map[string]any
@@ -90,6 +110,10 @@ func TestListMineShowsEvents(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "EVENT") || !strings.Contains(out, "task_finished") {
 		t.Fatal(code, out, err)
 	}
+	h.vars["CODEX_THREAD_ID"] = "parent" // an explicit session needs no detection
+	if code, _, err = h.run("list", "--mine", "--session", "c"); code != 0 {
+		t.Fatal(code, err)
+	}
 }
 func TestWaitUntilExpiringAndEventIDs(t *testing.T) {
 	h := socketHarness(t, func(ctx context.Context, op string, raw json.RawMessage, w protocol.StreamWriter) (any, error) {
@@ -101,7 +125,7 @@ func TestWaitUntilExpiringAndEventIDs(t *testing.T) {
 		return daemon.ItemView{ID: "r", Kind: model.KindReservation, State: model.StateExpiring, Events: []daemon.EventView{{ID: "e", Kind: model.EventReservationExpiring}}}, nil
 	})
 	code, out, err := h.run("wait", "r", "--until", "expiring")
-	if code != 0 || !strings.Contains(out, "event=e:reservation_expiring") {
+	if code != 0 || !strings.Contains(out, "event=e:reservation_expiring") || !strings.Contains(err, "after aq extend, re-run in background: aq wait r --until expiring") {
 		t.Fatal(code, out, err)
 	}
 }
