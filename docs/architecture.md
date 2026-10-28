@@ -188,7 +188,7 @@ There are three delivery paths:
 |---|---|
 | Push | The daemon runs the configured command to wake an agent session. |
 | Client wait | The agent harness resumes the session when a background `aq wait` finishes. |
-| Operator webhook | The daemon posts alerts to a configured HTTP endpoint. |
+| Operator webhook | The daemon posts alerts to a configured HTTP endpoint, as its own JSON or as a Gong request for Telegram. |
 
 A crash after delivery but before recording success can cause a duplicate with
 the same event ID. `aq ack` records that the agent handled an event; it is separate

@@ -206,3 +206,29 @@ func TestWebhookRedirectIsNotDelivery(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+func TestWebhookGongFormat(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(token, []byte("gong-api\n"), 0600)
+	var got map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer gong-api" || r.Header.Get("Content-Type") != "application/json" {
+			t.Error(r.Header)
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer s.Close()
+	m := message()
+	m.Event.Kind = model.EventTeardownFailed
+	m.Event.Detail = "script exited 1: <stderr> & more"
+	d := NewWebhookDeliverer(config.WebhookConfig{URL: s.URL, TokenFile: token, Timeout: time.Second, Format: config.WebhookFormatGong}, nil)
+	if e := d.Deliver(context.Background(), m); e != nil {
+		t.Fatal(e)
+	}
+	// Gong rejects unknown fields: exactly these three.
+	msg, _ := got["message"].(string)
+	if len(got) != 3 || got["level"] != "error" || got["category"] != "teardown_failed" ||
+		!strings.HasPrefix(msg, "<b>aq · teardown_failed: n1</b>") || !strings.Contains(msg, "&lt;stderr&gt; &amp; more") || strings.Contains(msg, "aq ack") {
+		t.Fatal(got)
+	}
+}

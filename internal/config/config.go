@@ -46,7 +46,16 @@ type NotifyConfig struct{ RetryMin, RetryMax, DeliveryTimeout, GiveUpAfter, Admi
 type WebhookConfig struct {
 	URL, TokenFile string
 	Timeout        time.Duration
+	// Format is the request body: "aq" (the event as JSON) or "gong"
+	// (a Gong /notify request that Gong relays to Telegram).
+	Format string
 }
+
+const (
+	WebhookFormatAQ   = "aq"
+	WebhookFormatGong = "gong"
+)
+
 type HookConfig struct{ Patterns []string }
 
 func (c Config) Agent(name string) (AgentConfig, bool) {
@@ -105,7 +114,7 @@ func Default() Config {
 		Stats:               StatsConfig{30 * time.Second, []string{"claude", "codex"}},
 		Agents:              []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}},
 		Notify:              NotifyConfig{time.Second, 5 * time.Minute, 30 * time.Second, 24 * time.Hour, 10 * time.Minute, 5 * time.Minute},
-		Webhook:             WebhookConfig{Timeout: 10 * time.Second},
+		Webhook:             WebhookConfig{Timeout: 10 * time.Second, Format: WebhookFormatAQ},
 		Hook:                HookConfig{Patterns: []string{`(^|[\s;&|(])(pytest|py\.test)\b.*\s(-n|--numprocesses)(\s|=)`, `(^|[\s;&|(])docker\s+compose\b.*\s(up|run)\b`, `(^|[\s;&|(])docker-compose\b.*\s(up|run)\b`, `(^|[\s;&|(])docker\s+run\b`}},
 		PoolMemory:          16 * gib,
 		PoolCPUs:            16,
@@ -173,6 +182,7 @@ type rawConfig struct {
 		URL       *string `toml:"url"`
 		TokenFile *string `toml:"token_file"`
 		Timeout   *string `toml:"timeout"`
+		Format    *string `toml:"format"`
 	} `toml:"webhook"`
 	Hook struct {
 		Patterns *[]string `toml:"patterns"`
@@ -294,6 +304,7 @@ func Load(path string) (Config, error) {
 	}
 	str(raw.Webhook.URL, &c.Webhook.URL)
 	str(raw.Webhook.TokenFile, &c.Webhook.TokenFile)
+	str(raw.Webhook.Format, &c.Webhook.Format)
 	if raw.Hook.Patterns != nil {
 		c.Hook.Patterns = *raw.Hook.Patterns
 	}
@@ -474,6 +485,9 @@ func (c Config) validateNotify() error {
 		if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("webhook.url must be http(s) with a host")
 		}
+	}
+	if c.Webhook.Format != WebhookFormatAQ && c.Webhook.Format != WebhookFormatGong {
+		return fmt.Errorf("webhook.format must be aq or gong")
 	}
 	if c.Webhook.TokenFile != "" && !filepath.IsAbs(c.Webhook.TokenFile) {
 		return fmt.Errorf("webhook.token_file must be absolute")

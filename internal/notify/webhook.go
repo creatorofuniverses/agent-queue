@@ -26,6 +26,9 @@ func NewWebhookDeliverer(w config.WebhookConfig, client *http.Client) Deliverer 
 }
 func (d *webhookDeliverer) Deliver(ctx context.Context, m Message) error {
 	body, err := WebhookBody(m)
+	if d.cfg.Format == config.WebhookFormatGong {
+		body, err = GongBody(m)
+	}
 	if err != nil {
 		return err
 	}

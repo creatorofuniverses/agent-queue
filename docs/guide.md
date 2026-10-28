@@ -546,6 +546,21 @@ logged. Thresholds and timeouts are in `[notify]` of the example config.
 `aq doctor` shows `ADAPTER_UNAVAILABLE`, `WEBHOOK_FAILING`, and also a disabled
 webhook.
 
+To get the alerts in Telegram, run [Gong](https://github.com/creatorofuniverses/gong)
+with its own bot and set `format = "gong"`: aq then sends Gong's `/notify`
+request instead of its own JSON — an HTML message (kind, item, state, detail and
+`aq result ID`), `level` by severity (`error` for failed teardowns and
+infrastructure failures, `warning` for closed admission, forced releases and
+oversized stands) and the event kind as `category`. Put Gong's `api_token` in
+`token_file`.
+
+```toml
+[webhook]
+url = "http://127.0.0.1:8082/notify"
+token_file = "/home/USER/.config/agent-queue/gong-token"
+format = "gong"
+```
+
 ## MCP
 
 The same binary works as a stdio MCP server; the daemon must be started

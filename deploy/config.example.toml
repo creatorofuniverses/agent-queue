@@ -72,6 +72,9 @@ delivery = "client-wait"
 url = ""
 token_file = ""
 timeout = "10s"
+# Request body: "aq" (the event as JSON) or "gong" (a Gong /notify request that
+# Gong relays to Telegram; put Gong's api_token in token_file).
+format = "aq"
 
 [hook]
 # Soft hints: parallel pytest, compose and docker run.

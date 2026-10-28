@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"html"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -93,4 +94,54 @@ func WebhookBody(m Message) ([]byte, error) {
 		b.ClientType = it.ClientType
 	}
 	return json.Marshal(b)
+}
+
+// GongBody is a Gong /notify request: an HTML message for a person reading
+// Telegram, the event kind as the category and a level by severity.
+func GongBody(m Message) ([]byte, error) {
+	e := m.Event
+	title := string(e.Kind)
+	var lines []string
+	if it := m.Item; it != nil {
+		name := it.Name
+		if name == "" {
+			name = string(it.Kind)
+		}
+		title += ": " + name
+		st := string(it.State)
+		if it.Reason != "" && !strings.EqualFold(string(it.Reason), st) {
+			st += "/" + string(it.Reason)
+		}
+		if it.Project != "" {
+			st += " · " + it.Project
+		}
+		lines = append(lines, html.EscapeString(st))
+	}
+	if e.Detail != "" {
+		lines = append(lines, html.EscapeString(truncate(e.Detail, 3000)))
+	}
+	if it := m.Item; it != nil {
+		lines = append(lines, "<code>aq result "+html.EscapeString(string(it.ID))+"</code>")
+	}
+	msg := "<b>aq · " + html.EscapeString(title) + "</b>"
+	if len(lines) > 0 {
+		msg += "\n" + strings.Join(lines, "\n")
+	}
+	return json.Marshal(struct {
+		Message  string `json:"message"`
+		Level    string `json:"level"`
+		Category string `json:"category"`
+	}{msg, gongLevel(e.Kind), string(e.Kind)})
+}
+
+func gongLevel(k model.EventKind) string {
+	switch k {
+	case model.EventTaskFailedInfra, model.EventCleaningStuck, model.EventDeliveryFailed, model.EventTeardownFailed, model.EventTeardownUnknown:
+		return "error"
+	case model.EventAdmissionClosed, model.EventReservationForceReleased, model.EventStandOverDeclared, model.EventReservationExpiring:
+		return "warning"
+	case model.EventTeardownSucceeded, model.EventReservationGranted:
+		return "success"
+	}
+	return "info"
 }

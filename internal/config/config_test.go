@@ -392,3 +392,20 @@ func TestValidatePlan4(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhookFormat(t *testing.T) {
+	c := Default()
+	if c.Webhook.Format != WebhookFormatAQ {
+		t.Fatal(c.Webhook.Format)
+	}
+	path := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(path, []byte("[webhook]\nurl = \"http://127.0.0.1:8082/notify\"\nformat = \"gong\"\n"), 0o600)
+	c, err := Load(path)
+	if err != nil || c.Webhook.Format != WebhookFormatGong {
+		t.Fatal(c.Webhook, err)
+	}
+	c.Webhook.Format = "slack"
+	if err := c.Validate(31*gib, 20); err == nil || !strings.Contains(err.Error(), "webhook.format") {
+		t.Fatal(err)
+	}
+}

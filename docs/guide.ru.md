@@ -521,6 +521,21 @@ reason, project, session_id, client_type, detail, text, created_at` (RFC3339).
 Пороги и таймауты — в `[notify]` примера конфига. `aq doctor` показывает
 `ADAPTER_UNAVAILABLE`, `WEBHOOK_FAILING`, а также отключённый webhook.
 
+Чтобы получать тревоги в Telegram, запустите [Gong](https://github.com/creatorofuniverses/gong)
+с отдельным ботом и задайте `format = "gong"`: aq отправляет запрос Gong
+`/notify` вместо своего JSON — HTML-сообщение (тип, элемент, состояние, деталь и
+`aq result ID`), `level` по серьёзности (`error` — неудачное снятие и
+инфраструктурные сбои, `warning` — закрытый допуск, принудительное освобождение,
+стенд больше заявленного) и тип события в `category`. `api_token` Gong кладётся
+в `token_file`.
+
+```toml
+[webhook]
+url = "http://127.0.0.1:8082/notify"
+token_file = "/home/USER/.config/agent-queue/gong-token"
+format = "gong"
+```
+
 ## MCP
 
 Один бинарник работает как stdio MCP-сервер; демон должен быть запущен отдельно.
