@@ -226,8 +226,8 @@ func TestPriorityOrder(t *testing.T) {
 	}
 }
 
-func TestHeadOfLineNoBackfill(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.PoolMemory = 16 * gib })
+func TestHeadOfLineBackfillDisabled(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.PoolMemory = 16 * gib; c.Scheduler.Backfill = false })
 	running := e.submit(t, e.req(8*gib))
 	e.tick(t)
 	e.wantState(t, running.ID, model.StateRunning, model.ReasonNone)

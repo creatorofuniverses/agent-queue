@@ -118,6 +118,9 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 	}
 	fmt.Fprintf(w, "state:     %s\n", state)
 	fmt.Fprintf(w, "priority:  %s\n", v.Priority)
+	if v.State == model.StateQueued {
+		fmt.Fprintf(w, "expected start: %s\n", startText(v.ExpectedStart))
+	}
 	fmt.Fprintf(w, "memory:    %s limit, %s expected, %s peak\n",
 		units.FormatSize(v.MemoryLimit), units.FormatSize(v.MemoryExpected), units.FormatSize(v.MemoryPeak))
 	fmt.Fprintf(w, "cpus:      %d\n", v.CPUs)
@@ -257,7 +260,7 @@ func cmdList(c *cmdCtx, args []string) error {
 		return printJSON(c, views)
 	}
 	tw := tabwriter.NewWriter(c.stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tKIND\tSTATE\tPRIORITY\tMEMORY\tEXPIRES\tWAIT\tRUN\tBLOCKED_BY")
+	fmt.Fprintln(tw, "ID\tNAME\tKIND\tSTATE\tPRIORITY\tMEMORY\tEXPIRES\tSTART\tWAIT\tRUN\tBLOCKED_BY")
 	for _, v := range views {
 		state := string(v.State)
 		if v.Reason != "" {
@@ -277,8 +280,8 @@ func cmdList(c *cmdCtx, args []string) error {
 		if v.Within != "" {
 			name = strings.TrimSpace(name + " (in " + shortID(v.Within) + ")")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, name, kind, state, v.Priority,
-			units.FormatSize(v.MemoryLimit), expires, secs(v.WaitSeconds), secs(v.RunSeconds), blocked)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, name, kind, state, v.Priority,
+			units.FormatSize(v.MemoryLimit), expires, startText(v.ExpectedStart), secs(v.WaitSeconds), secs(v.RunSeconds), blocked)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -417,4 +420,15 @@ func cmdHook(c *cmdCtx, args []string) error {
 		}
 	})
 	return nil
+}
+
+func startText(at *time.Time) string {
+	if at == nil {
+		return "?"
+	}
+	d := time.Until(*at).Round(time.Second)
+	if d <= 0 {
+		return "now"
+	}
+	return "in " + d.String()
 }

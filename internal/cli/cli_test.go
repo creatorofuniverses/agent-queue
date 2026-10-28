@@ -559,3 +559,29 @@ func TestPathsSliceLockIgnoresRuntimeDir(t *testing.T) {
 		t.Fatalf("%+v %v", p, err)
 	}
 }
+
+func TestListStartColumn(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	_, out, _ := h.run("submit", "--memory", "800M", "--timeout", "1h", "--", "true")
+	id := strings.TrimSpace(out)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var v daemon.ItemView
+		_, raw, _ := h.run("status", id, "--json")
+		json.Unmarshal([]byte(raw), &v)
+		if v.State == model.StateRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(raw)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.run("submit", "--memory", "800M", "--timeout", "1h", "--", "true")
+	time.Sleep(50 * time.Millisecond)
+	code, out, errout := h.run("list")
+	if code != 0 || !strings.Contains(out, "START") || !strings.Contains(out, "in ") {
+		t.Fatal(code, out, errout)
+	}
+}

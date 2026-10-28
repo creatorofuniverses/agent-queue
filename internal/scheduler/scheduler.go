@@ -84,11 +84,14 @@ type SubmitRequest struct {
 }
 
 type Scheduler struct {
-	samples map[model.ItemID]*runSamples
-	d       Deps
-	kick    chan struct{}
-	guard   atomic.Bool
-	bg      sync.WaitGroup // background stops and temp dir removals
+	last        passState
+	commitments Commitments
+	holderLive  map[model.ItemID]uint64
+	samples     map[model.ItemID]*runSamples
+	d           Deps
+	kick        chan struct{}
+	guard       atomic.Bool
+	bg          sync.WaitGroup // background stops and temp dir removals
 
 	// mu guards everything below and serializes every state transition.
 	// It is never held across Launch, Stop or git.
@@ -432,14 +435,17 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 	}
 
 	pol := s.policy(mem.Total)
-	s.headID, s.headDecision = "", admission.Decision{Admit: true}
-	for _, it := range queue {
-		req := it.Committed()
-		dec := admission.Decide(pol, snap, req)
-		if !dec.Admit {
-			s.headID, s.headDecision = it.ID, dec
-			break
-		}
+	waiting := make([]admission.Waiting, len(queue))
+	for i, it := range queue {
+		waiting[i] = s.waitingOf(it)
+	}
+	pass := admission.PlanPass(pol, snap, s.holdersLocked(items, now), waiting, now, s.d.Cfg.Scheduler.Backfill)
+	s.headID, s.headDecision = "", pass.HeadDecision
+	if pass.Head >= 0 {
+		s.headID = queue[pass.Head].ID
+	}
+	for _, i := range pass.Admitted {
+		it := queue[i]
 		if it.IsReservation() {
 			if err := s.grantLocked(ctx, it, now); err != nil {
 				return admitted, err
@@ -450,14 +456,12 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*mo
 			}
 			admitted = append(admitted, it)
 		}
-		// Admission ends the previous closed episode, even if the next head blocks.
-		s.closedSince = time.Time{}
-		s.closedAlerted = false
-		// A just-admitted item has consumed nothing yet.
-		snap.Committed.MemoryBytes += req.MemoryBytes
-		snap.Committed.CPUs += req.CPUs
-		snap.Unconsumed += req.MemoryBytes
+		if !pass.Backfilled[i] {
+			s.closedSince = time.Time{}
+			s.closedAlerted = false
+		}
 	}
+	s.savePassLocked(pol, pass, items, queue, waiting, now)
 	// A reservation that stays queued through a pass is told when it is granted.
 	for _, it := range queue {
 		if it.IsReservation() && it.State == model.StateQueued && !it.NotifyGrant {
@@ -493,6 +497,8 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		MemAvailable: mem.Available, DiskFree: disk,
 		PressureClosed: s.pressureClosed, Recovering: s.recovering,
 	}
+	s.holderLive = map[model.ItemID]uint64{}
+	s.commitments = Commitments{PoolMemory: s.d.Cfg.PoolMemory, PoolCPUs: s.d.Cfg.PoolCPUs}
 	nestedCur := map[model.ItemID]uint64{}
 	var queue, nestedQueued []*model.Item
 	for _, it := range items {
@@ -523,8 +529,23 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			if !it.State.Held() {
 				continue // terminal in this pass
 			}
-			snap.Unconsumed += satSub(it.TaskMemory, nestedCur[it.ID]) + s.standUnconsumedLocked(ctx, it) +
-				s.teardownUnconsumedLocked(it)
+			budget := satSub(it.TaskMemory, nestedCur[it.ID])
+			stand := s.standUnconsumedLocked(ctx, it)
+			td, tdCur := uint64(0), uint64(0)
+			if it.State == model.StateTearingDown {
+				if !s.teardownLaunching[it.ID] {
+					tdCur, _ = s.d.Exec.MemoryCurrent(model.TeardownUnitID(it.ID))
+				}
+				td = satSub(s.d.Cfg.Reservations.TeardownMemory, tdCur)
+			}
+			snap.Unconsumed += budget + stand + td
+			s.commitments.Stands += it.Expected
+			s.commitments.StandsUnconsumed += stand
+			s.commitments.Budgets += it.TaskMemory
+			s.commitments.BudgetsUnconsumed += budget
+			s.commitments.TeardownUnconsumed += td
+			s.holderLive[it.ID] = budget + stand + td + nestedCur[it.ID] + s.standUsage[it.ID] + tdCur
+
 			if it.DockerProject != "" {
 				projects = append(projects, it.DockerProject)
 			}
@@ -533,11 +554,19 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			case model.StateStarting, model.StateRunning:
 				cur, _ := s.d.Exec.MemoryCurrent(it.ID)
 				s.sampleLocked(it, cur)
-				snap.Unconsumed += satSub(it.Expected, cur)
+				unc := satSub(it.Expected, cur)
+				snap.Unconsumed += unc
+				s.commitments.TasksUnconsumed += unc
+				s.holderLive[it.ID] = unc + cur
 			case model.StateCleaning, model.StateRecovering:
+				cur, _ := s.d.Exec.MemoryCurrent(it.ID)
+				s.holderLive[it.ID] = cur
 			default:
 				continue // finalized by reapLocked in this pass
 			}
+		}
+		if !it.IsReservation() {
+			s.commitments.TasksExpected += it.Expected
 		}
 		c := it.Committed()
 		snap.Committed.MemoryBytes += c.MemoryBytes

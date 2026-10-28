@@ -362,6 +362,9 @@ func (d *server) queuePositions(ctx context.Context) (map[model.ItemID]int, erro
 
 func (d *server) markQueued(v *ItemView, it *model.Item, pos map[model.ItemID]int) {
 	v.Position = pos[it.ID]
+	if at, ok := d.sched.ExpectedStart(it.ID); ok {
+		v.ExpectedStart = optTime(at)
+	}
 	if headID, dec := d.sched.HeadDecision(); it.ID == headID && !dec.Admit {
 		v.BlockedBy, v.BlockedDetail = dec.Blocker, dec.Detail
 	}

@@ -10,6 +10,7 @@ import (
 // ItemView is the client-facing projection of an item. It deliberately has no
 // env field: env values may hold secrets and never leave the daemon.
 type ItemView struct {
+	ExpectedStart     *time.Time   `json:"expected_start,omitempty"`
 	Profile           string       `json:"profile,omitempty"`
 	MemoryFromProfile bool         `json:"memory_from_profile,omitempty"`
 	EstimatedSeconds  float64      `json:"estimated_seconds,omitempty"`
