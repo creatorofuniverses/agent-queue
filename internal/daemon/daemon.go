@@ -119,7 +119,8 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 			meter.Run(runCtx)
 		}()
 	}
-	loops.Add(3)
+	loops.Add(4)
+	go func() { defer loops.Done(); RunRetention(runCtx, st, paths, cfg, 10*time.Minute) }()
 	go func() {
 		defer loops.Done()
 		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses}, cfg.Stats.SampleInterval)

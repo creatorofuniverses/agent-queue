@@ -99,6 +99,7 @@ type LogsArgs struct {
 
 // LogLines is both the logs result and the follow stream message.
 type LogLines struct {
+	Pruned    bool     `json:"pruned,omitempty"`
 	Lines     []string `json:"lines"`
 	Truncated bool     `json:"truncated,omitempty"` // MaxBytes cut older output
 }
@@ -296,6 +297,9 @@ func (d *server) itemResult(full bool, it *model.Item) any {
 // logDir is where the item's logs live: the job directory of a task, the latest
 // teardown attempt's directory of a reservation ("" before the first attempt).
 func (d *server) logDir(it *model.Item) string {
+	if it.LogsPruned {
+		return ""
+	}
 	if !it.IsReservation() {
 		return d.paths.JobDir(it.ID)
 	}
@@ -462,6 +466,15 @@ func (d *server) logs(ctx context.Context, raw json.RawMessage, w protocol.Strea
 	it, err := d.st.Get(ctx, a.ID)
 	if err != nil {
 		return nil, err
+	}
+	if it.LogsPruned {
+		v := LogLines{Lines: []string{}, Pruned: true}
+		if a.Follow {
+			if err := w.Send(v); err != nil {
+				return nil, err
+			}
+		}
+		return v, nil
 	}
 	path := ""
 	if dir := d.logDir(it); dir != "" {

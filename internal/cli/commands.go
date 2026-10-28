@@ -91,7 +91,11 @@ func cmdResult(c *cmdCtx, args []string) error {
 		return printJSON(c, v)
 	}
 	printView(c, v.ItemView)
-	fmt.Fprintf(c.stdout, "stdout:    %s\nstderr:    %s\n", v.StdoutPath, v.StderrPath)
+	if v.LogsPruned {
+		fmt.Fprintln(c.stdout, "logs:      removed by retention")
+	} else {
+		fmt.Fprintf(c.stdout, "stdout:    %s\nstderr:    %s\n", v.StdoutPath, v.StderrPath)
+	}
 	if v.LogsTruncated {
 		fmt.Fprintln(c.stdout, "logs:      truncated")
 	}
@@ -188,18 +192,21 @@ func cmdLogs(c *cmdCtx, args []string) error {
 		return err
 	}
 	a := daemon.LogsArgs{ID: model.ItemID(id), Stream: *stream, Tail: *tail, Follow: *follow}
-	print := func(l daemon.LogLines) {
+	print := func(l daemon.LogLines) error {
+		if l.Pruned {
+			return &exitError{code: 1, msg: fmt.Sprintf("logs of %s were removed by retention", id)}
+		}
 		for _, line := range l.Lines {
 			fmt.Fprintln(c.stdout, line)
 		}
+		return nil
 	}
 	if !*follow {
 		var out daemon.LogLines
 		if err := callOn(c.ctx, p, "logs", a, &out); err != nil {
 			return err
 		}
-		print(out)
-		return nil
+		return print(out)
 	}
 	ctx, stop := signal.NotifyContext(c.ctx, os.Interrupt)
 	defer stop()
@@ -208,8 +215,7 @@ func cmdLogs(c *cmdCtx, args []string) error {
 		if err := json.Unmarshal(raw, &l); err != nil {
 			return err
 		}
-		print(l)
-		return nil
+		return print(l)
 	})
 	if ctx.Err() != nil {
 		return &exitError{code: exitInterrupted}

@@ -18,6 +18,7 @@ import (
 	"resource-dispatcher/internal/platform"
 	"resource-dispatcher/internal/platform/fake"
 	"resource-dispatcher/internal/protocol"
+	"resource-dispatcher/internal/store"
 )
 
 const gib = uint64(1) << 30
@@ -582,6 +583,29 @@ func TestListStartColumn(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	code, out, errout := h.run("list")
 	if code != 0 || !strings.Contains(out, "START") || !strings.Contains(out, "in ") {
+		t.Fatal(code, out, errout)
+	}
+}
+
+func TestLogsOfPrunedItem(t *testing.T) {
+	h := newHarness(t)
+	os.MkdirAll(h.paths.StateDir, 0700)
+	s, e := store.Open(h.paths.DB())
+	if e != nil {
+		t.Fatal(e)
+	}
+	it := &model.Item{ID: model.NewID(), Kind: model.KindTask, State: model.StateSucceeded, CreatedAt: time.Now(), EndedAt: time.Now(), LogsPruned: true}
+	s.InsertItem(t.Context(), it)
+	s.Close()
+	h.startDaemon(t)
+	for _, args := range [][]string{{"logs", string(it.ID)}, {"logs", string(it.ID), "--follow"}} {
+		code, _, errout := h.run(args...)
+		if code != 1 || !strings.Contains(errout, "were removed by retention") {
+			t.Fatal(code, errout)
+		}
+	}
+	code, out, errout := h.run("result", string(it.ID))
+	if code != 0 || !strings.Contains(out, "logs:      removed by retention") {
 		t.Fatal(code, out, errout)
 	}
 }

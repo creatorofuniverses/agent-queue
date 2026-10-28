@@ -10,6 +10,7 @@ import (
 // ItemView is the client-facing projection of an item. It deliberately has no
 // env field: env values may hold secrets and never leave the daemon.
 type ItemView struct {
+	LogsPruned        bool         `json:"logs_pruned,omitempty"`
 	ExpectedStart     *time.Time   `json:"expected_start,omitempty"`
 	Profile           string       `json:"profile,omitempty"`
 	MemoryFromProfile bool         `json:"memory_from_profile,omitempty"`
@@ -75,7 +76,8 @@ func optTime(t time.Time) *time.Time {
 
 func viewOf(it *model.Item, now time.Time) ItemView {
 	v := ItemView{
-		Profile: it.Profile, MemoryFromProfile: it.MemoryFromProfile, EstimatedSeconds: it.EstDuration.Seconds(), ExtendCount: it.ExtendCount,
+		LogsPruned: it.LogsPruned,
+		Profile:    it.Profile, MemoryFromProfile: it.MemoryFromProfile, EstimatedSeconds: it.EstDuration.Seconds(), ExtendCount: it.ExtendCount,
 		ClientType: it.ClientType, ID: it.ID, Name: it.Name, State: it.State, Reason: it.Reason, Priority: it.Priority.String(),
 		MemoryLimit: it.Limit, MemoryExpected: it.Expected, CPUs: it.CPUs,
 		TimeoutSeconds: int64(it.Timeout / time.Second), SessionID: it.SessionID, Project: it.Project,
