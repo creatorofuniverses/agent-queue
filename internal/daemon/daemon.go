@@ -62,8 +62,11 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	}
 	tmp := PlanTmpRoot(cfg, os.Getuid(), host.FSUsage, true)
 	paths.TmpRoot = tmp.Root
-	if tmp.Root == "" {
+	switch {
+	case tmp.Root == "":
 		slog.Warn("task temp dirs stay in the state dir", "reason", tmp.Reason)
+	case tmp.Reason != "":
+		slog.Warn("task temp root not made yet; the temp gate holds and launches retry", "root", tmp.Root, "reason", tmp.Reason)
 	}
 	// A daemon with other state/runtime dirs on the same slice would stop this
 	// one's units as orphans, so each slice (tasks and teardown) gets its own lock

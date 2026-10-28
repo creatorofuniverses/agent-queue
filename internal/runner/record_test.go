@@ -110,3 +110,19 @@ func TestRecordResultRemovesTmpDir(t *testing.T) {
 		t.Fatal("relative tmp dir accepted", code)
 	}
 }
+
+// A task may leave a directory it made read-only; its files would keep tmpfs
+// memory and inodes forever if removal gave up.
+func TestRecordResultRemovesReadOnlyTmpDir(t *testing.T) {
+	job, tmp := t.TempDir(), filepath.Join(t.TempDir(), "x")
+	ro := filepath.Join(tmp, "ro")
+	os.MkdirAll(ro, 0o700)
+	os.WriteFile(filepath.Join(ro, "big"), []byte("x"), 0o600)
+	os.Chmod(ro, 0o500)
+	if code := Main("_record-result", []string{job, tmp}); code != 0 {
+		t.Fatal(code)
+	}
+	if _, err := os.Lstat(tmp); !os.IsNotExist(err) {
+		t.Fatal("read-only tmp dir left behind", err)
+	}
+}

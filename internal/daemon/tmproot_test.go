@@ -67,6 +67,21 @@ func TestPlanTmpRoot(t *testing.T) {
 	}
 }
 
+// A tmpfs /tmp that is full (ENOSPC on the root) or otherwise refuses the
+// root right now keeps the plan on tmpfs with the gate on: falling back would
+// put every task's temp files on the SSD for the daemon's lifetime.
+func TestPlanTmpRootKeepsTmpfsWhenRootCannotBeMadeYet(t *testing.T) {
+	cfg := config.Default()
+	cfg.TmpDir = t.TempDir()
+	os.Chmod(cfg.TmpDir, 0o500) // stands in for ENOSPC: Mkdir fails, nothing planted
+	t.Cleanup(func() { os.Chmod(cfg.TmpDir, 0o700) })
+	want := filepath.Join(cfg.TmpDir, fmt.Sprintf("aq-%d-aq", os.Getuid()))
+	p := PlanTmpRoot(cfg, os.Getuid(), fsAs(true, nil), true)
+	if p.Root != want || p.Reason == "" {
+		t.Fatalf("want a pending tmpfs root, got %+v", p)
+	}
+}
+
 func mode(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	st, err := os.Stat(path)

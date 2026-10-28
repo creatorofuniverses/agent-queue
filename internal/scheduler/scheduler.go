@@ -27,6 +27,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
@@ -358,7 +359,7 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...mo
 		delete(s.lastStop, it.ID)
 		tmp := s.d.Paths.TmpDir(it.ID)
 		s.background(func() {
-			if err := os.RemoveAll(tmp); err != nil {
+			if err := tmpdir.RemoveAll(tmp); err != nil {
 				slog.Warn("scheduler: remove temp dir", "dir", tmp, "err", err)
 			}
 		})

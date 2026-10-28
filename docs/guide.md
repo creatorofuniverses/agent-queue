@@ -143,7 +143,14 @@ a disk each of them is a write plus a filesystem journal entry. The pages are
 charged to the task, so **`--memory` must cover what the task writes under
 `$TMPDIR`**, and profiles learn it with the rest of the peak. The directory is
 deleted as soon as the task ends (from inside its unit, so a stopped daemon does
-not leave it behind).
+not leave it behind), including directories the task made read-only.
+
+A full `/tmp` never moves temp dirs to disk: if the private root cannot be made
+at start, it stays planned, the gate below holds the queue, and the next launch
+makes it. Only a symlinked or foreign-owned root in a shared `/tmp` is refused
+(temp dirs then go to the state dir and `aq doctor` warns). The root is checked
+again at every launch; a task launched under a planted root fails with
+`LAUNCH_FAILED`.
 
 Because a full tmpfs fails tests too, the queue holds while the temp
 filesystem has less than `min_tmp_free` (2G) free or fewer than

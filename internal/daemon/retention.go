@@ -7,6 +7,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/hook"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -105,7 +106,8 @@ func retentionStep(ctx context.Context, st *store.Store, paths config.Paths, cfg
 					continue
 				}
 			}
-			if e = os.RemoveAll(filepath.Join(dir, entry.Name())); e != nil {
+			// Temp dirs may hold read-only dirs a task left; job dirs are ours.
+			if e = tmpdir.RemoveAll(filepath.Join(dir, entry.Name())); e != nil {
 				slog.Warn("retention: remove orphan", "path", filepath.Join(dir, entry.Name()), "err", e)
 			}
 		}

@@ -3,18 +3,18 @@ package daemon
 import (
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
 )
 
 // TmpPlan is where task temp dirs live. An empty Root means the state dir
-// (config.Paths.TmpBase), with Reason saying why.
+// (config.Paths.TmpBase), with Reason saying why. A Root with a Reason is
+// planned but could not be made yet (a full /tmp): tasks still go there, the
+// temp gate holds the queue, and the runner makes the root at the next launch.
 type TmpPlan struct {
 	Root   string `json:"root"`
 	Base   string `json:"base"`
@@ -25,8 +25,10 @@ type TmpPlan struct {
 // that is tmpfs, or whenever tmp_dir is set: temp files on the state dir's disk
 // wear the SSD for data nobody keeps. The slice in the name keeps daemons apart
 // (one per slice, by the slice lock): each sweeps its root of dirs it does not
-// know. With create it makes the private root, refusing a symlink or a dir owned
-// by someone else (a shared /tmp lets any user plant one).
+// know. With create it makes the private root. Only a planted root (a symlink
+// or someone else's dir: a shared /tmp lets any user plant one) sends temp
+// dirs to the state dir; a root that cannot be made right now stays planned,
+// since falling back would keep tasks on the SSD for the daemon's lifetime.
 func PlanTmpRoot(cfg config.Config, uid int, fsUsage func(string) (platform.FSUsage, error), create bool) TmpPlan {
 	p := TmpPlan{Base: cfg.TmpDir}
 	if p.Base == "" {
@@ -43,33 +45,17 @@ func PlanTmpRoot(cfg config.Config, uid int, fsUsage func(string) (platform.FSUs
 	}
 	root := filepath.Join(p.Base, fmt.Sprintf("aq-%d-%s", uid, strings.TrimSuffix(cfg.SliceName, ".slice")))
 	if create {
-		if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-			p.Reason = err.Error()
-			return p
-		}
+		err = tmpdir.EnsureRoot(root, uid)
+	} else {
+		err = tmpdir.CheckRoot(root, uid)
 	}
-	st, err := os.Lstat(root)
-	switch {
-	case errors.Is(err, fs.ErrNotExist) && !create:
-		p.Root = root // the daemon creates it at start
-		return p
-	case err != nil:
+	if errors.Is(err, tmpdir.ErrUntrusted) {
 		p.Reason = err.Error()
 		return p
-	case !st.IsDir():
-		p.Reason = root + " is not a directory"
-		return p
-	}
-	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != uid {
-		p.Reason = fmt.Sprintf("%s is owned by another user", root)
-		return p
-	}
-	if create && st.Mode().Perm() != 0o700 {
-		if err := os.Chmod(root, 0o700); err != nil {
-			p.Reason = err.Error()
-			return p
-		}
 	}
 	p.Root = root
+	if err != nil {
+		p.Reason = "not created yet: " + err.Error()
+	}
 	return p
 }

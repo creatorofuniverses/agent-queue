@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
 )
 
 type ExecArgs struct {
@@ -77,11 +79,7 @@ func Exec(a ExecArgs) int {
 		fmt.Fprintln(os.Stderr, "aq: job dir:", err)
 		return 127
 	}
-	// Private: under a shared /tmp other users must not read or plant files.
-	if err := os.MkdirAll(a.TmpDir, 0o700); err != nil {
-		return launchFail(a, err)
-	}
-	if err := os.Chmod(a.TmpDir, 0o700); err != nil {
+	if err := makeTmpDir(a.TmpDir); err != nil {
 		return launchFail(a, err)
 	}
 	outF, err := os.Create(filepath.Join(a.JobDir, "stdout.log"))
@@ -138,6 +136,27 @@ func Exec(a ExecArgs) int {
 		return 128 + int(ws.Signal())
 	}
 	return ps.ExitCode()
+}
+
+// makeTmpDir creates the task's private temp dir. Under a shared /tmp other
+// users must not read it or plant files, and the root may have been deleted
+// (tmpfiles) and replaced by someone else's since the daemon checked it, so the
+// root is verified here, at every launch; a planted root fails the launch.
+func makeTmpDir(dir string) error {
+	if err := tmpdir.EnsureRoot(filepath.Dir(dir), os.Getuid()); err != nil {
+		return fmt.Errorf("temp root: %w", err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	st, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("%w: %s is not a directory", tmpdir.ErrUntrusted, dir)
+	}
+	return os.Chmod(dir, 0o700)
 }
 
 func launchFail(a ExecArgs, err error) int {

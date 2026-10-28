@@ -988,3 +988,22 @@ func TestRunTicksOnKick(t *testing.T) {
 		t.Fatalf("Run returned %v", err)
 	}
 }
+
+// The scheduler's fallback removal must cope with read-only dirs a task left:
+// on tmpfs their files would keep memory and inodes after the task ended.
+func TestTerminalRemovesReadOnlyTmpDir(t *testing.T) {
+	e := newEnv(t, nil)
+	e.ex.FailLaunch(errors.New("systemd-run exploded"))
+	it := e.submit(t, e.req(gib))
+	tmp := e.mkTmp(t, it.ID)
+	ro := filepath.Join(tmp, "ro")
+	os.Mkdir(ro, 0o700)
+	os.WriteFile(filepath.Join(ro, "big"), []byte("x"), 0o600)
+	os.Chmod(ro, 0o500)
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateFailed, model.ReasonLaunchFailed)
+	e.settle()
+	if exists(t, tmp) {
+		t.Fatal("read-only temp dir kept")
+	}
+}

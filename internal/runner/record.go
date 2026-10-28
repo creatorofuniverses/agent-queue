@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
 )
 
 // RecordResult writes JobDir/result.json from systemd's ExecStopPost env and the unit cgroup.
@@ -155,7 +156,7 @@ func Main(sub string, args []string) int {
 		// After recording, so memory.peak still includes the temp files; on tmpfs
 		// their pages would otherwise outlive the task outside any accounting.
 		if len(args) == 2 {
-			if err := os.RemoveAll(args[1]); err != nil {
+			if err := tmpdir.RemoveAll(args[1]); err != nil {
 				os.Stderr.WriteString("aq _record-result: remove temp dir: " + err.Error() + "\n")
 			}
 		}

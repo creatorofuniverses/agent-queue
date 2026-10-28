@@ -124,3 +124,39 @@ func TestExecRunsInCwd(t *testing.T) {
 		t.Fatalf("supervisor cwd changed to %q", after)
 	}
 }
+
+// The root is re-checked at every launch: tmpfiles may have deleted it and
+// someone else may have planted their own in its place.
+func TestExecRefusesPlantedRoot(t *testing.T) {
+	d := t.TempDir()
+	root := filepath.Join(d, "aq-root")
+	os.Symlink(t.TempDir(), root)
+	a := ExecArgs{JobDir: filepath.Join(d, "job"), TmpDir: filepath.Join(root, "id"),
+		MaxStdout: 10, MaxStderr: 10, Argv: []string{"true"}}
+	if code := Exec(a); code != 127 {
+		t.Fatalf("ran under a planted root: %d", code)
+	}
+	b, _ := os.ReadFile(filepath.Join(a.JobDir, "launch_error.txt"))
+	if !strings.Contains(string(b), "untrusted") {
+		t.Fatalf("launch error %q", b)
+	}
+}
+
+func TestExecRecreatesRootPrivately(t *testing.T) {
+	d := t.TempDir()
+	root := filepath.Join(d, "aq-root")
+	a := ExecArgs{JobDir: filepath.Join(d, "job"), TmpDir: filepath.Join(root, "id"),
+		MaxStdout: 10, MaxStderr: 10, Argv: []string{"true"}}
+	if code := Exec(a); code != 0 {
+		t.Fatal(code)
+	}
+	if st, err := os.Lstat(root); err != nil || st.Mode().Perm() != 0o700 {
+		t.Fatal("root not private", st, err)
+	}
+	// A task dir that is a symlink is refused too.
+	os.RemoveAll(a.TmpDir)
+	os.Symlink(t.TempDir(), a.TmpDir)
+	if code := Exec(a); code != 127 {
+		t.Fatalf("followed a planted task dir: %d", code)
+	}
+}

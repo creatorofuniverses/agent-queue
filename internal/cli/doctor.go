@@ -297,6 +297,10 @@ func tmpCheck(sys doctorSystem, cfg config.Config) Check {
 	}
 	c.Detail = fmt.Sprintf("%s (%s): %s free of %s, %d inodes free", plan.Root, kind,
 		units.FormatSize(u.Free), units.FormatSize(u.Size), u.InodesFree)
+	if plan.Reason != "" {
+		c.Warn, c.Code = true, codeTmpLow
+		c.Detail += "; " + plan.Reason
+	}
 	if u.Free < cfg.MinTmpFree || u.InodesFree < cfg.MinTmpInodes {
 		c.Warn, c.Code = true, codeTmpLow
 		c.Detail += fmt.Sprintf("; the queue holds below %s or %d inodes", units.FormatSize(cfg.MinTmpFree), cfg.MinTmpInodes)

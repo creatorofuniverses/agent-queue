@@ -250,6 +250,9 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 				note += " · tmpfs: temp files count as task memory"
 			}
 			fmt.Fprintf(w, "  %s\n", u.dim(note))
+			if t.Reason != "" {
+				fmt.Fprintf(w, "  %s\n", u.yellow(t.Reason))
+			}
 		}
 	}
 }

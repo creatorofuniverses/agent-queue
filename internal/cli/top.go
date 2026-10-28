@@ -65,5 +65,8 @@ func tmpText(t *daemon.TmpView) string {
 	if t.Error != "" {
 		return s + ": " + t.Error
 	}
+	if t.Reason != "" {
+		s += " [" + t.Reason + "]"
+	}
 	return fmt.Sprintf("%s: %s free of %s, %d of %d inodes free", s, units.FormatSize(t.Free), units.FormatSize(t.Size), t.InodesFree, t.Inodes)
 }

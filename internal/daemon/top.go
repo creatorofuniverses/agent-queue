@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"sync/atomic"
+	"time"
+
 	"github.com/creatorofuniverses/agent-queue/internal/admission"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
-	"sync/atomic"
-	"time"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
 )
 
 type HostView struct {
@@ -114,6 +117,13 @@ func (d *server) top(ctx context.Context) (any, error) {
 	closed, avg := d.sched.Pressure()
 	p := d.sched.LastPass()
 	tmp := &TmpView{TmpPlan: d.tmp}
+	if tmp.Root != "" {
+		// The start-up note goes stale once a launch makes the root.
+		tmp.Reason = ""
+		if err := tmpdir.CheckRoot(tmp.Root, os.Getuid()); err != nil {
+			tmp.Reason = err.Error()
+		}
+	}
 	if u, err := d.host.FSUsage(d.tmp.Base); err != nil {
 		tmp.Error = err.Error()
 	} else {

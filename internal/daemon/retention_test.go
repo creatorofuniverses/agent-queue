@@ -203,3 +203,20 @@ func TestRetentionSweepsTmpRootAndLegacyTmp(t *testing.T) {
 	requirePath(t, legacy.TmpDir(terminal.ID), false)
 	requirePath(t, p.TeardownTmpDir(terminal.ID, 1), false)
 }
+
+// A task's read-only leftovers would keep tmpfs memory and inodes, and could
+// hold the temp gate shut, if the sweep gave up on them.
+func TestRetentionSweepsReadOnlyTmpDir(t *testing.T) {
+	s, p, cfg, now := retentionEnv(t)
+	p.TmpRoot = filepath.Join(t.TempDir(), "aq-1000")
+	it := retentionItem(t, s, p, now.Add(-24*time.Hour), 1)
+	ro := filepath.Join(p.TmpDir(it.ID), "ro")
+	os.MkdirAll(ro, 0o700)
+	os.WriteFile(filepath.Join(ro, "big"), []byte("x"), 0o600)
+	os.Chmod(ro, 0o500)
+	os.Chtimes(p.TmpDir(it.ID), now.Add(-2*time.Hour), now.Add(-2*time.Hour))
+	if e := retentionStep(t.Context(), s, p, cfg, now); e != nil {
+		t.Fatal(e)
+	}
+	requirePath(t, p.TmpDir(it.ID), false)
+}

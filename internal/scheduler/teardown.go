@@ -12,6 +12,7 @@ import (
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
 )
 
 // claimTeardownsLocked gives the free teardown slots (teardown_concurrency minus the
@@ -302,7 +303,7 @@ func (s *Scheduler) settleTeardownLocked(ctx context.Context, it *model.Item, pr
 	delete(s.launchFailed, it.ID)
 	tmp := s.d.Paths.TeardownTmpDir(it.ID, it.TeardownAttempt)
 	s.background(func() {
-		if err := os.RemoveAll(tmp); err != nil {
+		if err := tmpdir.RemoveAll(tmp); err != nil {
 			slog.Warn("scheduler: remove teardown temp dir", "dir", tmp, "err", err)
 		}
 	})

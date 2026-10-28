@@ -68,8 +68,13 @@ Startup locks prevent two daemons from managing the same runtime directory or sl
    that filesystem is tmpfs or `tmp_dir` is set, so temp files cost task memory
    (tmpfs pages are charged to the unit's cgroup) instead of SSD writes and
    filesystem-journal churn; otherwise it falls back to the state dir. The daemon
-   resolves the root once at start and refuses a symlinked or foreign-owned
-   `aq-<uid>-<slice>` in a shared `/tmp`.
+   plans the root at start; only a symlinked or foreign-owned `aq-<uid>-<slice>`
+   in a shared `/tmp` sends temp dirs to the state dir. A root that cannot be
+   made right now (a full `/tmp`) stays planned: the temp gate holds the queue,
+   and nothing moves to the SSD. Because `systemd-tmpfiles` may delete an idle
+   root and another user may then plant one, the runner re-checks the root at
+   every launch (creating only the root, never a missing parent) and fails the
+   launch (`LAUNCH_FAILED`) under a planted one.
 5. **Record the result.** The unit's `ExecStopPost` action writes `result.json`,
    including systemd's outcome and cgroup memory measurements. This works even
    while the daemon is down. With the `io` controller delegated (units and the
@@ -79,7 +84,9 @@ Startup locks prevent two daemons from managing the same runtime directory or sl
    reaches one. Without the controller the bytes are recorded as unknown (NULL),
    not zero, and nothing else changes. After recording, the same action deletes
    the task's temporary directory, so tmpfs pages never outlive the task outside
-   any accounting.
+   any accounting. Removal restores owner write permission on directories a
+   task made read-only (never following symlinks); the scheduler and retention
+   use the same routine as fallbacks.
 6. **Release resources.** The scheduler waits for the cgroup to become empty
    before finalizing the task and returning its resources to the pool.
 
