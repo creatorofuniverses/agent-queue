@@ -22,6 +22,7 @@ user account. One binary provides the CLI, background service, and MCP server.
 - **Less repeated guesswork:** named jobs can learn memory and duration estimates from previous runs.
 - **Room for containers:** reservations account for Docker environments and their test jobs together.
 - **Results you can come back to:** logs, exit reasons, memory peaks, and queue statistics.
+- **Gentler on your SSD:** each job's temp files live in RAM and count toward its memory, and each job records how much it wrote to disk, so a suite that wears the drive shows up in `aq stats`.
 - **Agent integration:** bundled Claude Code and Codex skills, optional reminder hooks, and completion delivery.
 
 Tasks can run concurrently when they fit. aq helps contain resource exhaustion;
@@ -47,6 +48,10 @@ Edit that file before installing. Set `pool_memory` and `pool_cpus` to suit your
 machine: the defaults are **16 GiB and 16 CPUs**. Memory must leave at least the
 configured host reserve (10% by default), and CPUs cannot exceed the machine's
 CPU count. Choose a smaller pool if you want more room for other work.
+
+Optional: delegate the `io` controller to your user as well, and aq records how
+much each job writes to disk ([how](docs/guide.md#disk-writes)). Without it,
+jobs run normally and the disk figures are simply absent.
 
 ```sh
 just install
@@ -91,6 +96,7 @@ For shell expansion and `$AQ_CPUS`, see [running tasks](docs/guide.md#running-ta
 | Stop a job | `aq cancel ID` |
 | See a snapshot of the machine and pool | `aq top` |
 | Summarize the last week | `aq stats --since 7d` |
+| Find the jobs that write the most to disk | `aq stats --since 1d` ("Disk writes") |
 | Learn a command's options | `aq help COMMAND` |
 
 Use `--json` on viewing commands for structured output. If a job fails, start
@@ -107,6 +113,37 @@ work outside aq; they do not block commands.
 Follow the [notification setup](docs/guide.md#notifications) for completion delivery,
 and the [MCP](docs/guide.md#mcp) and [hook](docs/guide.md#hook) sections if you use them.
 A daemon restart preserves running jobs, and `aq wait` reconnects on its own.
+
+## Why aq cares about your SSD
+
+On the author's workstation, a dozen coding agents running full test suites
+around the clock wrote **1.2 TB to the NVMe drive in five hours**. The drive
+reported 16% wear after 28 TB written: at that rate it would have reached its
+rated life in about a month.
+
+The data itself was small. What wore the drive were **small forced writes**:
+every `fsync` and every file created or deleted makes the filesystem write data
+and journal blocks right away, instead of batching them in memory. Test suites
+are full of both: test databases that commit with `fsync`, a database reset
+before every test, and `pytest` temp directories with tens of thousands of
+files per run. One person running tests a few times a day never notices this.
+Many agents re-running everything in parallel turn a desktop into a CI farm on
+consumer hardware.
+
+So aq now:
+
+- gives each job a private temp directory in RAM (`/tmp`, when it is tmpfs),
+  where `fsync` costs nothing, and deletes it when the job ends. The pages count
+  toward the job's `--memory`, and a full `/tmp` holds the queue instead of
+  failing tests ([details](docs/guide.md#temp-files-live-in-ram-and-count-as-task-memory));
+- records the bytes each job wrote to disk and lists the heaviest writers in
+  `aq stats` ([details](docs/guide.md#disk-writes)).
+
+If you run many agents on one machine, also: keep `TMPDIR` and pytest
+`--basetemp` in tmpfs rather than moving them to disk when `/tmp` fills up
+(raise the tmpfs inode limit instead); run test databases with `fsync=off`
+(PostgreSQL) or `PRAGMA synchronous=OFF` (SQLite); and check your drive's wear
+now and then with `smartctl -A`.
 
 ## Results on a real workstation
 
