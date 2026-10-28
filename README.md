@@ -116,7 +116,7 @@ A daemon restart preserves running jobs, and `aq wait` reconnects on its own.
 
 ## Why aq cares about your SSD
 
-On the author's workstation, a dozen coding agents running full test suites
+On my workstation, a dozen coding agents running full test suites
 around the clock wrote **1.2 TB to the NVMe drive in five hours**. The drive
 reported 16% wear after 28 TB written: at that rate it would have reached its
 rated life in about a month.
