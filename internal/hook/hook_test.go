@@ -19,7 +19,11 @@ func TestHookMatches(t *testing.T) {
 	for _, tc := range []struct {
 		cmd string
 		idx int
-	}{{"pytest -n 8 tests", 0}, {"uv run pytest -n auto", 0}, {"pytest tests -q", -1}, {"docker compose -p x up -d", 1}, {"docker-compose up", 2}, {"docker run --rm alpine", 3}, {"aq submit --memory 2G --timeout 10m -- pytest -n 4", -1}, {"/home/u/.local/bin/aq submit ... -- docker run x", -1}, {"echo docker running", -1}} {
+	}{{"pytest -n 8 tests", 0}, {"uv run pytest -n auto", 0}, {"pytest tests -q", -1}, {"docker compose -p x up -d", 1}, {"docker-compose up", 2}, {"docker run --rm alpine", 3}, {"aq submit --memory 2G --timeout 10m -- pytest -n 4", -1}, {"/home/u/.local/bin/aq submit ... -- docker run x", -1}, {"echo docker running", -1},
+		// aq in any segment of a compound command, with quoted separators inside its argv
+		{"cd /r && aq submit --memory 1G --timeout 1m -- pytest -n 4", -1}, {"FOO=1 aq submit --memory 1G --timeout 1m -- docker run x", -1},
+		{`cd /r && aq submit --memory 4G --timeout 30m -- bash -lc 'cd x && pytest -n "$AQ_CPUS" tests'`, -1},
+		{"cd /r && pytest -n 4", 0}, {"pytest -n 4; aq list", 0}, {`echo "a;b" | docker run x`, 3}} {
 		var b bytes.Buffer
 		raw, _ := json.Marshal(map[string]any{"tool_input": map[string]string{"command": tc.cmd}})
 		hit := -1

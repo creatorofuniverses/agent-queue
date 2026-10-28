@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -52,15 +53,14 @@ func PreToolUse(in io.Reader, out io.Writer, patterns []*regexp.Regexp, record f
 	if cmd == "" {
 		cmd = command(v.ToolInput.Cmd)
 	}
-	words := strings.Fields(cmd)
-	if len(words) == 0 {
-		return
-	}
-	if words[0] == "aq" || strings.HasSuffix(words[0], "/aq") {
-		return
+	var rest []string // segments not already run through aq
+	for _, seg := range segments(cmd) {
+		if !isAQ(seg) {
+			rest = append(rest, seg)
+		}
 	}
 	for i, p := range patterns {
-		if p.MatchString(cmd) {
+		if slices.ContainsFunc(rest, p.MatchString) {
 			text := fmt.Sprintf("aq: this command looks heavy (matched pattern %d). On this host run heavy commands through aq so they wait for memory instead of hanging the machine: aq submit --memory <M> --timeout <T> -- <command>; for containers use aq reserve and aq submit --within. Ignore this if the command is light. See the aq skill.", i+1)
 			result := map[string]any{"hookSpecificOutput": map[string]string{"hookEventName": "PreToolUse", "additionalContext": text}}
 			if json.NewEncoder(out).Encode(result) == nil && record != nil {
@@ -69,6 +69,46 @@ func PreToolUse(in io.Reader, out io.Writer, patterns []*regexp.Regexp, record f
 			return
 		}
 	}
+}
+
+// segments splits a shell command on separators (;, &, |, newline) outside quotes.
+func segments(cmd string) []string {
+	var out []string
+	var cur strings.Builder
+	var quote rune
+	escaped := false
+	for _, r := range cmd {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\' && quote != '\'':
+			escaped = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case r == ';' || r == '&' || r == '|' || r == '\n':
+			out = append(out, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteRune(r)
+	}
+	return append(out, cur.String())
+}
+
+var assignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// isAQ says whether a segment runs aq, after leading VAR=value words.
+func isAQ(seg string) bool {
+	for _, w := range strings.Fields(seg) {
+		if !assignment.MatchString(w) {
+			return w == "aq" || strings.HasSuffix(w, "/aq")
+		}
+	}
+	return false
 }
 func AppendHit(stateDir string, at time.Time, idx int, client string) error {
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
