@@ -18,7 +18,9 @@ type webhookDeliverer struct {
 
 func NewWebhookDeliverer(w config.WebhookConfig, client *http.Client) Deliverer {
 	if client == nil {
-		client = &http.Client{Timeout: w.Timeout}
+		// Only a 2xx from the configured URL is a delivery: a followed redirect turns the
+		// POST into a body-less GET whose 200 (say, a login page) would mark the event sent.
+		client = &http.Client{Timeout: w.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	return &webhookDeliverer{w, client}
 }

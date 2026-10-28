@@ -192,3 +192,17 @@ func TestWebhookDeliverer(t *testing.T) {
 		t.Fatal("no timeout")
 	}
 }
+func TestWebhookRedirectIsNotDelivery(t *testing.T) {
+	// A redirect to a login page must not turn into a GET without the body that answers 200.
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusFound)
+	}))
+	defer s.Close()
+	d := NewWebhookDeliverer(config.WebhookConfig{URL: s.URL + "/hook", Timeout: time.Second}, nil)
+	if e := d.Deliver(context.Background(), message()); e == nil || !strings.Contains(e.Error(), "302") {
+		t.Fatal(e)
+	}
+}
