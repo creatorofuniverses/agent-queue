@@ -44,6 +44,10 @@ workload: the hint can also match quoted text or a light command.
    300–800M per pytest worker, measured container memory for a stand, or 2× a
    previously observed peak. These are starting estimates. Too low risks OOM;
    too high delays admission. OOM never automatically raises the limit.
+   A task's `$TMPDIR` is on tmpfs and counts against `--memory`: include what it
+   writes there (pytest `tmp_path`, unpacked wheels, build output). Never move
+   `TMPDIR` or pytest `--basetemp` to a disk directory to save memory; that wears
+   the SSD. Raise `--memory` and tell the user if temp files are huge.
 3. **Timeout:** start around 2× the expected duration. This kills an overlong
    task; it is separate from aq's duration forecast.
 4. **Will it start soon?** Run `aq estimate --name tests --memory 4G --cpus 4 --timeout 30m`;

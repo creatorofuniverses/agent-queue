@@ -168,6 +168,9 @@ func (s *Scheduler) policy(memTotal uint64) admission.Policy {
 		Pool:          model.Resources{MemoryBytes: s.d.Cfg.PoolMemory, CPUs: s.d.Cfg.PoolCPUs},
 		ReserveFloor:  s.d.Cfg.ReserveFloor(memTotal),
 		MinDiskFree:   s.d.Cfg.MinDiskFree,
+		TmpGuard:      s.d.Paths.TmpRoot != "",
+		MinTmpFree:    s.d.Cfg.MinTmpFree,
+		MinTmpInodes:  s.d.Cfg.MinTmpInodes,
 		TeardownSlots: s.d.Cfg.Reservations.TeardownConcurrency,
 	}
 }
@@ -437,11 +440,18 @@ func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) (_ []*
 	mem, memErr := s.d.Host.Memory()
 	disk, diskErr := s.d.Host.DiskFree(s.d.Paths.StateDir)
 	snap, queue, nestedQueued := s.snapshotLocked(ctx, items, mem, disk)
+	var tmpErr error
+	if s.d.Paths.TmpRoot != "" {
+		// The filesystem the private root sits on: the root itself may be gone.
+		var u platform.FSUsage
+		u, tmpErr = s.d.Host.FSUsage(filepath.Dir(s.d.Paths.TmpRoot))
+		snap.TmpFree, snap.TmpInodesFree = u.Free, u.InodesFree
+	}
 	admitted, err := s.admitNestedLocked(ctx, items, nestedQueued, now)
 	if err != nil {
 		return admitted, err
 	}
-	if err := errors.Join(memErr, diskErr); err != nil {
+	if err := errors.Join(memErr, diskErr, tmpErr); err != nil {
 		return admitted, err
 	}
 

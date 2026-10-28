@@ -44,6 +44,11 @@ but it is a hint: ignore it for light commands (it also fires on quoted text).
    pytest worker, the sum of `docker stats` for a stand, 2× the last observed
    peak if you have one. Too low → OOM (exit 2) and you rerun with more; too high
    → you wait longer. Never blindly retry an OOM with the same limit.
+   `$TMPDIR` of a task is in RAM (tmpfs) and counts against `--memory`: add what
+   the task writes there (pytest `tmp_path`, unpacked wheels, build output). Do
+   not point `TMPDIR` or pytest `--basetemp` at a disk directory to "save" memory:
+   that wears the SSD; raise `--memory` instead, and tell the user if temp files
+   are huge.
 3. **Timeout:** about 2× the expected duration. It is a kill switch, not a
    forecast.
 4. **Will it start soon?** `aq estimate --name tests --cpus 4 --timeout 30m`

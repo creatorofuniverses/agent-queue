@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,5 +51,20 @@ func TestBoundedUsageAbandonsBlockedScan(t *testing.T) {
 	}
 	if u, e := b.Usage(t.Context(), nil); e != nil || u.Tasks != 1 {
 		t.Fatal(u, e)
+	}
+}
+
+// aq top shows where task temp dirs live and how full that filesystem is.
+func TestTopViewTmp(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.TmpDir = t.TempDir()
+	e.host.SetFS(platform.FSUsage{Size: 16 * gib, Free: 10 * gib, Inodes: 1 << 20, InodesFree: 900_000, Tmpfs: true}, nil)
+	e.start(t)
+	var v TopView
+	if err := e.call(t, "top", nil, &v); err != nil || v.Tmp == nil {
+		t.Fatal(v, err)
+	}
+	if !strings.HasPrefix(v.Tmp.Root, e.cfg.TmpDir+"/aq-") || v.Tmp.Free != 10*gib || v.Tmp.InodesFree != 900_000 || !v.Tmp.Tmpfs {
+		t.Fatalf("%+v", v.Tmp)
 	}
 }

@@ -77,7 +77,11 @@ func Exec(a ExecArgs) int {
 		fmt.Fprintln(os.Stderr, "aq: job dir:", err)
 		return 127
 	}
-	if err := os.MkdirAll(a.TmpDir, 0o755); err != nil {
+	// Private: under a shared /tmp other users must not read or plant files.
+	if err := os.MkdirAll(a.TmpDir, 0o700); err != nil {
+		return launchFail(a, err)
+	}
+	if err := os.Chmod(a.TmpDir, 0o700); err != nil {
 		return launchFail(a, err)
 	}
 	outF, err := os.Create(filepath.Join(a.JobDir, "stdout.log"))

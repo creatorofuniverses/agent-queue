@@ -142,15 +142,24 @@ func Main(sub string, args []string) int {
 		}
 		return Exec(a)
 	case "_record-result":
-		if len(args) != 1 {
-			os.Stderr.WriteString("usage: aq _record-result JOB_DIR\n")
+		// TMP_DIR is optional: units launched by an older daemon pass JOB_DIR alone.
+		if len(args) < 1 || len(args) > 2 || len(args) == 2 && !filepath.IsAbs(args[1]) {
+			os.Stderr.WriteString("usage: aq _record-result JOB_DIR [TMP_DIR]\n")
 			return 64
 		}
+		code := 0
 		if err := RecordResult(args[0], os.Getenv, "/sys/fs/cgroup"); err != nil {
 			os.Stderr.WriteString("aq _record-result: " + err.Error() + "\n")
-			return 1
+			code = 1
 		}
-		return 0
+		// After recording, so memory.peak still includes the temp files; on tmpfs
+		// their pages would otherwise outlive the task outside any accounting.
+		if len(args) == 2 {
+			if err := os.RemoveAll(args[1]); err != nil {
+				os.Stderr.WriteString("aq _record-result: remove temp dir: " + err.Error() + "\n")
+			}
+		}
+		return code
 	}
 	return 64
 }

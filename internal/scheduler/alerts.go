@@ -27,7 +27,7 @@ func (s *Scheduler) alertCleaningLocked(ctx context.Context, it *model.Item, now
 }
 func (s *Scheduler) alertAdmissionLocked(ctx context.Context, head model.ItemID, dec admission.Decision, now time.Time) {
 	switch dec.Blocker {
-	case admission.BlockRecovering, admission.BlockPressure, admission.BlockDisk, admission.BlockLiveMemory:
+	case admission.BlockRecovering, admission.BlockPressure, admission.BlockDisk, admission.BlockTmp, admission.BlockLiveMemory:
 	default:
 		s.closedSince = time.Time{}
 		s.closedAlerted = false

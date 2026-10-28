@@ -66,8 +66,19 @@ type HostMetrics interface {
 	Memory() (MemInfo, error)
 	PressureFullAvg10() (float64, error)
 	DiskFree(path string) (uint64, error)
+	// FSUsage reports the filesystem holding path; task temp dirs live there.
+	FSUsage(path string) (FSUsage, error)
 	KernelOOMKills() (uint64, error)
 	NumCPU() int
+}
+
+// FSUsage is a statfs result: bytes and inodes available to an unprivileged user.
+type FSUsage struct {
+	Size       uint64 `json:"size"`
+	Free       uint64 `json:"free"`
+	Inodes     uint64 `json:"inodes"`
+	InodesFree uint64 `json:"inodes_free"`
+	Tmpfs      bool   `json:"tmpfs"`
 }
 
 // StandMeter measures external stands; Usage never blocks.

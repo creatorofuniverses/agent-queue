@@ -181,3 +181,25 @@ func TestRetentionHistoryWaitsForLogs(t *testing.T) {
 		t.Fatal("row deleted before its logs expired", e)
 	}
 }
+
+// With temp dirs moved to a tmpfs root, the sweep covers that root and the old
+// state-dir location, where tasks started before the move left theirs.
+func TestRetentionSweepsTmpRootAndLegacyTmp(t *testing.T) {
+	s, p, cfg, now := retentionEnv(t)
+	legacy := p
+	p.TmpRoot = filepath.Join(t.TempDir(), "aq-1000")
+	terminal := retentionItem(t, s, p, now.Add(-24*time.Hour), 1)
+	active := retentionItem(t, s, p, time.Time{}, 1)
+	dirs := []string{p.TmpDir(terminal.ID), p.TmpDir(active.ID), legacy.TmpDir(terminal.ID), p.TeardownTmpDir(terminal.ID, 1)}
+	for _, dir := range dirs {
+		os.MkdirAll(dir, 0o700)
+		os.Chtimes(dir, now.Add(-2*time.Hour), now.Add(-2*time.Hour))
+	}
+	if e := retentionStep(t.Context(), s, p, cfg, now); e != nil {
+		t.Fatal(e)
+	}
+	requirePath(t, p.TmpDir(terminal.ID), false)
+	requirePath(t, p.TmpDir(active.ID), true)
+	requirePath(t, legacy.TmpDir(terminal.ID), false)
+	requirePath(t, p.TeardownTmpDir(terminal.ID, 1), false)
+}

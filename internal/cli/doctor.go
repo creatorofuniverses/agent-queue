@@ -15,6 +15,7 @@ import (
 
 	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/platform/linux"
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
@@ -32,6 +33,8 @@ const (
 	codeSystemdTooOld     = "SYSTEMD_TOO_OLD"
 	codeKillDropinMissing = "KILL_DROPIN_MISSING"
 	codeIONotDelegated    = "IO_NOT_DELEGATED" // a warning: tasks run, disk bytes are not recorded
+	codeTmpOnDisk         = "TMP_ON_DISK"      // a warning: task temp files wear the state dir's disk
+	codeTmpLow            = "TMP_LOW"          // a warning: the queue holds until temp space frees up
 )
 
 // minSystemd is needed for `systemd-run --expand-environment=no`.
@@ -60,6 +63,7 @@ type doctorSystem struct {
 	Exists      func(path string) bool
 	Run         func(ctx context.Context, name string, args ...string) (string, error)
 	DiskFree    func(path string) (uint64, error)
+	FSUsage     func(path string) (platform.FSUsage, error)
 	MemTotal    func() (uint64, error)
 	NumCPU      func() int
 	RandomHex   func() string
@@ -85,6 +89,7 @@ func realDoctorSystem() doctorSystem {
 			return string(out), err
 		},
 		DiskFree: host.DiskFree,
+		FSUsage:  host.FSUsage,
 		MemTotal: func() (uint64, error) { m, err := host.Memory(); return m.Total, err },
 		NumCPU:   host.NumCPU,
 		RandomHex: func() string {
@@ -183,6 +188,7 @@ func runDoctor(ctx context.Context, sys doctorSystem, paths config.Paths, xdgRun
 		diskErr = fmt.Errorf("%s free in %s, need %s", units.FormatSize(free), paths.StateDir, units.FormatSize(cfg.MinDiskFree))
 	}
 	add("disk", codeDiskLow, diskErr, "enough free space")
+	out = append(out, tmpCheck(sys, cfg))
 
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -266,6 +272,34 @@ func diskIOCheck(sys doctorSystem, manager, slicePath string) Check {
 		c.Warn, c.Code = true, codeIONotDelegated
 		c.Detail = "io is delegated, but the running user manager started before that; " +
 			"systemctl --user daemon-reexec (or a reboot), then restart aq.service"
+	}
+	return c
+}
+
+// tmpCheck reports where task temp dirs go. Both problems are warnings: on disk
+// tasks run but wear the SSD; short of space or inodes the queue holds.
+func tmpCheck(sys doctorSystem, cfg config.Config) Check {
+	c := Check{Name: "tmp", OK: true}
+	plan := daemon.PlanTmpRoot(cfg, sys.UID, sys.FSUsage, false)
+	if plan.Root == "" {
+		c.Warn, c.Code = true, codeTmpOnDisk
+		c.Detail = "task temp dirs go to the state dir: " + plan.Reason
+		return c
+	}
+	u, err := sys.FSUsage(plan.Base)
+	if err != nil {
+		c.Warn, c.Code, c.Detail = true, codeTmpOnDisk, err.Error()
+		return c
+	}
+	kind := "not tmpfs"
+	if u.Tmpfs {
+		kind = "tmpfs"
+	}
+	c.Detail = fmt.Sprintf("%s (%s): %s free of %s, %d inodes free", plan.Root, kind,
+		units.FormatSize(u.Free), units.FormatSize(u.Size), u.InodesFree)
+	if u.Free < cfg.MinTmpFree || u.InodesFree < cfg.MinTmpInodes {
+		c.Warn, c.Code = true, codeTmpLow
+		c.Detail += fmt.Sprintf("; the queue holds below %s or %d inodes", units.FormatSize(cfg.MinTmpFree), cfg.MinTmpInodes)
 	}
 	return c
 }

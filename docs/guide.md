@@ -134,6 +134,30 @@ before `aq` starts (and get an empty string). Besides `AQ_CPUS`, the task gets
 `AQ_JOB_ID`, its own `TMPDIR`/`TMP`/`TEMP`, and from the calling environment
 `PATH`, `HOME`, `LANG`, `LC_*`, `VIRTUAL_ENV`.
 
+### Temp files live in RAM and count as task memory
+
+The task's `TMPDIR` is `/tmp/aq-<uid>-<slice>/<id>` (`/tmp/aq-1000-aq/<id>` by default) when `/tmp` is tmpfs (or under
+`tmp_dir`, if you set it). Temp files then cost RAM instead of SSD wear: a full
+pytest run can create and delete a hundred thousand files in `tmp_path`, and on
+a disk each of them is a write plus a filesystem journal entry. The pages are
+charged to the task, so **`--memory` must cover what the task writes under
+`$TMPDIR`**, and profiles learn it with the rest of the peak. The directory is
+deleted as soon as the task ends (from inside its unit, so a stopped daemon does
+not leave it behind).
+
+Because a full tmpfs fails tests too, the queue holds while the temp
+filesystem has less than `min_tmp_free` (2G) free or fewer than
+`min_tmp_inodes` (100000) free inodes: `blocked_by=tmp`. Nested tasks
+(`--within`) skip this gate, like the disk gate. `aq top` shows the temp dirs'
+filesystem, and `aq doctor` warns when temp dirs fall back to the state dir
+(`/tmp` is not tmpfs and `tmp_dir` is unset) or the filesystem is low.
+
+```toml
+# tmp_dir = "/tmp"      # unset: /tmp if it is tmpfs, else the state dir
+min_tmp_free = "2G"
+min_tmp_inodes = 100000
+```
+
 `aq submit` prints the task id and returns immediately.
 
 ## Profiles and estimates
@@ -187,8 +211,8 @@ and `aq status` shows the expected start of a waiting item.
 Backfill lets a later task overtake a blocked head if it fits now and, by
 estimate, will free its resources before the head starts, or fits into the free
 remainder left after the head. Reservations overtake only through this
-remainder: shared teardown slots can delay the release. Pressure, disk and
-recovery close the overtaking; so does an unreachable head. Estimates can be
+remainder: shared teardown slots can delay the release. Pressure, disk, temp
+space and recovery close the overtaking; so does an unreachable head. Estimates can be
 wrong, so the actual start is sometimes later than predicted. To disable it, set
 `[scheduler] backfill = false`.
 
@@ -322,7 +346,8 @@ stopping tasks. Each error is marked with a code (`CGROUP_V2_MISSING`,
 `CONTROLLER_MISSING`, `SLICE_MISSING`, `PROBE_FAILED`, `CONFIG_INVALID`,
 `DISK_LOW`, `DAEMON_UNAVAILABLE`, `SYSTEMD_TOO_OLD`, `KILL_DROPIN_MISSING`) and
 a hint. `IO_NOT_DELEGATED` is a warning, not a failure: tasks run, but record no
-disk bytes (see "Disk writes").
+disk bytes (see "Disk writes"). `TMP_ON_DISK` (temp dirs fell back to the state
+dir) and `TMP_LOW` (the queue holds for temp space) are warnings too.
 
 ## Changing the pool
 

@@ -57,6 +57,19 @@ func (h *Host) DiskFree(path string) (uint64, error) {
 	return st.Bavail * uint64(st.Bsize), nil
 }
 
+func (h *Host) FSUsage(path string) (platform.FSUsage, error) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(path, &st); err != nil {
+		return platform.FSUsage{}, err
+	}
+	bs := uint64(st.Bsize)
+	return platform.FSUsage{
+		Size: st.Blocks * bs, Free: st.Bavail * bs,
+		Inodes: st.Files, InodesFree: st.Ffree,
+		Tmpfs: st.Type == unix.TMPFS_MAGIC,
+	}, nil
+}
+
 func (h *Host) NumCPU() int { return runtime.NumCPU() }
 
 func parseMeminfo(r io.Reader) (platform.MemInfo, error) {

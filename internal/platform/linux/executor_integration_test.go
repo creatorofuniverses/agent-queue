@@ -4,6 +4,7 @@ package linux
 
 import (
 	"context"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -353,5 +354,33 @@ func TestIntegDiskIO(t *testing.T) {
 	}
 	if info.ServiceResult != "success" {
 		t.Fatalf("IOAccounting=yes must not break the unit: %+v", info)
+	}
+}
+
+// Temp files on tmpfs are charged to the task (its memory.peak covers them)
+// and go away with the unit, from ExecStopPost.
+func TestIntegTmpfsTempDirCountedAndRemoved(t *testing.T) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(os.TempDir(), &st); err != nil || st.Type != unix.TMPFS_MAGIC {
+		t.Skip("the test temp dir is not on tmpfs")
+	}
+	e := newTestExecutor(t)
+	spec, err := launch(t, e, 256<<20, time.Minute, "sh", "-c", `dd if=/dev/zero of="$TMPDIR/f" bs=1M count=32 status=none`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := waitResult(t, spec.JobDir, 30*time.Second)
+	if info.ServiceResult != "success" || info.MemoryPeak < 32<<20 {
+		t.Fatalf("want success with >= 32 MiB peak: %+v", info)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(spec.TmpDir); os.IsNotExist(err) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s still exists after the unit ended", spec.TmpDir)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

@@ -11,7 +11,9 @@ import (
 const Unbounded = 100 * 365 * 24 * time.Hour
 const BlockQueue Blocker = "queue"
 
-func (b Blocker) Gate() bool { return b == BlockRecovering || b == BlockPressure || b == BlockDisk }
+func (b Blocker) Gate() bool {
+	return b == BlockRecovering || b == BlockPressure || b == BlockDisk || b == BlockTmp
+}
 
 type Capacity struct {
 	Pool, Live int64

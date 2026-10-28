@@ -86,3 +86,27 @@ func TestRecordResultDiskIO(t *testing.T) {
 		t.Fatalf("want 0, got %+v", r)
 	}
 }
+
+// The temp dir goes with the unit: on tmpfs its pages would otherwise keep
+// using memory nothing accounts for. Recording still happens first.
+func TestRecordResultRemovesTmpDir(t *testing.T) {
+	job, tmp := t.TempDir(), filepath.Join(t.TempDir(), "aq-1000", "x")
+	os.MkdirAll(filepath.Join(tmp, "pytest-of-u"), 0o700)
+	os.WriteFile(filepath.Join(tmp, "pytest-of-u", "f"), []byte("x"), 0o600)
+	if code := Main("_record-result", []string{job, tmp}); code != 0 {
+		t.Fatal(code)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatal("tmp dir left behind", err)
+	}
+	if r, err := ReadResultFile(job); r == nil || err != nil {
+		t.Fatal(r, err)
+	}
+	// Units started by an older daemon pass the job dir alone.
+	if code := Main("_record-result", []string{t.TempDir()}); code != 0 {
+		t.Fatal(code)
+	}
+	if code := Main("_record-result", []string{job, "relative"}); code != 64 {
+		t.Fatal("relative tmp dir accepted", code)
+	}
+}

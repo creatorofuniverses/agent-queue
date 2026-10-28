@@ -14,6 +14,9 @@ type Paths struct {
 	// SliceLockDir holds the per-slice daemon lock; it does not follow AQ_RUNTIME_DIR,
 	// so daemons with different runtime dirs still exclude each other on one slice.
 	SliceLockDir string
+	// TmpRoot is the private dir holding task temp dirs (e.g. /tmp/aq-1000 on
+	// tmpfs), resolved by the daemon at start; empty means StateDir/tmp.
+	TmpRoot string
 }
 
 // SliceLockDirFor is xdgRuntimeDir, or /run/user/<uid> when it is unset.
@@ -63,7 +66,15 @@ func (p Paths) SliceLock(slice string) string {
 }
 
 func (p Paths) JobDir(id model.ItemID) string { return filepath.Join(p.StateDir, "jobs", string(id)) }
-func (p Paths) TmpDir(id model.ItemID) string { return filepath.Join(p.StateDir, "tmp", string(id)) }
+func (p Paths) TmpDir(id model.ItemID) string { return filepath.Join(p.TmpBase(), string(id)) }
+
+// TmpBase is the directory holding all temp dirs: TmpRoot, or StateDir/tmp.
+func (p Paths) TmpBase() string {
+	if p.TmpRoot != "" {
+		return p.TmpRoot
+	}
+	return filepath.Join(p.StateDir, "tmp")
+}
 
 // TeardownScript is the daemon's copy of a reservation's teardown script.
 func (p Paths) TeardownScript(id model.ItemID) string {
@@ -77,5 +88,5 @@ func (p Paths) TeardownDir(id model.ItemID, attempt int) string {
 
 // TeardownTmpDir is the per-attempt temporary directory, removed after the attempt ends.
 func (p Paths) TeardownTmpDir(id model.ItemID, attempt int) string {
-	return filepath.Join(p.StateDir, "tmp", fmt.Sprintf("teardown-%s-%d", id, attempt))
+	return filepath.Join(p.TmpBase(), fmt.Sprintf("teardown-%s-%d", id, attempt))
 }

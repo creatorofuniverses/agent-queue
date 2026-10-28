@@ -66,8 +66,8 @@ func TestExecSetsTmpdir(t *testing.T) {
 	if strings.TrimSpace(string(b)) != a.TmpDir {
 		t.Fatalf("got %q want %q", b, a.TmpDir)
 	}
-	if st, err := os.Stat(a.TmpDir); err != nil || !st.IsDir() {
-		t.Fatal("tmp dir missing")
+	if st, err := os.Stat(a.TmpDir); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+		t.Fatal("tmp dir missing or not private", st, err)
 	}
 }
 

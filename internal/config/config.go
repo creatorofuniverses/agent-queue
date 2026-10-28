@@ -95,13 +95,18 @@ type Config struct {
 	PoolCPUs            int
 	ReserveFloorPercent int
 	MinDiskFree         uint64
-	MemoryHighRatio     float64
-	CancelGrace         time.Duration
-	Pressure            PressureConfig
-	Logs                LogsConfig
-	Reservations        ReservationsConfig
-	SliceName           string
-	UnitPrefix          string
+	// TmpDir is where task temp dirs live: empty uses /tmp when it is tmpfs and
+	// falls back to the state dir otherwise; a path is used as given.
+	TmpDir          string
+	MinTmpFree      uint64
+	MinTmpInodes    uint64
+	MemoryHighRatio float64
+	CancelGrace     time.Duration
+	Pressure        PressureConfig
+	Logs            LogsConfig
+	Reservations    ReservationsConfig
+	SliceName       string
+	UnitPrefix      string
 }
 
 const gib = uint64(1) << 30
@@ -120,6 +125,8 @@ func Default() Config {
 		PoolCPUs:            16,
 		ReserveFloorPercent: 10,
 		MinDiskFree:         2 * gib,
+		MinTmpFree:          2 * gib,
+		MinTmpInodes:        100_000,
 		MemoryHighRatio:     1.0,
 		CancelGrace:         10 * time.Second,
 		Pressure: PressureConfig{
@@ -191,6 +198,9 @@ type rawConfig struct {
 	PoolCPUs            *int     `toml:"pool_cpus"`
 	ReserveFloorPercent *int     `toml:"reserve_floor_percent"`
 	MinDiskFree         *string  `toml:"min_disk_free"`
+	TmpDir              *string  `toml:"tmp_dir"`
+	MinTmpFree          *string  `toml:"min_tmp_free"`
+	MinTmpInodes        *uint64  `toml:"min_tmp_inodes"`
 	MemoryHighRatio     *float64 `toml:"memory_high_ratio"`
 	CancelGrace         *string  `toml:"cancel_grace"`
 	SliceName           *string  `toml:"slice_name"`
@@ -281,6 +291,7 @@ func Load(path string) (Config, error) {
 	}
 	size("pool_memory", raw.PoolMemory, &c.PoolMemory)
 	size("min_disk_free", raw.MinDiskFree, &c.MinDiskFree)
+	size("min_tmp_free", raw.MinTmpFree, &c.MinTmpFree)
 	size("logs.max_stdout", raw.Logs.MaxStdout, &c.Logs.MaxStdout)
 	size("logs.max_stderr", raw.Logs.MaxStderr, &c.Logs.MaxStderr)
 	size("reservations.teardown_memory", raw.Reservations.TeardownMemory, &c.Reservations.TeardownMemory)
@@ -330,6 +341,12 @@ func Load(path string) (Config, error) {
 	if raw.MemoryHighRatio != nil {
 		c.MemoryHighRatio = *raw.MemoryHighRatio
 	}
+	if raw.TmpDir != nil {
+		c.TmpDir = *raw.TmpDir
+	}
+	if raw.MinTmpInodes != nil {
+		c.MinTmpInodes = *raw.MinTmpInodes
+	}
 	if raw.SliceName != nil {
 		c.SliceName = *raw.SliceName
 	}
@@ -367,6 +384,9 @@ func (c Config) Validate(memTotal uint64, numCPU int) error {
 	}
 	if !(c.MemoryHighRatio > 0 && c.MemoryHighRatio <= 1) {
 		return fmt.Errorf("memory_high_ratio %v must be in (0, 1]", c.MemoryHighRatio)
+	}
+	if c.TmpDir != "" && !filepath.IsAbs(c.TmpDir) {
+		return fmt.Errorf("tmp_dir %q must be an absolute path", c.TmpDir)
 	}
 	if err := validateSliceName(c.SliceName); err != nil {
 		return err

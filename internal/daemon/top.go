@@ -42,6 +42,15 @@ type TopView struct {
 	Physical    PhysicalView          `json:"physical"`
 	Commitments scheduler.Commitments `json:"commitments"`
 	Queue       QueueView             `json:"queue"`
+	Tmp         *TmpView              `json:"tmp,omitempty"`
+}
+
+// TmpView is the filesystem holding task temp dirs. Root is empty when they
+// stay in the state dir (Reason says why) and no temp-dir gate applies.
+type TmpView struct {
+	TmpPlan
+	platform.FSUsage
+	Error string `json:"error,omitempty"`
 }
 
 // boundedUsage lets callers give up on a scan blocked in a /proc read (a D-state
@@ -104,5 +113,11 @@ func (d *server) top(ctx context.Context) (any, error) {
 	}
 	closed, avg := d.sched.Pressure()
 	p := d.sched.LastPass()
-	return TopView{At: time.Now().UTC(), Host: HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed}, Physical: physical(ctx, d.opts.Usage, d.cfg.Stats.AgentProcesses, mem), Commitments: p.Commitments, Queue: QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}}, nil
+	tmp := &TmpView{TmpPlan: d.tmp}
+	if u, err := d.host.FSUsage(d.tmp.Base); err != nil {
+		tmp.Error = err.Error()
+	} else {
+		tmp.FSUsage = u
+	}
+	return TopView{At: time.Now().UTC(), Host: HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed}, Physical: physical(ctx, d.opts.Usage, d.cfg.Stats.AgentProcesses, mem), Commitments: p.Commitments, Queue: QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}, Tmp: tmp}, nil
 }

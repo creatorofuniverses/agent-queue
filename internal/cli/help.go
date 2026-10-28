@@ -25,7 +25,7 @@ var helpGroups = []struct {
 
 var helps = map[string]cmdHelp{
 	"submit": {"aq submit [flags] -- COMMAND [ARGS...]", "queue a command with a memory and CPU budget",
-		"The command waits in the queue until its memory fits, then runs in its own systemd unit with that\nlimit. Prints the task ID. With --name the memory can come from the history of earlier runs\n(the profile <repo root>:<name>); otherwise --memory is required. Name the workload, not the run:\nkeep the name the same across releases (no version, date or commit in it) so the history adds up.",
+		"The command waits in the queue until its memory fits, then runs in its own systemd unit with that\nlimit. Prints the task ID. With --name the memory can come from the history of earlier runs\n(the profile <repo root>:<name>); otherwise --memory is required. Name the workload, not the run:\nkeep the name the same across releases (no version, date or commit in it) so the history adds up.\n$TMPDIR is a private dir on tmpfs: temp files count against --memory and go away with the task.",
 		[]string{"aq submit --memory 4G --timeout 30m --name tests -- pytest -n 8", "aq submit --name tests --timeout 30m -- pytest -n 8   # memory from history", "aq submit --within RES_ID --memory 2G --timeout 10m -- make e2e"}},
 	"wait": {"aq wait [--until expiring] ID", "block until a task ends or a reservation is granted",
 		"Prints one line with the outcome. Exit codes: 0 success, granted or expiry warning; 1 the command\nfailed; 2 OOM; 3 timeout; 4 cancelled; 5 infrastructure or rejected; 6 reservation no longer\nheld; 64 usage; 69 daemon not running; 130 interrupted.\nFor a reservation, --until expiring returns when its TTL is about to run out.",
@@ -52,7 +52,7 @@ var helps = map[string]cmdHelp{
 		[]string{"aq profile list", "aq profile show tests"}},
 	"stats": {"aq stats [--since 7d] [--profile P] [--json] | aq stats export --format jsonl|csv [--table T]", "usage history: waits, outcomes, profiles, disk writes, host memory, incidents", "Disk writes lists the profiles whose tasks wrote the most to physical disks (total, median\nand max per run); a suite that writes gigabytes per run is worth fixing.",
 		[]string{"aq stats", "aq stats --since 1d", "aq stats export --format csv --table items > items.csv"}},
-	"doctor":  {"aq doctor [--json]", "check that the host, systemd and the daemon are set up", "A warn line is not a failure: IO_NOT_DELEGATED means tasks run but record no disk bytes.", []string{"aq doctor"}},
+	"doctor":  {"aq doctor [--json]", "check that the host, systemd and the daemon are set up", "A warn line is not a failure: IO_NOT_DELEGATED means tasks run but record no disk bytes;\nTMP_ON_DISK means temp dirs fell back to the state dir; TMP_LOW means the queue holds for temp space.", []string{"aq doctor"}},
 	"daemon":  {"aq daemon", "run the scheduler daemon (normally started by systemd)", "", nil},
 	"ack":     {"aq ack [--json] EVENT_ID", "acknowledge a session event", "", nil},
 	"hook":    {"aq hook pretooluse", "agent PreToolUse hook: hints to queue heavy commands", "", nil},

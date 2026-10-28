@@ -233,6 +233,25 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 	if q.Queued > 0 && q.HeadID != "" {
 		fmt.Fprintf(w, "  %s %s %s\n", u.dim("next:"), shortID(q.HeadID), u.yellow("blocked by "+blockedText(q.BlockedBy, q.BlockedDetail)))
 	}
+
+	if t := v.Tmp; t != nil {
+		fmt.Fprintln(w)
+		u.heading(w, "Temp dirs")
+		switch {
+		case t.Root == "":
+			fmt.Fprintf(w, "  %s %s\n", u.yellow("in the state dir:"), t.Reason)
+		case t.Error != "":
+			fmt.Fprintf(w, "  %s %s\n", t.Root, u.red(t.Error))
+		default:
+			used := t.Size - min(t.Free, t.Size)
+			fmt.Fprintf(w, "  %s %s %s used of %s · %d inodes free\n", pad("space", 12), u.bar(used, t.Size, 24), size(used), size(t.Size), t.InodesFree)
+			note := t.Root
+			if t.Tmpfs {
+				note += " · tmpfs: temp files count as task memory"
+			}
+			fmt.Fprintf(w, "  %s\n", u.dim(note))
+		}
+	}
 }
 
 func (c *cmdCtx) prettyProfiles(vs []daemon.ProfileListEntry) {

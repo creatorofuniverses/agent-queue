@@ -336,6 +336,7 @@ type fakeSystem struct {
 	probeOut  string
 	probeErr  error
 	diskFree  uint64
+	tmp       platform.FSUsage
 	pingErr   error
 	probeUnit string
 }
@@ -356,6 +357,7 @@ func newFakeSystem() *fakeSystem {
 		systemd:  "systemd 256 (256.7-1.fc41)\n+PAM",
 		probeOut: "67108864\n",
 		diskFree: 100 * gib,
+		tmp:      platform.FSUsage{Size: 16 * gib, Free: 15 * gib, Inodes: 1 << 20, InodesFree: 1 << 20, Tmpfs: true},
 	}
 }
 
@@ -382,6 +384,7 @@ func (f *fakeSystem) system() doctorSystem {
 			return "", nil
 		},
 		DiskFree:  func(string) (uint64, error) { return f.diskFree, nil },
+		FSUsage:   func(string) (platform.FSUsage, error) { return f.tmp, nil },
 		MemTotal:  func() (uint64, error) { return 64 * gib, nil },
 		NumCPU:    func() int { return 16 },
 		RandomHex: func() string { return "abcd1234" },
@@ -425,7 +428,7 @@ func TestDoctorJSONShape(t *testing.T) {
 			t.Errorf("check %+v should be ok", c)
 		}
 	}
-	want := []string{"cgroup_v2", "controllers", "slice", "disk_io", "probe", "config", "disk", "daemon", "systemd", "kill_dropin"}
+	want := []string{"cgroup_v2", "controllers", "slice", "disk_io", "probe", "config", "disk", "tmp", "daemon", "systemd", "kill_dropin"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("names = %v", names)
 	}
@@ -653,5 +656,38 @@ func TestLogsOfPrunedItem(t *testing.T) {
 	code, out, errout := h.run("result", string(it.ID))
 	if code != 0 || !strings.Contains(out, "logs:      removed by retention") {
 		t.Fatal(code, out, errout)
+	}
+}
+
+// Temp dirs on disk or a nearly full tmpfs are warnings: tasks still run.
+func TestDoctorTmpCheck(t *testing.T) {
+	h := newHarness(t)
+	check := func(f *fakeSystem) Check {
+		t.Helper()
+		f.install(t)
+		code, d := runDoctorJSON(t, h)
+		if code != 0 {
+			t.Fatalf("exit %d: %+v", code, d)
+		}
+		for _, c := range d.Checks {
+			if c.Name == "tmp" {
+				return c
+			}
+		}
+		t.Fatal("no tmp check")
+		return Check{}
+	}
+	if c := check(newFakeSystem()); !c.OK || c.Warn || !strings.Contains(c.Detail, "tmpfs") || !strings.Contains(c.Detail, "inodes") {
+		t.Fatalf("ok: %+v", c)
+	}
+	f := newFakeSystem()
+	f.tmp.Tmpfs = false
+	if c := check(f); !c.OK || !c.Warn || c.Code != "TMP_ON_DISK" || !strings.Contains(c.Detail, "not tmpfs") {
+		t.Fatalf("disk: %+v", c)
+	}
+	f = newFakeSystem()
+	f.tmp.InodesFree = 10
+	if c := check(f); !c.OK || !c.Warn || c.Code != "TMP_LOW" {
+		t.Fatalf("low: %+v", c)
 	}
 }

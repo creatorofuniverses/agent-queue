@@ -5,6 +5,12 @@ CLI and MCP use the same daemon over a local Unix socket. Sizes are binary:
 changes admission accounting while `--memory` remains the hard limit. CPUs are
 integers. `--key` makes a repeated identical submission return the same item.
 `--project` overrides the git-root/cwd project. Commands run from the submit cwd.
+`TMPDIR`/`TMP`/`TEMP` point to a private `/tmp/aq-<uid>-<slice>/<id>` on tmpfs (or the
+configured `tmp_dir`); it is deleted when the task ends and its files count as
+task memory. While that filesystem has less than `min_tmp_free` (2G) or
+`min_tmp_inodes` (100000) free, the queue holds with `blocked_by=tmp`; nested
+`--within` tasks skip this gate. If `/tmp` is not tmpfs and `tmp_dir` is unset,
+temp dirs fall back to the state dir and `aq doctor` warns `TMP_ON_DISK`.
 
 `aq reserve --memory STAND --task-memory TASKS --task-cpus N --ttl D --teardown FILE`
 queues a stand plus task budget. Stand CPUs default to 0; task budget fields must

@@ -12,7 +12,7 @@ func TestTopText(t *testing.T) {
 	if code != 0 {
 		t.Fatal(code, out, errout)
 	}
-	for _, s := range []string{"memory:", "physical: unavailable:", "commitments (pool", "queue:"} {
+	for _, s := range []string{"memory:", "physical: unavailable:", "commitments (pool", "queue:", "tmp: state dir ("} {
 		if !strings.Contains(out, s) {
 			t.Fatal(out)
 		}

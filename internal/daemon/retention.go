@@ -57,8 +57,17 @@ func retentionStep(ctx context.Context, st *store.Store, paths config.Paths, cfg
 	if e != nil {
 		return e
 	}
-	for _, subdir := range []string{"jobs", "tmp"} {
-		dir := filepath.Join(paths.StateDir, subdir)
+	// Temp dirs live under TmpRoot (tmpfs) and, for tasks started before it was
+	// set, under the state dir.
+	sweep := []struct{ subdir, dir string }{
+		{"jobs", filepath.Join(paths.StateDir, "jobs")},
+		{"tmp", filepath.Join(paths.StateDir, "tmp")},
+	}
+	if paths.TmpRoot != "" {
+		sweep = append(sweep, struct{ subdir, dir string }{"tmp", paths.TmpRoot})
+	}
+	for _, sw := range sweep {
+		subdir, dir := sw.subdir, sw.dir
 		entries, e := os.ReadDir(dir)
 		if os.IsNotExist(e) {
 			continue

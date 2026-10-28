@@ -20,6 +20,10 @@ type Policy struct {
 	Pool         model.Resources
 	ReserveFloor uint64
 	MinDiskFree  uint64
+	// TmpGuard: task temp dirs live on a filesystem worth guarding (tmpfs or an
+	// explicit tmp_dir), so the queue holds while it is short of space or inodes.
+	TmpGuard                 bool
+	MinTmpFree, MinTmpInodes uint64
 	// TeardownSlots is teardown_concurrency; reservation backfill must not make
 	// a teardown the head waits on queue for a slot. Zero means one slot.
 	TeardownSlots int
@@ -28,6 +32,7 @@ type Policy struct {
 type Snapshot struct {
 	Committed                          model.Resources
 	MemAvailable, Unconsumed, DiskFree uint64
+	TmpFree, TmpInodesFree             uint64
 	PressureClosed, Recovering         bool
 }
 
@@ -38,6 +43,7 @@ const (
 	BlockRecovering Blocker = "recovering"
 	BlockPressure   Blocker = "pressure"
 	BlockDisk       Blocker = "disk"
+	BlockTmp        Blocker = "tmp"
 	BlockPoolMemory Blocker = "pool_memory"
 	BlockPoolCPU    Blocker = "pool_cpu"
 	BlockLiveMemory Blocker = "live_memory"
@@ -78,6 +84,11 @@ func Decide(p Policy, s Snapshot, req model.Resources) Decision {
 	case s.DiskFree < p.MinDiskFree:
 		return block(BlockDisk, "disk free %s below minimum %s",
 			units.FormatSize(s.DiskFree), units.FormatSize(p.MinDiskFree))
+	case p.TmpGuard && s.TmpFree < p.MinTmpFree:
+		return block(BlockTmp, "temp dir free %s below minimum %s",
+			units.FormatSize(s.TmpFree), units.FormatSize(p.MinTmpFree))
+	case p.TmpGuard && s.TmpInodesFree < p.MinTmpInodes:
+		return block(BlockTmp, "temp dir free inodes %d below minimum %d", s.TmpInodesFree, p.MinTmpInodes)
 	}
 	if need := satAdd(s.Committed.MemoryBytes, req.MemoryBytes); need > p.Pool.MemoryBytes {
 		return block(BlockPoolMemory, "pool memory: committed %s + requested %s exceeds pool %s",

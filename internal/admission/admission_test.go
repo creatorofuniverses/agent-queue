@@ -2,6 +2,7 @@ package admission
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
@@ -107,5 +108,34 @@ func TestValidate(t *testing.T) {
 		if err := Validate(p, tt.req); !errors.Is(err, tt.want) {
 			t.Errorf("%s: got %v, want %v", tt.name, err, tt.want)
 		}
+	}
+}
+
+// The temp-dir gate holds the queue only when task temp dirs live on a guarded
+// filesystem (tmpfs or an explicit tmp_dir); it comes after the disk gate.
+func TestDecideTmpGate(t *testing.T) {
+	p := basePolicy()
+	p.MinTmpFree, p.MinTmpInodes = 2*gib, 100_000
+	s := okSnap()
+	s.TmpFree, s.TmpInodesFree = 1*gib, 500_000
+	if d := Decide(p, s, req(1*gib, 1)); !d.Admit {
+		t.Fatalf("unguarded: %+v", d)
+	}
+	p.TmpGuard = true
+	d := Decide(p, s, req(1*gib, 1))
+	if d.Blocker != BlockTmp || !strings.Contains(d.Detail, "temp") || !d.Blocker.Gate() {
+		t.Fatalf("bytes: %+v", d)
+	}
+	s.TmpFree, s.TmpInodesFree = 4*gib, 50_000
+	if d := Decide(p, s, req(1*gib, 1)); d.Blocker != BlockTmp || !strings.Contains(d.Detail, "inodes") {
+		t.Fatalf("inodes: %+v", d)
+	}
+	s.TmpInodesFree = 200_000
+	if d := Decide(p, s, req(1*gib, 1)); !d.Admit {
+		t.Fatalf("enough: %+v", d)
+	}
+	s.DiskFree, s.TmpFree = 0, 0
+	if d := Decide(p, s, req(1*gib, 1)); d.Blocker != BlockDisk {
+		t.Fatalf("disk first: %+v", d)
 	}
 }

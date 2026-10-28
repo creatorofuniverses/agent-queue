@@ -58,7 +58,7 @@ func TestPrettyModeOnlyWhenAsked(t *testing.T) {
 	if _, out, _ := h.run("list"); strings.Contains(out, "\x1b[") || !strings.Contains(out, "build") {
 		t.Fatal(out)
 	}
-	if _, out, _ := h.run("top"); !strings.Contains(out, "Host memory") || !strings.Contains(out, "aq commitments") {
+	if _, out, _ := h.run("top"); !strings.Contains(out, "Host memory") || !strings.Contains(out, "aq commitments") || !strings.Contains(out, "Temp dirs") {
 		t.Fatal(out)
 	}
 }

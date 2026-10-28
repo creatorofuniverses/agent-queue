@@ -48,4 +48,22 @@ func printTop(c *cmdCtx, v daemon.TopView) {
 		head = string(v.Queue.HeadID) + " blocked by " + blockedText(v.Queue.BlockedBy, v.Queue.BlockedDetail)
 	}
 	fmt.Fprintf(c.stdout, "queue: %d queued, %d running, %d held; head %s\n", v.Queue.Queued, v.Queue.Running, v.Queue.Held, head)
+	if t := v.Tmp; t != nil {
+		fmt.Fprintf(c.stdout, "tmp: %s\n", tmpText(t))
+	}
+}
+
+// tmpText is where task temp dirs live and how full that filesystem is.
+func tmpText(t *daemon.TmpView) string {
+	if t.Root == "" {
+		return "state dir (" + t.Reason + ")"
+	}
+	s := t.Root
+	if t.Tmpfs {
+		s += " (tmpfs, counts as task memory)"
+	}
+	if t.Error != "" {
+		return s + ": " + t.Error
+	}
+	return fmt.Sprintf("%s: %s free of %s, %d of %d inodes free", s, units.FormatSize(t.Free), units.FormatSize(t.Size), t.InodesFree, t.Inodes)
 }

@@ -409,3 +409,36 @@ func TestWebhookFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTmpDefaultsAndOverrides(t *testing.T) {
+	d := Default()
+	if d.TmpDir != "" || d.MinTmpFree != 2*gib || d.MinTmpInodes != 100_000 {
+		t.Fatalf("tmp defaults: %q %d %d", d.TmpDir, d.MinTmpFree, d.MinTmpInodes)
+	}
+	path := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(path, []byte("tmp_dir = \"/dev/shm\"\nmin_tmp_free = \"1G\"\nmin_tmp_inodes = 5000\n"), 0o600)
+	c, err := Load(path)
+	if err != nil || c.TmpDir != "/dev/shm" || c.MinTmpFree != gib || c.MinTmpInodes != 5000 {
+		t.Fatal(c.TmpDir, c.MinTmpFree, c.MinTmpInodes, err)
+	}
+	c.TmpDir = "relative/tmp"
+	if err := c.Validate(31*gib, 20); err == nil || !strings.Contains(err.Error(), "tmp_dir") {
+		t.Fatal(err)
+	}
+}
+
+func TestTmpPathsUnderTmpRoot(t *testing.T) {
+	p := Paths{StateDir: "/s", TmpRoot: "/tmp/aq-1000"}
+	if got := p.TmpDir("x"); got != "/tmp/aq-1000/x" {
+		t.Error(got)
+	}
+	if got := p.TeardownTmpDir("x", 2); got != "/tmp/aq-1000/teardown-x-2" {
+		t.Error(got)
+	}
+	if got := p.TmpBase(); got != "/tmp/aq-1000" {
+		t.Error(got)
+	}
+	if got := (Paths{StateDir: "/s"}).TmpBase(); got != "/s/tmp" {
+		t.Error(got)
+	}
+}

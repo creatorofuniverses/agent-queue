@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -418,4 +419,25 @@ func TestWithinRefusedWhenDue(t *testing.T) {
 	nested := e.submit(t, e.within(res.ID, 100*mib))
 	e.tick(t)
 	e.wantState(t, nested.ID, model.StateRunning, model.ReasonNone)
+}
+
+// With task temp dirs on a guarded filesystem, a short temp dir holds the queue
+// (blocked_by tmp); without a TmpRoot the same reading is ignored.
+func TestTmpGateHoldsQueue(t *testing.T) {
+	e := newEnv(t, nil)
+	e.host.SetFS(platform.FSUsage{Free: 100 * mib, InodesFree: 1 << 20, Tmpfs: true}, nil)
+	plain := e.submit(t, e.req(100*mib))
+	e.tick(t)
+	e.wantState(t, plain.ID, model.StateRunning, model.ReasonNone)
+
+	e.paths.TmpRoot = filepath.Join(t.TempDir(), "aq-1000")
+	e.rebuild(t, e.ex, true)
+	held := e.submit(t, e.req(100*mib))
+	e.tick(t)
+	e.wantHead(t, held.ID, admission.BlockTmp)
+	e.wantState(t, held.ID, model.StateQueued, model.ReasonNone)
+
+	e.host.SetFS(platform.FSUsage{Free: 8 * gib, InodesFree: 1 << 20, Tmpfs: true}, nil)
+	e.tick(t)
+	e.wantState(t, held.ID, model.StateRunning, model.ReasonNone)
 }

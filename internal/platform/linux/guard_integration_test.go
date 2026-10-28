@@ -68,11 +68,12 @@ func restoreSlice(t *testing.T, e *Executor) {
 
 type staticHost struct{ mem platform.MemInfo }
 
-func (h staticHost) Memory() (platform.MemInfo, error) { return h.mem, nil }
-func (staticHost) PressureFullAvg10() (float64, error) { return 0, nil }
-func (staticHost) DiskFree(string) (uint64, error)     { return 0, nil }
-func (staticHost) KernelOOMKills() (uint64, error)     { return 0, nil }
-func (staticHost) NumCPU() int                         { return 1 }
+func (h staticHost) Memory() (platform.MemInfo, error)      { return h.mem, nil }
+func (staticHost) PressureFullAvg10() (float64, error)      { return 0, nil }
+func (staticHost) DiskFree(string) (uint64, error)          { return 0, nil }
+func (staticHost) FSUsage(string) (platform.FSUsage, error) { return platform.FSUsage{}, nil }
+func (staticHost) KernelOOMKills() (uint64, error)          { return 0, nil }
+func (staticHost) NumCPU() int                              { return 1 }
 
 // Starting a sibling unit makes systemd reset the slice ceiling; the running guard keeps it lowered.
 func TestIntegGuardHoldsCeilingAcrossSiblingStart(t *testing.T) {

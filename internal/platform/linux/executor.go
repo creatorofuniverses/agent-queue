@@ -117,7 +117,7 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 		// SIGABRT can be ignored and dumps core; on Fedora the drop-in from
 		// EnsureSlice is what makes this stick (see writeKillDropIn).
 		"TimeoutStopFailureMode=kill",
-		"ExecStopPost=" + execQuote(cfg.AqBinary) + " _record-result " + execQuote(spec.JobDir),
+		"ExecStopPost=" + execQuote(cfg.AqBinary) + " _record-result " + execQuote(spec.JobDir) + " " + execQuote(spec.TmpDir),
 	}
 	for _, p := range append(props, cfg.ExtraProperties...) {
 		args = append(args, "-p", p)

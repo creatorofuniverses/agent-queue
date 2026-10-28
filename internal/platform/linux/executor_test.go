@@ -56,7 +56,7 @@ func TestSystemdRunArgs(t *testing.T) {
 		{"-p", "MemoryMax=4294967296"}, {"-p", "MemoryHigh=3865470566"}, {"-p", "MemorySwapMax=0"},
 		{"-p", "CPUQuota=200%"}, {"-p", "KillMode=control-group"}, {"-p", "OOMPolicy=kill"},
 		{"-p", "OOMScoreAdjust=900"}, {"-p", "IOAccounting=yes"}, {"-p", "RuntimeMaxSec=1800"}, {"-p", "TimeoutStopSec=10"}, {"-p", "TimeoutStopFailureMode=kill"},
-		{"-p", "ExecStopPost=/bin/aq _record-result /state/jobs/abc"},
+		{"-p", "ExecStopPost=/bin/aq _record-result /state/jobs/abc /state/tmp/abc"},
 	} {
 		if !hasPair(args, p[0], p[1]) {
 			t.Errorf("missing %s %s in %q", p[0], p[1], args)
@@ -104,7 +104,7 @@ func TestExecStopPostQuoting(t *testing.T) {
 	s := testSpec()
 	s.JobDir = `/st/a$b"c`
 	args := SystemdRunArgs(cfg, s)
-	if !hasPair(args, "-p", `ExecStopPost="/opt/my bin/aq" _record-result "/st/a$$b\"c"`) {
+	if !hasPair(args, "-p", `ExecStopPost="/opt/my bin/aq" _record-result "/st/a$$b\"c" /state/tmp/abc`) {
 		t.Fatalf("quoting: %q", args)
 	}
 }

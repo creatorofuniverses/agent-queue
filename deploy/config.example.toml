@@ -9,6 +9,12 @@ pool_cpus = 16
 reserve_floor_percent = 10
 # Minimum free space on the state disk.
 min_disk_free = "2G"
+# Where task temp dirs ($TMPDIR = <dir>/aq-<uid>-<slice>/<id>) live. Unset: /tmp when it
+# is tmpfs, else the state dir. Temp files on tmpfs count as task memory.
+# tmp_dir = "/tmp"
+# The queue holds while the temp dirs' filesystem has less free space or inodes.
+min_tmp_free = "2G"
+min_tmp_inodes = 100000
 # MemoryHigh = task limit * this value (0 < x <= 1).
 # 1.0: without swap, MemoryHigh < MemoryMax throttles a task forever instead of an OOM.
 memory_high_ratio = 1.0

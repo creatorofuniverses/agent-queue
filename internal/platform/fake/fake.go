@@ -251,6 +251,8 @@ type Host struct {
 	mem      platform.MemInfo
 	pressure float64
 	disk     uint64
+	fs       platform.FSUsage
+	fsErr    error
 	oom      uint64
 	cpus     int
 	memErr   error
@@ -261,8 +263,16 @@ func NewHost() *Host { return &Host{cpus: 1} }
 func (h *Host) Set(m platform.MemInfo) { h.mu.Lock(); h.mem = m; h.mu.Unlock() }
 func (h *Host) SetPressure(v float64)  { h.mu.Lock(); h.pressure = v; h.mu.Unlock() }
 func (h *Host) SetDisk(v uint64)       { h.mu.Lock(); h.disk = v; h.mu.Unlock() }
-func (h *Host) SetOOMKills(v uint64)   { h.mu.Lock(); h.oom = v; h.mu.Unlock() }
-func (h *Host) SetNumCPU(n int)        { h.mu.Lock(); h.cpus = n; h.mu.Unlock() }
+
+// SetFS sets what FSUsage reports for every path; the zero value is a non-tmpfs
+// filesystem, so task temp dirs stay under the state dir.
+func (h *Host) SetFS(u platform.FSUsage, err error) {
+	h.mu.Lock()
+	h.fs, h.fsErr = u, err
+	h.mu.Unlock()
+}
+func (h *Host) SetOOMKills(v uint64) { h.mu.Lock(); h.oom = v; h.mu.Unlock() }
+func (h *Host) SetNumCPU(n int)      { h.mu.Lock(); h.cpus = n; h.mu.Unlock() }
 
 func (h *Host) Memory() (platform.MemInfo, error) {
 	h.mu.Lock()
@@ -283,6 +293,12 @@ func (h *Host) DiskFree(string) (uint64, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.disk, nil
+}
+
+func (h *Host) FSUsage(string) (platform.FSUsage, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.fs, h.fsErr
 }
 
 func (h *Host) KernelOOMKills() (uint64, error) {

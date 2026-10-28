@@ -62,8 +62,14 @@ Startup locks prevent two daemons from managing the same runtime directory or sl
    runtime timeout. It checks the applied memory limit after launch; a mismatch
    stops the unit and produces `LAUNCH_FAILED`.
 4. **Run and capture output.** The internal runner starts the command in its
-   working directory, provides a temporary directory, and saves stdout and stderr.
-   Each log stream has a size cap; excess output is drained and discarded.
+   working directory, provides a private temporary directory, and saves stdout
+   and stderr. Each log stream has a size cap; excess output is drained and
+   discarded. The temporary directory is `<tmp_dir or /tmp>/aq-<uid>-<slice>/<id>` when
+   that filesystem is tmpfs or `tmp_dir` is set, so temp files cost task memory
+   (tmpfs pages are charged to the unit's cgroup) instead of SSD writes and
+   filesystem-journal churn; otherwise it falls back to the state dir. The daemon
+   resolves the root once at start and refuses a symlinked or foreign-owned
+   `aq-<uid>-<slice>` in a shared `/tmp`.
 5. **Record the result.** The unit's `ExecStopPost` action writes `result.json`,
    including systemd's outcome and cgroup memory measurements. This works even
    while the daemon is down. With the `io` controller delegated (units and the
@@ -71,7 +77,9 @@ Startup locks prevent two daemons from managing the same runtime directory or sl
    disks only: a device without a `/sys/dev/block/M:m/device` link (dm, md,
    loop, zram) either forwards the same bytes to a physical disk or never
    reaches one. Without the controller the bytes are recorded as unknown (NULL),
-   not zero, and nothing else changes.
+   not zero, and nothing else changes. After recording, the same action deletes
+   the task's temporary directory, so tmpfs pages never outlive the task outside
+   any accounting.
 6. **Release resources.** The scheduler waits for the cgroup to become empty
    before finalizing the task and returning its resources to the pool.
 
@@ -103,6 +111,7 @@ The scheduler checks these blockers in order:
 | `recovering` | The daemon is still reconciling saved state with systemd. |
 | `pressure` | Sustained memory pressure has paused new admissions. |
 | `disk` | The state directory has too little free space. |
+| `tmp` | The temp dirs' filesystem (tmpfs) has too little free space or too few inodes. |
 | `pool_memory` | Existing commitments plus this request exceed the memory pool. |
 | `pool_cpu` | Existing commitments plus this request exceed the CPU pool. |
 | `live_memory` | The host cannot cover the request and its reserved headroom. |
@@ -122,8 +131,8 @@ predicted to finish before the blocked job could start, or fits in capacity the
 blocked job will not need. This reduces idle time while a large job waits.
 
 Reservations use the spare-capacity rule only: their cleanup time depends on
-extensions, nested jobs, and available cleanup slots. Recovery, disk, and pressure
-gates prevent backfill. Forecasts are estimates, so actual starts can be later.
+extensions, nested jobs, and available cleanup slots. Recovery, disk, temp-space
+and pressure gates prevent backfill. Forecasts are estimates, so actual starts can be later.
 
 ### Protecting the host while jobs run
 

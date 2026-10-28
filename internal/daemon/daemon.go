@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	osexec "os/exec"
@@ -59,6 +60,11 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if err := cfg.Validate(mem.Total, host.NumCPU()); err != nil {
 		return err
 	}
+	tmp := PlanTmpRoot(cfg, os.Getuid(), host.FSUsage, true)
+	paths.TmpRoot = tmp.Root
+	if tmp.Root == "" {
+		slog.Warn("task temp dirs stay in the state dir", "reason", tmp.Reason)
+	}
 	// A daemon with other state/runtime dirs on the same slice would stop this
 	// one's units as orphans, so each slice (tasks and teardown) gets its own lock
 	// at a fixed place.
@@ -99,7 +105,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if opts.Usage != nil {
 		opts.Usage = &boundedUsage{inner: opts.Usage}
 	}
-	d := &server{host: host, opts: opts, sched: sched, st: st, paths: paths, router: router, outbox: outbox, cfg: cfg}
+	d := &server{host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {
 		return fmt.Errorf("recover: %w", err)
@@ -171,6 +177,7 @@ type server struct {
 	sched      *scheduler.Scheduler
 	st         *store.Store
 	paths      config.Paths
+	tmp        TmpPlan
 	recovering atomic.Bool
 }
 
