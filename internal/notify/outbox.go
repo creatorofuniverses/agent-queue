@@ -47,32 +47,16 @@ func (o *Outbox) Kick() {
 		}
 	}
 }
-func (o *Outbox) LastErrors() map[model.Channel]string {
-	o.mu.Lock()
-	chs := make([]model.Channel, 0, len(o.wakes))
-	for ch := range o.wakes {
-		chs = append(chs, ch)
-	}
-	o.mu.Unlock()
-	out := map[model.Channel]string{}
-	for _, ch := range chs {
-		msg, err := o.st.LastDeliveryError(context.Background(), ch)
-		if err != nil {
-			msg = err.Error()
-		}
-		out[ch] = msg
-	}
-	return out
-}
 func (o *Outbox) Run(ctx context.Context) {
-	if _, err := o.st.ResetDelivering(ctx); err != nil {
-		slog.Error("outbox: reset claims", "err", err)
-		return
-	}
-	chs, err := o.st.PendingChannels(ctx)
-	if err != nil {
-		slog.Error("outbox: pending channels", "err", err)
-		return
+	chs, err := o.start(ctx)
+	for delay := time.Second; err != nil; delay = min(2*delay, o.cfg.Notify.RetryMax) {
+		slog.Error("outbox: start", "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		chs, err = o.start(ctx)
 	}
 	o.mu.Lock()
 	for _, ch := range chs {
@@ -87,6 +71,14 @@ func (o *Outbox) Run(ctx context.Context) {
 	}
 	o.mu.Unlock()
 	wg.Wait()
+}
+
+// start releases claims left by a previous run and lists channels with persisted work.
+func (o *Outbox) start(ctx context.Context) ([]model.Channel, error) {
+	if _, err := o.st.ResetDelivering(ctx); err != nil {
+		return nil, fmt.Errorf("reset claims: %w", err)
+	}
+	return o.st.PendingChannels(ctx)
 }
 func (o *Outbox) lane(ctx context.Context, ch model.Channel, wake <-chan struct{}) {
 	for ctx.Err() == nil {
@@ -145,16 +137,17 @@ func (o *Outbox) deliverOne(ctx context.Context, ch model.Channel) bool {
 		err = d.Deliver(attempt, msg)
 		cancel()
 	}
-	// Shutdown leaves the claim durable; restart retries the same event ID.
-	if ctx.Err() != nil {
-		return false
-	}
 	now := o.now()
 	if err == nil {
-		if err = o.st.MarkSent(ctx, e.ID, now); err != nil {
+		// A finished delivery is recorded even during shutdown, so restart does not repeat it.
+		if err = o.st.MarkSent(context.WithoutCancel(ctx), e.ID, now); err != nil {
 			slog.Error("outbox: mark sent", "event", e.ID, "err", err)
 		}
-		return err == nil
+		return err == nil && ctx.Err() == nil
+	}
+	// Shutdown leaves a failed claim durable; restart retries the same event ID.
+	if ctx.Err() != nil {
+		return false
 	}
 	attempts := e.Attempts + 1
 	lastErr := err.Error()

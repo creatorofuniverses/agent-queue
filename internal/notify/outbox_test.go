@@ -253,6 +253,37 @@ func TestOrphanChannelFails(t *testing.T) {
 		t.Fatal(evs)
 	}
 }
+func TestOutboxMarksSentDuringShutdown(t *testing.T) {
+	s := outboxStore(t)
+	ch := model.ExecChannel("codex")
+	put(t, s, "e", ch, time.Now(), model.AudienceSession)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	o := NewOutbox(s, config.Default(), config.Paths{}, NewRouter(config.Default()), map[model.Channel]Deliverer{ch: deliverFunc(func(context.Context, Message) error { cancel(); return nil })}, time.Now)
+	o.deliverOne(ctx, ch)
+	if e := eventStatus(s, "e"); e.Status != model.EventSent {
+		t.Fatal(e)
+	}
+}
+func TestOutboxRetriesFailedStart(t *testing.T) {
+	s := outboxStore(t)
+	s.Close() // every store call fails
+	o := NewOutbox(s, config.Default(), config.Paths{}, NewRouter(config.Default()), nil, time.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); o.Run(ctx) }()
+	select {
+	case <-done:
+		t.Fatal("outbox gave up after a failed start")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("outbox did not stop")
+	}
+}
 func TestOutboxRedeliversAfterRestart(t *testing.T) {
 	s := outboxStore(t)
 	ch := model.ExecChannel("codex")

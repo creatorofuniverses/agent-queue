@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"resource-dispatcher/internal/config"
@@ -63,6 +64,10 @@ func (d *execDeliverer) Deliver(ctx context.Context, m Message) error {
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err = cmd.Run(); err != nil {
+		// Exit 0 with a lingering helper still holding the output pipe is a delivery.
+		if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+			return nil
+		}
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}

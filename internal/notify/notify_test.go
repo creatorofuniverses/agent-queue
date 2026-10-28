@@ -139,6 +139,21 @@ func TestExecDelivererFailureAndTimeout(t *testing.T) {
 		}
 	}
 }
+func TestExecDelivererSuccessWithLingeringChild(t *testing.T) {
+	// A client that leaves a helper holding stdout must not turn exit 0 into a retry.
+	pidFile := filepath.Join(t.TempDir(), "child")
+	a := config.AgentConfig{Command: []string{script(t, fmt.Sprintf("sleep 30 &\necho $! > %s\necho queued\nexit 0", pidFile))}}
+	t.Cleanup(func() {
+		if b, e := os.ReadFile(pidFile); e == nil {
+			if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	if e := NewExecDeliverer(a, nil).Deliver(context.Background(), message()); e != nil {
+		t.Fatal(e)
+	}
+}
 func TestWebhookDeliverer(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "token")
 	os.WriteFile(token, []byte("tok\n"), 0600)
