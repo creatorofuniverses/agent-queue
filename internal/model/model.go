@@ -168,6 +168,9 @@ type Item struct {
 	ExitCode   *int
 	Signal     string
 	MemoryPeak uint64
+	// IOWriteBytes/IOReadBytes: physical-disk bytes of a finished task; nil
+	// when unknown (no io controller, or a task recorded before they existed).
+	IOWriteBytes, IOReadBytes *uint64
 
 	UnitName, JobDir string
 	GitRev           string

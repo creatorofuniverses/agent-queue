@@ -76,3 +76,33 @@ func TestPSIEpisodeOpenAtWindowStart(t *testing.T) {
 		t.Fatal(g)
 	}
 }
+func TestSummarizeDisk(t *testing.T) {
+	u := func(n uint64) *uint64 { return &n }
+	task := func(prof, name string, w *uint64) *model.Item {
+		return &model.Item{Kind: model.KindTask, Profile: prof, Name: name, State: model.StateSucceeded, IOWriteBytes: w}
+	}
+	in := Input{Items: []*model.Item{
+		task("/r:tests", "tests", u(10)), task("/r:tests", "tests", u(30)), task("/r:tests", "tests", u(20)),
+		task("/r:db", "db", u(500)),
+		task("", "adhoc", u(1)),
+		task("/r:lint", "lint", nil), // unknown: not counted
+		{Kind: model.KindReservation, Name: "stand", IOWriteBytes: u(9999)},
+	}}
+	s := Summarize(in)
+	if len(s.Disk) != 3 {
+		t.Fatal(s.Disk)
+	}
+	if d := s.Disk[0]; d.Profile != "/r:db" || d.Runs != 1 || d.Written != 500 {
+		t.Fatal(d)
+	}
+	if d := s.Disk[1]; d.Profile != "/r:tests" || d.Runs != 3 || d.Written != 60 || d.P50 != 20 || d.Max != 30 {
+		t.Fatal(d)
+	}
+	if d := s.Disk[2]; d.Profile != "adhoc" || d.Written != 1 {
+		t.Fatal(d)
+	}
+	in.Profile = "/r:tests"
+	if s := Summarize(in); len(s.Disk) != 1 || s.Disk[0].Runs != 3 {
+		t.Fatal(s.Disk)
+	}
+}

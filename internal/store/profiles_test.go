@@ -148,3 +148,63 @@ func TestProfilesList(t *testing.T) {
 		t.Fatal(ps, e)
 	}
 }
+
+func TestMigration0006OnPlan5DB(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "old.db")
+	db, e := sql.Open("sqlite", p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	names := []string{"0001_init.sql", "0002_reservations.sql", "0003_notifications.sql", "0004_profiles_stats.sql", "0005_runtime_state.sql"}
+	for i, n := range names {
+		b, e := migrationsFS.ReadFile("migrations/" + n)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec(string(b)); e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec(fmt.Sprintf("PRAGMA user_version=%d", i+1)); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e = db.Exec("INSERT INTO items(id,kind,state) VALUES('old','task','SUCCEEDED')"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.Exec("INSERT INTO profile_runs(item_id,profile,ended_at,state,cpus,mem_limit,mem_expected,memory_from_profile,est_duration_ns,duration_ns,memory_peak,samples) VALUES('old','p','2026-10-01T00:00:00Z','SUCCEEDED',1,1,1,0,0,1,1,0)"); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+	s, e := Open(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	it, e := s.Get(ctx, "old")
+	if e != nil || it.IOWriteBytes != nil || it.IOReadBytes != nil {
+		t.Fatal(it, e)
+	}
+	rs, e := s.ProfileRuns(ctx, "p", 5)
+	if e != nil || len(rs) != 1 || rs[0].IOWriteBytes != nil {
+		t.Fatal(rs, e)
+	}
+}
+func TestRunKeepsDiskWrites(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+	it := newItem(0, time.Now().Add(-time.Minute))
+	it.State, it.EndedAt, it.Profile = model.StateSucceeded, time.Now(), "p"
+	w := uint64(5 << 30)
+	r := profile.Run{ItemID: it.ID, Profile: "p", EndedAt: it.EndedAt, State: it.State, MemoryPeak: 1, Duration: time.Minute, IOWriteBytes: &w}
+	if _, _, e := s.InsertItem(ctx, it); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.UpdateFinal(ctx, it, nil, &r); e != nil {
+		t.Fatal(e)
+	}
+	rs, e := s.ProfileRuns(ctx, "p", 5)
+	if e != nil || len(rs) != 1 || rs[0].IOWriteBytes == nil || *rs[0].IOWriteBytes != w {
+		t.Fatal(rs, e)
+	}
+}

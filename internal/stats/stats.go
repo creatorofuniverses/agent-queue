@@ -31,6 +31,7 @@ type Summary struct {
 	Profile      string             `json:"profile"`
 	Items        []ItemGroup        `json:"items"`
 	Profiles     []ProfileStats     `json:"profiles"`
+	Disk         []DiskStats        `json:"disk"`
 	Queue        *QueueStats        `json:"queue"`
 	Host         *HostStats         `json:"host"`
 	Reservations []ReservationGroup `json:"reservations"`
@@ -61,6 +62,16 @@ type ProfileStats struct {
 	PeakToExpectedP90     float64 `json:"peak_to_expected_p90"`
 	DurationToEstimateP50 float64 `json:"duration_to_estimate_p50"`
 	DurationToEstimateP90 float64 `json:"duration_to_estimate_p90"`
+}
+
+// DiskStats: physical-disk bytes written by the tasks of one profile (or of an
+// unprofiled name) whose bytes are known; sorted by Written, largest first.
+type DiskStats struct {
+	Profile string `json:"profile"`
+	Runs    int    `json:"runs"`
+	Written uint64 `json:"written"`
+	P50     uint64 `json:"p50"`
+	Max     uint64 `json:"max"`
 }
 type QueueStats struct {
 	SampledSeconds  float64            `json:"sampled_seconds"`
@@ -132,6 +143,7 @@ func Summarize(in Input) Summary {
 	s := Summary{Since: in.Since, Until: in.Until, Profile: in.Profile, Items: []ItemGroup{}, Profiles: []ProfileStats{}}
 	summarizeItems(&s, in)
 	summarizeProfiles(&s, in)
+	summarizeDisk(&s, in)
 	if in.Profile != "" {
 		return s
 	}
@@ -248,6 +260,36 @@ func summarizeProfiles(s *Summary, in Input) {
 		a.g.DurationToEstimateP90 = profile.Percentile(a.duration, 90)
 		s.Profiles = append(s.Profiles, a.g)
 	}
+}
+func summarizeDisk(s *Summary, in Input) {
+	groups := map[string]*DiskStats{}
+	per := map[string][]float64{}
+	for _, it := range in.Items {
+		if it.Kind != model.KindTask || it.IOWriteBytes == nil || in.Profile != "" && it.Profile != in.Profile {
+			continue
+		}
+		k := it.Profile
+		if k == "" {
+			k = it.Name
+		}
+		g := groups[k]
+		if g == nil {
+			g = &DiskStats{Profile: k}
+			groups[k] = g
+		}
+		w := *it.IOWriteBytes
+		g.Runs++
+		g.Written += w
+		g.Max = max(g.Max, w)
+		per[k] = append(per[k], float64(w))
+	}
+	s.Disk = []DiskStats{}
+	for _, k := range keys(groups) {
+		g := groups[k]
+		g.P50 = uint64(profile.Percentile(per[k], 50))
+		s.Disk = append(s.Disk, *g)
+	}
+	sort.SliceStable(s.Disk, func(i, j int) bool { return s.Disk[i].Written > s.Disk[j].Written })
 }
 func summarizeHost(s *Summary, in Input) {
 	q := &QueueStats{BlockedSeconds: map[string]float64{}}

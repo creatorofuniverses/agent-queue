@@ -160,5 +160,6 @@ func (s *Scheduler) finalizeLocked(ctx context.Context, it *model.Item, ei *plat
 	}
 	it.ExitCode, it.Signal = exitDetails(*ei)
 	it.MemoryPeak, it.LogsTruncated = ei.MemoryPeak, ei.LogsTruncated
+	it.IOWriteBytes, it.IOReadBytes = ei.IOWriteBytes, ei.IOReadBytes
 	return s.persistLocked(ctx, it)
 }

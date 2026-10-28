@@ -109,6 +109,9 @@ func SystemdRunArgs(cfg ExecutorConfig, spec platform.LaunchSpec) []string {
 		"KillMode=control-group",
 		"OOMPolicy=kill",
 		"OOMScoreAdjust=" + oomAdjust,
+		// Disk bytes per task for aq stats; a no-op where the user manager has
+		// no io controller delegated.
+		"IOAccounting=yes",
 		"RuntimeMaxSec=" + ceilSeconds(spec.Timeout),
 		"TimeoutStopSec=" + ceilSeconds(spec.KillGrace),
 		// SIGABRT can be ignored and dumps core; on Fedora the drop-in from
@@ -318,6 +321,8 @@ func (e *Executor) ensureSlice(ctx context.Context, slice string, max uint64) er
 	if err := e.runCmd(ctx, "systemctl", "--user", "start", slice); err != nil {
 		return err
 	}
+	// IOAccounting on the slice makes the user manager enable the io controller
+	// for it (when delegated), so doctor can tell whether tasks get io.stat.
 	return e.runCmd(ctx, "systemctl", "--user", "set-property", "--runtime", slice,
-		"MemoryMax="+strconv.FormatUint(max, 10), "MemorySwapMax=0")
+		"MemoryMax="+strconv.FormatUint(max, 10), "MemorySwapMax=0", "IOAccounting=yes")
 }

@@ -77,6 +77,9 @@ func printProfile(c *cmdCtx, v daemon.ProfileView) {
 		e := v.Estimate
 		fmt.Fprintf(c.stdout, "estimate: %s limit, %s expected, %s duration (%d runs)\n", units.FormatSize(e.Limit), units.FormatSize(e.Expected), secs(e.DurationSeconds), e.Runs)
 	}
+	if v.IOWriteP50 != nil {
+		fmt.Fprintf(c.stdout, "disk writes: %s per run (median of %d)\n", units.FormatSize(*v.IOWriteP50), v.IOWriteRuns)
+	}
 	w := tabwriter.NewWriter(c.stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "ENDED\tSTATE\tDURATION\tPEAK\tP90\tUSABLE")
 	for _, r := range v.Runs {

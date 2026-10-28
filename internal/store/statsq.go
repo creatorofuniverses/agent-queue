@@ -34,8 +34,8 @@ func (s *Store) EventsSince(ctx context.Context, since time.Time) ([]model.Event
 }
 
 var ExportTables = []string{"items", "runs", "host", "incidents", "events", "hook"}
-var itemExportColumns = strings.Split("id,kind,name,profile,project,client_type,priority,state,reason,created_at,admitted_at,started_at,ended_at,memory_limit,memory_expected,cpus,timeout_seconds,estimated_seconds,memory_from_profile,memory_peak,exit_code,within,task_memory,task_cpus,docker_project,extend_count,teardown_attempt,expired_at,logs_pruned", ",")
-var runExportColumns = strings.Split("item_id,profile,ended_at,state,reason,usable,cpus,memory_limit,memory_expected,memory_from_profile,estimated_seconds,duration_seconds,memory_peak,samples,sample_p90", ",")
+var itemExportColumns = strings.Split("id,kind,name,profile,project,client_type,priority,state,reason,created_at,admitted_at,started_at,ended_at,memory_limit,memory_expected,cpus,timeout_seconds,estimated_seconds,memory_from_profile,memory_peak,exit_code,within,task_memory,task_cpus,docker_project,extend_count,teardown_attempt,expired_at,logs_pruned,io_write_bytes,io_read_bytes", ",")
+var runExportColumns = strings.Split("item_id,profile,ended_at,state,reason,usable,cpus,memory_limit,memory_expected,memory_from_profile,estimated_seconds,duration_seconds,memory_peak,samples,sample_p90,io_write_bytes", ",")
 
 // Export closes each read cursor before emitting a batch, so slow clients hold no SQL transaction.
 func (s *Store) Export(ctx context.Context, table string, since time.Time, emit func([]string, [][]any) error) error {
@@ -68,12 +68,12 @@ func (s *Store) Export(ctx context.Context, table string, since time.Time, emit 
 		cols = itemExportColumns
 		from = "items"
 		at = "created_at"
-		selectSQL = `id,kind,name,profile,project,client_type,CASE priority WHEN 100 THEN 'high' WHEN -10 THEN 'low' ELSE 'normal' END,state,reason,created_at,admitted_at,started_at,ended_at,mem_limit,mem_expected,cpus,timeout_ns/1000000000.0,est_duration_ns/1000000000.0,memory_from_profile,memory_peak,exit_code,parent_id,task_memory,task_cpus,docker_project,extend_count,teardown_attempt,expired_at,logs_pruned`
+		selectSQL = `id,kind,name,profile,project,client_type,CASE priority WHEN 100 THEN 'high' WHEN -10 THEN 'low' ELSE 'normal' END,state,reason,created_at,admitted_at,started_at,ended_at,mem_limit,mem_expected,cpus,timeout_ns/1000000000.0,est_duration_ns/1000000000.0,memory_from_profile,memory_peak,exit_code,parent_id,task_memory,task_cpus,docker_project,extend_count,teardown_attempt,expired_at,logs_pruned,io_write_bytes,io_read_bytes`
 	case "runs":
 		cols = runExportColumns
 		from = "profile_runs"
 		at = "ended_at"
-		selectSQL = `item_id,profile,ended_at,state,reason,CASE WHEN ` + usableRunSQL + ` THEN 1 ELSE 0 END,cpus,mem_limit,mem_expected,memory_from_profile,est_duration_ns/1000000000.0,duration_ns/1000000000.0,memory_peak,samples,hist`
+		selectSQL = `item_id,profile,ended_at,state,reason,CASE WHEN ` + usableRunSQL + ` THEN 1 ELSE 0 END,cpus,mem_limit,mem_expected,memory_from_profile,est_duration_ns/1000000000.0,duration_ns/1000000000.0,memory_peak,samples,hist,io_write_bytes`
 	case "host":
 		cols = strings.Split(strings.ReplaceAll(hostCols, " ", ""), ",")
 		from = "host_samples"

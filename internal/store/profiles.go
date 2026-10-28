@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const runCols = `item_id, profile, ended_at, state, reason, cpus, mem_limit, mem_expected, memory_from_profile, est_duration_ns, duration_ns, memory_peak, samples, hist`
+const runCols = `item_id, profile, ended_at, state, reason, cpus, mem_limit, mem_expected, memory_from_profile, est_duration_ns, duration_ns, memory_peak, samples, hist, io_write_bytes`
 const usableRunSQL = `(state='SUCCEEDED' OR (state='FAILED' AND reason='COMMAND_FAILED')) AND memory_peak>0 AND duration_ns>0`
 
 func (s *Store) UpdateFinal(ctx context.Context, it *model.Item, evs []model.Event, run *profile.Run) error {
@@ -35,7 +35,7 @@ func (s *Store) UpdateFinal(ctx context.Context, it *model.Item, evs []model.Eve
 		if e = insertEvents(ctx, c, evs); e != nil {
 			return e
 		}
-		_, e = c.ExecContext(ctx, `INSERT OR IGNORE INTO profile_runs (`+runCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, string(run.ItemID), run.Profile, fmtTime(run.EndedAt), string(run.State), string(run.Reason), run.CPUs, int64(run.Limit), int64(run.Expected), run.MemoryFromProfile, int64(run.EstDuration), int64(run.Duration), int64(run.MemoryPeak), run.Samples, string(hist))
+		_, e = c.ExecContext(ctx, `INSERT OR IGNORE INTO profile_runs (`+runCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, string(run.ItemID), run.Profile, fmtTime(run.EndedAt), string(run.State), string(run.Reason), run.CPUs, int64(run.Limit), int64(run.Expected), run.MemoryFromProfile, int64(run.EstDuration), int64(run.Duration), int64(run.MemoryPeak), run.Samples, string(hist), nullU64(run.IOWriteBytes))
 		return e
 	})
 }
@@ -43,10 +43,12 @@ func scanRun(r scanner) (profile.Run, error) {
 	var v profile.Run
 	var at, hist string
 	var duration, estimate int64
-	e := r.Scan(&v.ItemID, &v.Profile, &at, &v.State, &v.Reason, &v.CPUs, &v.Limit, &v.Expected, &v.MemoryFromProfile, &estimate, &duration, &v.MemoryPeak, &v.Samples, &hist)
+	var ioWrite sql.NullInt64
+	e := r.Scan(&v.ItemID, &v.Profile, &at, &v.State, &v.Reason, &v.CPUs, &v.Limit, &v.Expected, &v.MemoryFromProfile, &estimate, &duration, &v.MemoryPeak, &v.Samples, &hist, &ioWrite)
 	if e != nil {
 		return v, e
 	}
+	v.IOWriteBytes = u64Ptr(ioWrite)
 	v.Duration = time.Duration(duration)
 	v.EstDuration = time.Duration(estimate)
 	v.EndedAt, e = parseTime(at)

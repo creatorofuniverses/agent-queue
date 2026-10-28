@@ -84,7 +84,7 @@ func (s *Scheduler) profileRunLocked(it *model.Item) *profile.Run {
 		// milliseconds can end before it; such a run still counts.
 		duration = max(it.EndedAt.Sub(it.AdmittedAt), time.Millisecond)
 	}
-	r := &profile.Run{ItemID: it.ID, Profile: it.Profile, EndedAt: it.EndedAt, State: it.State, Reason: it.Reason, CPUs: it.CPUs, Limit: it.Limit, Expected: it.Expected, MemoryFromProfile: it.MemoryFromProfile, EstDuration: it.EstDuration, Duration: duration, MemoryPeak: it.MemoryPeak}
+	r := &profile.Run{ItemID: it.ID, Profile: it.Profile, EndedAt: it.EndedAt, State: it.State, Reason: it.Reason, CPUs: it.CPUs, Limit: it.Limit, Expected: it.Expected, MemoryFromProfile: it.MemoryFromProfile, EstDuration: it.EstDuration, Duration: duration, MemoryPeak: it.MemoryPeak, IOWriteBytes: it.IOWriteBytes}
 	if v := s.samples[it.ID]; v != nil {
 		r.Hist = v.Hist
 		r.Samples = v.Samples

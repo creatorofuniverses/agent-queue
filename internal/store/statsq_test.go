@@ -26,7 +26,7 @@ func TestExportColumnsNoSecrets(t *testing.T) {
 	for _, table := range []string{"items", "runs", "host", "incidents", "events", "hook"} {
 		if e := s.Export(ctx, table, time.Time{}, func(cols []string, rows [][]any) error {
 			if table == "items" {
-				want := strings.Split("id,kind,name,profile,project,client_type,priority,state,reason,created_at,admitted_at,started_at,ended_at,memory_limit,memory_expected,cpus,timeout_seconds,estimated_seconds,memory_from_profile,memory_peak,exit_code,within,task_memory,task_cpus,docker_project,extend_count,teardown_attempt,expired_at,logs_pruned", ",")
+				want := strings.Split("id,kind,name,profile,project,client_type,priority,state,reason,created_at,admitted_at,started_at,ended_at,memory_limit,memory_expected,cpus,timeout_seconds,estimated_seconds,memory_from_profile,memory_peak,exit_code,within,task_memory,task_cpus,docker_project,extend_count,teardown_attempt,expired_at,logs_pruned,io_write_bytes,io_read_bytes", ",")
 				if !reflect.DeepEqual(cols, want) {
 					t.Fatal(cols)
 				}

@@ -140,6 +140,9 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 	fmt.Fprintf(w, "memory:    %s limit, %s expected, %s peak\n",
 		units.FormatSize(v.MemoryLimit), units.FormatSize(v.MemoryExpected), units.FormatSize(v.MemoryPeak))
 	fmt.Fprintf(w, "cpus:      %d\n", v.CPUs)
+	if d := diskText(v); d != "" {
+		fmt.Fprintf(w, "disk:      %s\n", d)
+	}
 	if v.Kind == model.KindReservation {
 		fmt.Fprintf(w, "kind:      reservation\n")
 		fmt.Fprintf(w, "stand:     %s memory, %d cpus\n", units.FormatSize(v.MemoryLimit), v.CPUs)
@@ -177,6 +180,18 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 	if v.Diagnostic != "" {
 		fmt.Fprintf(w, "diagnostic: %s\n", v.Diagnostic)
 	}
+}
+
+// diskText is "N written, M read" for a task whose disk bytes are known.
+func diskText(v daemon.ItemView) string {
+	if v.IOWriteBytes == nil {
+		return ""
+	}
+	s := units.FormatSize(*v.IOWriteBytes) + " written"
+	if v.IOReadBytes != nil {
+		s += ", " + units.FormatSize(*v.IOReadBytes) + " read"
+	}
+	return s
 }
 
 func secs(s float64) string {

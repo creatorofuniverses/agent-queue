@@ -34,6 +34,7 @@ type Run struct {
 	MemoryFromProfile     bool
 	EstDuration, Duration time.Duration
 	MemoryPeak            uint64
+	IOWriteBytes          *uint64 // nil: unknown
 	Samples               int
 	Hist                  Histogram
 }

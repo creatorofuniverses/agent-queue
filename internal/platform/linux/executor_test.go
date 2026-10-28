@@ -55,7 +55,7 @@ func TestSystemdRunArgs(t *testing.T) {
 		{"--setenv", "PATH=/usr/bin"}, {"--setenv", "AQ_JOB_ID=abc"},
 		{"-p", "MemoryMax=4294967296"}, {"-p", "MemoryHigh=3865470566"}, {"-p", "MemorySwapMax=0"},
 		{"-p", "CPUQuota=200%"}, {"-p", "KillMode=control-group"}, {"-p", "OOMPolicy=kill"},
-		{"-p", "OOMScoreAdjust=900"}, {"-p", "RuntimeMaxSec=1800"}, {"-p", "TimeoutStopSec=10"}, {"-p", "TimeoutStopFailureMode=kill"},
+		{"-p", "OOMScoreAdjust=900"}, {"-p", "IOAccounting=yes"}, {"-p", "RuntimeMaxSec=1800"}, {"-p", "TimeoutStopSec=10"}, {"-p", "TimeoutStopFailureMode=kill"},
 		{"-p", "ExecStopPost=/bin/aq _record-result /state/jobs/abc"},
 	} {
 		if !hasPair(args, p[0], p[1]) {
@@ -459,7 +459,7 @@ func TestEnsureTeardownSlice(t *testing.T) {
 	}
 	want := [][]string{
 		{"systemctl", "--user", "start", "aqtesttd.slice"},
-		{"systemctl", "--user", "set-property", "--runtime", "aqtesttd.slice", "MemoryMax=1073741824", "MemorySwapMax=0"},
+		{"systemctl", "--user", "set-property", "--runtime", "aqtesttd.slice", "MemoryMax=1073741824", "MemorySwapMax=0", "IOAccounting=yes"},
 	}
 	if len(f.calls) != len(want) {
 		t.Fatalf("calls %q", f.calls)

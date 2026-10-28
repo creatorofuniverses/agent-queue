@@ -160,7 +160,7 @@ created_at, admitted_at, started_at, ended_at,
 exit_code, signal, memory_peak, unit_name, job_dir, git_rev, git_dirty,
 cancel_requested, cancel_reason, logs_truncated, diagnostic,
 parent_id, task_memory, task_cpus, expires_at, warn_at, docker_project,
-teardown_attempt, teardown_launch_error, notify_grant, ttl_held, over_declared_notified, no_notify, finish_notified, profile, est_duration_ns, memory_from_profile, extend_count, logs_pruned, teardown_started_at, expired_at`
+teardown_attempt, teardown_launch_error, notify_grant, ttl_held, over_declared_notified, no_notify, finish_notified, profile, est_duration_ns, memory_from_profile, extend_count, logs_pruned, teardown_started_at, expired_at, io_write_bytes, io_read_bytes`
 
 func fmtTime(t time.Time) string {
 	if t.IsZero() {
@@ -211,7 +211,7 @@ func itemArgs(it *model.Item) ([]any, error) {
 		it.CancelRequested, it.CancelReason, it.LogsTruncated, it.Diagnostic,
 		string(it.ParentID), int64(it.TaskMemory), it.TaskCPUs, fmtTime(it.ExpiresAt), fmtTime(it.WarnAt), it.DockerProject,
 		it.TeardownAttempt, it.TeardownLaunchError, it.NotifyGrant, it.TTLHeld, it.OverDeclaredNotified, it.NoNotify, it.FinishNotified,
-		it.Profile, int64(it.EstDuration), it.MemoryFromProfile, it.ExtendCount, it.LogsPruned, fmtTime(it.TeardownStartedAt), fmtTime(it.ExpiredAt),
+		it.Profile, int64(it.EstDuration), it.MemoryFromProfile, it.ExtendCount, it.LogsPruned, fmtTime(it.TeardownStartedAt), fmtTime(it.ExpiredAt), nullU64(it.IOWriteBytes), nullU64(it.IOReadBytes),
 	}, nil
 }
 
@@ -231,6 +231,7 @@ func scanItem(r scanner) (*model.Item, error) {
 		expires, warn                     string
 		teardownStarted, expired          string
 		estDuration                       int64
+		ioWrite, ioRead                   sql.NullInt64
 	)
 	err := r.Scan(&id, &kind, &it.Name, &state, &reason, &prio, &argv, &it.Cwd, &env,
 		&limit, &expected, &it.CPUs, &timeout,
@@ -239,7 +240,7 @@ func scanItem(r scanner) (*model.Item, error) {
 		&exit, &it.Signal, &peak, &it.UnitName, &it.JobDir, &it.GitRev, &it.GitDirty,
 		&it.CancelRequested, &it.CancelReason, &it.LogsTruncated, &it.Diagnostic,
 		&parent, &taskMem, &it.TaskCPUs, &expires, &warn, &it.DockerProject,
-		&it.TeardownAttempt, &it.TeardownLaunchError, &it.NotifyGrant, &it.TTLHeld, &it.OverDeclaredNotified, &it.NoNotify, &it.FinishNotified, &it.Profile, &estDuration, &it.MemoryFromProfile, &it.ExtendCount, &it.LogsPruned, &teardownStarted, &expired)
+		&it.TeardownAttempt, &it.TeardownLaunchError, &it.NotifyGrant, &it.TTLHeld, &it.OverDeclaredNotified, &it.NoNotify, &it.FinishNotified, &it.Profile, &estDuration, &it.MemoryFromProfile, &it.ExtendCount, &it.LogsPruned, &teardownStarted, &expired, &ioWrite, &ioRead)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +275,24 @@ func scanItem(r scanner) (*model.Item, error) {
 		v := int(exit.Int64)
 		it.ExitCode = &v
 	}
+	it.IOWriteBytes, it.IOReadBytes = u64Ptr(ioWrite), u64Ptr(ioRead)
 	return &it, nil
+}
+
+// nullU64 stores nil as NULL: an unknown byte count is not zero.
+func nullU64(p *uint64) any {
+	if p == nil {
+		return nil
+	}
+	return int64(*p)
+}
+
+func u64Ptr(n sql.NullInt64) *uint64 {
+	if !n.Valid {
+		return nil
+	}
+	v := uint64(n.Int64)
+	return &v
 }
 
 var insertSQL = `INSERT INTO items (` + itemCols + `) VALUES (?` + strings.Repeat(",?", strings.Count(itemCols, ",")) + `)`

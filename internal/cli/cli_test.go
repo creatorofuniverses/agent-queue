@@ -344,8 +344,9 @@ func newFakeSystem() *fakeSystem {
 	mgr := "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service"
 	return &fakeSystem{
 		files: map[string]string{
-			"/sys/fs/cgroup/cgroup.controllers": "cpuset cpu io memory pids",
-			mgr + "/cgroup.controllers":         "cpu memory pids",
+			"/sys/fs/cgroup/cgroup.controllers":  "cpuset cpu io memory pids",
+			mgr + "/cgroup.controllers":          "cpu io memory pids",
+			mgr + "/aq.slice/cgroup.controllers": "cpu io memory pids",
 		},
 		exists: map[string]bool{
 			mgr + "/aq.slice": true,
@@ -424,7 +425,7 @@ func TestDoctorJSONShape(t *testing.T) {
 			t.Errorf("check %+v should be ok", c)
 		}
 	}
-	want := []string{"cgroup_v2", "controllers", "slice", "probe", "config", "disk", "daemon", "systemd", "kill_dropin"}
+	want := []string{"cgroup_v2", "controllers", "slice", "disk_io", "probe", "config", "disk", "daemon", "systemd", "kill_dropin"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("names = %v", names)
 	}
@@ -433,6 +434,38 @@ func TestDoctorJSONShape(t *testing.T) {
 	if !strings.Contains(joined, "--unit=aq-probe-abcd1234") || !strings.Contains(joined, "MemoryMax=64M") ||
 		!strings.Contains(joined, "stop aq-probe-abcd1234.service") {
 		t.Errorf("calls:\n%s", joined)
+	}
+}
+
+// Without the io controller doctor warns with the fix but does not fail:
+// tasks run, they just record no disk bytes.
+func TestDoctorWarnsWithoutIOController(t *testing.T) {
+	h := newHarness(t)
+	mgr := "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service"
+	for _, tc := range []struct{ manager, fix string }{
+		{"cpu memory pids", "Delegate=cpu cpuset io memory pids"}, // not delegated at all
+		{"cpu io memory pids", "daemon-reexec"},                   // delegated, manager not restarted
+	} {
+		f := newFakeSystem()
+		f.files[mgr+"/cgroup.controllers"] = tc.manager
+		f.files[mgr+"/aq.slice/cgroup.controllers"] = "cpu memory pids"
+		f.install(t)
+		code, d := runDoctorJSON(t, h)
+		if code != 0 {
+			t.Fatalf("exit %d: %+v", code, d)
+		}
+		var io Check
+		for _, c := range d.Checks {
+			if c.Name == "disk_io" {
+				io = c
+			}
+		}
+		if !io.OK || !io.Warn || io.Code != "IO_NOT_DELEGATED" || !strings.Contains(io.Detail, tc.fix) {
+			t.Fatalf("%+v", io)
+		}
+		if _, out, _ := h.run("doctor"); !strings.Contains(out, "warn  disk_io") {
+			t.Fatal(out)
+		}
 	}
 }
 

@@ -37,6 +37,8 @@ type ItemView struct {
 	ExitCode          *int         `json:"exit_code,omitempty"`
 	Signal            string       `json:"signal,omitempty"`
 	MemoryPeak        uint64       `json:"memory_peak"`
+	IOWriteBytes      *uint64      `json:"io_write_bytes,omitempty"` // physical disks; absent when unknown
+	IOReadBytes       *uint64      `json:"io_read_bytes,omitempty"`
 	GitRev            string       `json:"git_rev,omitempty"`
 	GitDirty          bool         `json:"git_dirty"`
 	Diagnostic        string       `json:"diagnostic,omitempty"`
@@ -83,6 +85,7 @@ func viewOf(it *model.Item, now time.Time) ItemView {
 		TimeoutSeconds: int64(it.Timeout / time.Second), SessionID: it.SessionID, Project: it.Project,
 		CreatedAt: it.CreatedAt, StartedAt: optTime(it.StartedAt), EndedAt: optTime(it.EndedAt),
 		ExitCode: it.ExitCode, Signal: it.Signal, MemoryPeak: it.MemoryPeak,
+		IOWriteBytes: it.IOWriteBytes, IOReadBytes: it.IOReadBytes,
 		GitRev: it.GitRev, GitDirty: it.GitDirty, Diagnostic: it.Diagnostic, NodeID: it.NodeID,
 		Kind: it.Kind, Within: it.ParentID, TaskMemory: it.TaskMemory, TaskCPUs: it.TaskCPUs,
 		ExpiresAt: optTime(it.ExpiresAt), DockerProject: it.DockerProject,

@@ -30,9 +30,13 @@ type ExitInfo struct {
 	// OwnOOMEvents is memory.events "oom": OOMs caused by the unit's own memory.max.
 	// ("max" is not used: it also counts page cache reclaim at the limit, with no OOM.)
 	OwnOOMEvents, OwnOOMKills uint64
-	EndedAt                   time.Time
-	LaunchError               string
-	LogsTruncated             bool
+	// IOWriteBytes/IOReadBytes: physical-disk bytes from the unit's io.stat;
+	// nil when the io controller is not available (unknown, not zero).
+	IOWriteBytes  *uint64 `json:",omitempty"`
+	IOReadBytes   *uint64 `json:",omitempty"`
+	EndedAt       time.Time
+	LaunchError   string
+	LogsTruncated bool
 }
 
 type MemInfo struct {

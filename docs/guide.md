@@ -245,6 +245,32 @@ returns only the items and runs of that profile. Export tables are `items`,
 environment, cwd, session identifiers and delivery error texts are not included
 in statistics or exports.
 
+### Disk writes
+
+A finished task records the bytes it wrote to and read from physical disks
+(`disk:` in `aq result`, `io_write_bytes`/`io_read_bytes` in `--json`).
+`aq stats` lists the profiles that wrote the most, with totals, the median and
+the maximum per run, and `aq profile show` gives the median write per run. A
+test suite that writes gigabytes per run wears the SSD and slows everyone's
+I/O: it is usually a database without `fsync=off`, an uncached dependency
+install or a build into a fresh directory every time.
+
+The numbers come from the task's `io.stat` (device-mapper, md, loop and zram
+are skipped so nothing is counted twice; writes still in the page cache when
+the task ends are not counted). They need the `io` controller delegated to the
+user manager, which systemd does not do by default; without it the fields are
+absent (unknown, not zero) and `aq doctor` shows `IO_NOT_DELEGATED` as a
+warning. To enable:
+
+```sh
+sudo mkdir -p /etc/systemd/system/user@.service.d
+printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate-io.conf
+sudo systemctl daemon-reload
+# then reboot (or systemctl --user daemon-reexec) and restart aq.service
+```
+
+Containers of a stand run outside aq; their writes are not counted yet.
+
 ## Retention
 
 Every 10 minutes and after recovery, the daemon deletes the logs of finished
@@ -295,7 +321,8 @@ space, daemon availability, the systemd version and the runtime drop-in for
 stopping tasks. Each error is marked with a code (`CGROUP_V2_MISSING`,
 `CONTROLLER_MISSING`, `SLICE_MISSING`, `PROBE_FAILED`, `CONFIG_INVALID`,
 `DISK_LOW`, `DAEMON_UNAVAILABLE`, `SYSTEMD_TOO_OLD`, `KILL_DROPIN_MISSING`) and
-a hint.
+a hint. `IO_NOT_DELEGATED` is a warning, not a failure: tasks run, but record no
+disk bytes (see "Disk writes").
 
 ## Changing the pool
 

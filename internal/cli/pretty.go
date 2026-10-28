@@ -64,6 +64,9 @@ func (c *cmdCtx) prettyView(v daemon.ItemView, res *daemon.ResultView) {
 		}
 		u.field(w, "memory", mem)
 		u.field(w, "cpus", fmt.Sprint(v.CPUs))
+		if d := diskText(v); d != "" {
+			u.field(w, "disk", d)
+		}
 		if v.Within != "" {
 			u.field(w, "within", string(v.Within))
 		}
@@ -254,6 +257,9 @@ func (c *cmdCtx) prettyProfile(v daemon.ProfileView) {
 		e := v.Estimate
 		fmt.Fprintf(w, "  next run gets %s limit · %s expected · about %s  %s\n", u.bold(size(e.Limit)), size(e.Expected), fmtSecs(e.DurationSeconds), u.dim(fmt.Sprintf("(from %d runs)", e.Runs)))
 	}
+	if v.IOWriteP50 != nil {
+		fmt.Fprintf(w, "  writes %s to disk per run  %s\n", u.bold(size(*v.IOWriteP50)), u.dim(fmt.Sprintf("(median of %d)", v.IOWriteRuns)))
+	}
 	if len(v.Runs) == 0 {
 		return
 	}
@@ -315,6 +321,22 @@ func (c *cmdCtx) printStats(v stats.Summary) {
 		for _, p := range v.Profiles {
 			t.add(shortProfile(p.Profile, c.env("HOME")), fmt.Sprint(p.Runs), fmt.Sprint(p.Usable), fmt.Sprint(p.OOM), fmt.Sprint(p.Timeouts), fmt.Sprint(p.MemoryFromProfile), fmt.Sprint(p.PeakOverExpected),
 				fmt.Sprintf("%.2f / %.2f", p.PeakToExpectedP50, p.PeakToExpectedP90), fmt.Sprintf("%.2f / %.2f", p.DurationToEstimateP50, p.DurationToEstimateP90))
+		}
+		indent(w, t, u)
+	}
+	if len(v.Disk) > 0 {
+		section("Disk writes (tasks, physical disks)")
+		t := &table{head: []string{"PROFILE", "RUNS", "WRITTEN", "PER RUN p50", "MAX"}, right: map[int]bool{1: true, 2: true, 3: true, 4: true}}
+		for i, d := range v.Disk {
+			if i == 10 {
+				fmt.Fprintf(w, "  %s\n", u.dim(fmt.Sprintf("%d more in aq stats --json", len(v.Disk)-i)))
+				break
+			}
+			name := shortProfile(d.Profile, c.env("HOME"))
+			if name == "" {
+				name = "(unnamed)"
+			}
+			t.add(name, fmt.Sprint(d.Runs), size(d.Written), size(d.P50), size(d.Max))
 		}
 		indent(w, t, u)
 	}

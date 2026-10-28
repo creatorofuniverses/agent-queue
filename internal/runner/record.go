@@ -16,11 +16,12 @@ import (
 // RecordResult writes JobDir/result.json from systemd's ExecStopPost env and the unit cgroup.
 func RecordResult(jobDir string, getenv func(string) string, cgroupRoot string) error {
 	self, _ := os.ReadFile("/proc/self/cgroup")
-	return recordResult(jobDir, getenv, cgroupRoot, string(self))
+	return recordResult(jobDir, getenv, cgroupRoot, "/sys/dev/block", string(self))
 }
 
-// recordResult takes the /proc/self/cgroup content explicitly (testable).
-func recordResult(jobDir string, getenv func(string) string, cgroupRoot, selfCgroup string) error {
+// recordResult takes the /proc/self/cgroup content and the /sys/dev/block
+// root explicitly (testable).
+func recordResult(jobDir string, getenv func(string) string, cgroupRoot, devRoot, selfCgroup string) error {
 	info := platform.ExitInfo{
 		ServiceResult: getenv("SERVICE_RESULT"),
 		ExitCode:      getenv("EXIT_CODE"),
@@ -32,6 +33,7 @@ func recordResult(jobDir string, getenv func(string) string, cgroupRoot, selfCgr
 		if b, err := os.ReadFile(filepath.Join(dir, "memory.peak")); err == nil {
 			info.MemoryPeak, _ = strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
 		}
+		info.IOReadBytes, info.IOWriteBytes = diskIO(filepath.Join(dir, "io.stat"), devRoot)
 		if f, err := os.Open(filepath.Join(dir, "memory.events")); err == nil {
 			sc := bufio.NewScanner(f)
 			for sc.Scan() {
@@ -69,6 +71,38 @@ func recordResult(jobDir string, getenv func(string) string, cgroupRoot, selfCgr
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(jobDir, "result.json"))
+}
+
+// diskIO sums io.stat over physical disks: devices with a /sys/dev/block/M:m/device
+// link. Device-mapper, md, loop and zram have none; they either pass the same
+// bytes on to a physical disk (counted there) or never reach one (swap on zram).
+// No io.stat means no io controller: nil, nil.
+func diskIO(path, devRoot string) (read, write *uint64) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil
+	}
+	var r, w uint64
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(devRoot, f[0], "device")); err != nil {
+			continue
+		}
+		for _, kv := range f[1:] {
+			k, v, _ := strings.Cut(kv, "=")
+			n, _ := strconv.ParseUint(v, 10, 64)
+			switch k {
+			case "rbytes":
+				r += n
+			case "wbytes":
+				w += n
+			}
+		}
+	}
+	return &r, &w
 }
 
 // cgroupPath extracts the cgroup v2 path from /proc/self/cgroup content.

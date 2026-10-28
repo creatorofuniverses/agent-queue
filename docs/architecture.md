@@ -66,7 +66,12 @@ Startup locks prevent two daemons from managing the same runtime directory or sl
    Each log stream has a size cap; excess output is drained and discarded.
 5. **Record the result.** The unit's `ExecStopPost` action writes `result.json`,
    including systemd's outcome and cgroup memory measurements. This works even
-   while the daemon is down.
+   while the daemon is down. With the `io` controller delegated (units and the
+   slice set `IOAccounting=yes`), it also sums the unit's `io.stat` over physical
+   disks only: a device without a `/sys/dev/block/M:m/device` link (dm, md,
+   loop, zram) either forwards the same bytes to a physical disk or never
+   reaches one. Without the controller the bytes are recorded as unknown (NULL),
+   not zero, and nothing else changes.
 6. **Release resources.** The scheduler waits for the cgroup to become empty
    before finalizing the task and returning its resources to the pool.
 

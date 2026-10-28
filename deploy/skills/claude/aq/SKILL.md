@@ -109,6 +109,12 @@ check whether it hung before raising `--timeout`; on 5 read the diagnostic
 (rejected: the request can never fit the pool). Ack the item's event with
 `aq ack EVENT_ID` once the outcome is recorded.
 
+`aq result` also shows `disk:` (bytes written to physical disks) when the host
+records it. Gigabytes per run for a test suite wears the SSD and slows everyone:
+tell the user and look for the cause (a test database without `fsync=off`, an
+uncached dependency install, a fresh build directory every run). `aq stats`
+lists the heaviest writers by name.
+
 ## 6. Clean up before you finish
 
 `aq list --mine` shows your items and unacknowledged events. Shut your stands

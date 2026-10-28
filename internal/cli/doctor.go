@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ const (
 	codeDaemonUnavailable = "DAEMON_UNAVAILABLE"
 	codeSystemdTooOld     = "SYSTEMD_TOO_OLD"
 	codeKillDropinMissing = "KILL_DROPIN_MISSING"
+	codeIONotDelegated    = "IO_NOT_DELEGATED" // a warning: tasks run, disk bytes are not recorded
 )
 
 // minSystemd is needed for `systemd-run --expand-environment=no`.
@@ -45,6 +47,7 @@ const (
 type Check struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
+	Warn   bool   `json:"warn,omitempty"` // OK, but something optional is missing
 	Code   string `json:"code"`
 	Detail string `json:"detail"`
 }
@@ -121,7 +124,9 @@ func cmdDoctor(c *cmdCtx, args []string) error {
 		}
 	} else {
 		for _, ch := range checks {
-			if ch.OK {
+			if ch.Warn {
+				fmt.Fprintf(c.stdout, "%s  %-14s %s: %s\n", c.ui.yellow(pad("warn", 4)), ch.Name, ch.Code, ch.Detail)
+			} else if ch.OK {
 				fmt.Fprintf(c.stdout, "%s  %-14s %s\n", c.ui.green(pad("ok", 4)), ch.Name, ch.Detail)
 			} else {
 				fmt.Fprintf(c.stdout, "%s  %-14s %s: %s\n", c.ui.red("FAIL"), ch.Name, ch.Code, ch.Detail)
@@ -166,6 +171,7 @@ func runDoctor(ctx context.Context, sys doctorSystem, paths config.Paths, xdgRun
 		sliceErr = fmt.Errorf("%s does not exist (start the daemon once)", slicePath)
 	}
 	add("slice", codeSliceMissing, sliceErr, cfg.SliceName)
+	out = append(out, diskIOCheck(sys, manager, slicePath))
 
 	add("probe", codeProbeFailed, runProbe(ctx, sys, cfg), "memory.max enforced")
 	add("config", codeConfigInvalid, cfgErr, paths.ConfigFile)
@@ -237,6 +243,31 @@ func sliceRel(slice string) string {
 		dirs[i] = strings.Join(parts[:i+1], "-") + ".slice"
 	}
 	return filepath.Join(dirs...)
+}
+
+func hasController(sys doctorSystem, cgroupDir, name string) bool {
+	b, err := sys.ReadFile(filepath.Join(cgroupDir, "cgroup.controllers"))
+	return err == nil && slices.Contains(strings.Fields(string(b)), name)
+}
+
+// diskIOCheck is a warning, never a failure: without the io controller in the
+// aq slice tasks run as usual and just record no disk bytes.
+func diskIOCheck(sys doctorSystem, manager, slicePath string) Check {
+	c := Check{Name: "disk_io", OK: true}
+	switch {
+	case hasController(sys, slicePath, "io"):
+		c.Detail = "io controller on: tasks record disk bytes"
+	case !hasController(sys, filepath.Join(cgroupRoot, manager), "io"):
+		c.Warn, c.Code = true, codeIONotDelegated
+		c.Detail = "io controller not delegated to the user manager, so tasks record no disk bytes; fix: " +
+			"/etc/systemd/system/user@.service.d/delegate-io.conf with [Service] Delegate=cpu cpuset io memory pids, " +
+			"then sudo systemctl daemon-reload and a reboot"
+	default:
+		c.Warn, c.Code = true, codeIONotDelegated
+		c.Detail = "io is delegated, but the running user manager started before that; " +
+			"systemctl --user daemon-reexec (or a reboot), then restart aq.service"
+	}
+	return c
 }
 
 func checkControllers(sys doctorSystem, manager string) error {

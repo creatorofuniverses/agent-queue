@@ -241,6 +241,31 @@ aq stats export --since 7d --format csv --table host
 Команды, окружение, cwd, идентификаторы сессий и тексты ошибок доставки
 в статистику и выгрузку не входят.
 
+### Запись на диск
+
+Завершённая задача записывает, сколько байт она записала на физические диски и
+прочитала с них (`disk:` в `aq result`, `io_write_bytes`/`io_read_bytes` в
+`--json`). `aq stats` показывает профили, которые записали больше всего: всего,
+медиана и максимум за прогон, а `aq profile show` — медиану записи за прогон.
+Набор тестов, который пишет гигабайты за прогон, изнашивает SSD и тормозит
+ввод-вывод всем: обычно это база без `fsync=off`, установка зависимостей без
+кэша или сборка каждый раз в новый каталог.
+
+Числа берутся из `io.stat` задачи (device-mapper, md, loop и zram пропускаются,
+чтобы ничего не посчитать дважды; запись, которая к концу задачи ещё в page
+cache, не учитывается). Для этого user manager должен получить контроллер `io`,
+а systemd по умолчанию его не делегирует; без него поля отсутствуют (неизвестно,
+а не ноль), а `aq doctor` показывает предупреждение `IO_NOT_DELEGATED`. Включить:
+
+```sh
+sudo mkdir -p /etc/systemd/system/user@.service.d
+printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate-io.conf
+sudo systemctl daemon-reload
+# затем перезагрузка (или systemctl --user daemon-reexec) и рестарт aq.service
+```
+
+Контейнеры стенда работают вне aq; их запись пока не учитывается.
+
 ## Хранение
 
 Раз в 10 минут и после восстановления демон удаляет логи завершённых элементов
@@ -288,6 +313,8 @@ agent_processes = ["claude", "codex"]
 ошибка помечена кодом (`CGROUP_V2_MISSING`, `CONTROLLER_MISSING`,
 `SLICE_MISSING`, `PROBE_FAILED`, `CONFIG_INVALID`, `DISK_LOW`,
 `DAEMON_UNAVAILABLE`, `SYSTEMD_TOO_OLD`, `KILL_DROPIN_MISSING`) и подсказкой.
+`IO_NOT_DELEGATED` — предупреждение, а не сбой: задачи работают, но не
+записывают байты диска (см. «Запись на диск»).
 
 ## Изменение пула
 

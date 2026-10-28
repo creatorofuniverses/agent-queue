@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"time"
 )
@@ -12,6 +13,10 @@ type ProfileView struct {
 	Profile  string               `json:"profile"`
 	Estimate *ProfileEstimateView `json:"estimate,omitempty"`
 	Runs     []ProfileRunView     `json:"runs"`
+	// IOWriteP50: median disk bytes written per run over the listed runs that
+	// recorded it (IOWriteRuns of them); absent when none did.
+	IOWriteP50  *uint64 `json:"io_write_p50,omitempty"`
+	IOWriteRuns int     `json:"io_write_runs,omitempty"`
 }
 type ProfileEstimateView struct {
 	Runs            int     `json:"runs"`
@@ -33,6 +38,7 @@ type ProfileRunView struct {
 	Limit             uint64       `json:"limit"`
 	Expected          uint64       `json:"expected"`
 	MemoryFromProfile bool         `json:"memory_from_profile"`
+	IOWriteBytes      *uint64      `json:"io_write_bytes,omitempty"`
 }
 type ProfileListEntry struct {
 	Profile   string    `json:"profile"`
@@ -63,8 +69,16 @@ func (d *server) profileShow(ctx context.Context, raw json.RawMessage) (any, err
 	if ok {
 		v.Estimate = &ProfileEstimateView{est.Runs, est.Limit, est.Expected, est.MaxPeak, est.Duration.Seconds()}
 	}
+	var writes []float64
 	for _, r := range rs {
-		v.Runs = append(v.Runs, ProfileRunView{r.ItemID, r.EndedAt, r.State, r.Reason, r.Usable(), r.Duration.Seconds(), r.MemoryPeak, r.Hist.Quantile(90), r.Samples, r.Limit, r.Expected, r.MemoryFromProfile})
+		v.Runs = append(v.Runs, ProfileRunView{r.ItemID, r.EndedAt, r.State, r.Reason, r.Usable(), r.Duration.Seconds(), r.MemoryPeak, r.Hist.Quantile(90), r.Samples, r.Limit, r.Expected, r.MemoryFromProfile, r.IOWriteBytes})
+		if r.IOWriteBytes != nil {
+			writes = append(writes, float64(*r.IOWriteBytes))
+		}
+	}
+	if len(writes) > 0 {
+		p50 := uint64(profile.Percentile(writes, 50))
+		v.IOWriteP50, v.IOWriteRuns = &p50, len(writes)
 	}
 	return v, nil
 }

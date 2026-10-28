@@ -324,3 +324,34 @@ func TestIntegTeardownUnitInOwnSlice(t *testing.T) {
 		t.Fatalf("Alive after Stop %v %v", alive, err)
 	}
 }
+
+// Disk bytes come from io.stat only where the user manager has the io
+// controller; elsewhere they are unknown (nil), never a made-up zero.
+func TestIntegDiskIO(t *testing.T) {
+	e := newTestExecutor(t)
+	// /tmp is often tmpfs: write where a physical disk is.
+	dir, err := os.MkdirTemp(filepath.Join(os.Getenv("HOME"), ".cache"), "aq-integ-io-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	spec, err := launch(t, e, 128<<20, time.Minute, "dd", "if=/dev/zero", "of="+filepath.Join(dir, "f"), "bs=1M", "count=8", "conv=fsync", "status=none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := waitResult(t, spec.JobDir, 30*time.Second)
+	// The slice has IOAccounting=yes: io is in its controllers exactly when the
+	// user manager can give units io.stat.
+	uid := strconv.Itoa(os.Getuid())
+	ctrl, _ := os.ReadFile("/sys/fs/cgroup/user.slice/user-" + uid + ".slice/user@" + uid + ".service/aqtest.slice/cgroup.controllers")
+	if slices.Contains(strings.Fields(string(ctrl)), "io") {
+		if info.IOWriteBytes == nil || *info.IOWriteBytes < 8<<20 {
+			t.Fatalf("io delegated, want >= 8 MiB written: %+v", info)
+		}
+	} else if info.IOWriteBytes != nil || info.IOReadBytes != nil {
+		t.Fatalf("io not delegated, want unknown: %+v", info)
+	}
+	if info.ServiceResult != "success" {
+		t.Fatalf("IOAccounting=yes must not break the unit: %+v", info)
+	}
+}

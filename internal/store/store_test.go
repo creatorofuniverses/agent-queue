@@ -37,6 +37,7 @@ func TestInsertGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
 	code := 3
+	wrote, read := uint64(1<<40), uint64(0)
 	full := &model.Item{
 		ID: model.NewID(), Kind: model.KindTask, Name: "build", State: model.StateFailed,
 		Reason: model.ReasonCommandFailed, Priority: model.PriorityHigh,
@@ -44,7 +45,7 @@ func TestInsertGetRoundTrip(t *testing.T) {
 		Limit: 4 << 30, Expected: 2 << 30, CPUs: 4, Timeout: 90 * time.Second,
 		SessionID: "sess", ClientType: "claude", Project: "proj", IdemKey: "k1", RequestHash: "h1", NodeID: "local",
 		CreatedAt: base, AdmittedAt: base.Add(time.Second), StartedAt: base.Add(2 * time.Second), EndedAt: base.Add(3 * time.Second),
-		ExitCode: &code, Signal: "SIGKILL", MemoryPeak: 12345,
+		ExitCode: &code, Signal: "SIGKILL", MemoryPeak: 12345, IOWriteBytes: &wrote, IOReadBytes: &read,
 		UnitName: "aq-x.service", JobDir: "/jobs/x", GitRev: "abc", GitDirty: true,
 		CancelRequested: true, CancelReason: "user", LogsTruncated: true, Diagnostic: "diag",
 	}
@@ -71,6 +72,9 @@ func TestInsertGetRoundTrip(t *testing.T) {
 	got, err = s.Get(ctx, min.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got.IOWriteBytes != nil || got.IOReadBytes != nil {
+		t.Fatalf("unknown disk io became %v/%v", got.IOWriteBytes, got.IOReadBytes)
 	}
 	if got.ExitCode != nil || len(got.Env) != 0 || !got.StartedAt.IsZero() || !got.EndedAt.IsZero() {
 		t.Fatalf("minimal item mismatch: %+v", got)
