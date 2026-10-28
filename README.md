@@ -37,8 +37,10 @@ make install
   только если конфига ещё нет (существующий не трогается);
 - выполняет `systemctl --user daemon-reload`, включает `aq.service` и
   (пере)запускает его — повторный `make install` обновляет работающий демон;
-- копирует скилл `deploy/skills/aq` в `~/.claude/skills/aq` и `~/.codex/skills/aq`
-  (пути меняются через `SKILLDIRS`); хуки подключаются отдельно;
+- копирует скилл `aq` каждому агенту свой: `deploy/skills/claude/aq` в
+  `~/.claude/skills/aq`, `deploy/skills/codex/aq` в `~/.codex/skills/aq` (пути
+  меняются через `CLAUDE_SKILLS`/`CODEX_SKILLS`, пустое значение — не ставить);
+  хуки подключаются отдельно;
 - если linger выключен, печатает подсказку: без `loginctl enable-linger $USER`
   демон и все задачи останавливаются при выходе из последней сессии.
 
@@ -47,7 +49,7 @@ make install
 не запустится (`CONFIG_INVALID`).
 
 Каталоги переопределяются переменными make: `BINDIR`, `UNITDIR`, `CONFDIR`,
-`STATEDIR`, `SKILLDIRS`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
+`STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
 `make install SYSTEMCTL=true` только раскладывает файлы.
 
 Проверка после установки:
@@ -530,7 +532,9 @@ compose up/run, docker run. Он не обращается к демону, не
 [Claude](deploy/hooks/claude-settings.json) или [Codex](deploy/hooks/codex-hooks.json)
 с настройками клиента (не перезаписывайте существующие hooks). В обоих matcher
 `Bash`; Codex требует доверить новое определение через `/hooks`.
-Скилл [aq](deploy/skills/aq/SKILL.md) описывает квитанции, ack и снятие резервов.
+Скилл aq ([Claude](deploy/skills/claude/aq/SKILL.md), [Codex](deploy/skills/codex/aq/SKILL.md))
+описывает, как агенту работать с aq: что считать тяжёлым, как оценить память,
+когда `submit`, а когда `reserve` со стендом, как получить результат и убрать за собой.
 
 ## Восстановление
 

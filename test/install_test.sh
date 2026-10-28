@@ -10,9 +10,9 @@ s=open('Makefile').read()
 s=s.replace('\ninstall: build', '\naq-test-install: build').replace('\nuninstall:', '\naq-test-uninstall:')
 open(sys.argv[1],'w').write(s)
 PY
-opts=("BINDIR=$T/bin" "UNITDIR=$T/units" "CONFDIR=$T/conf" "STATEDIR=$T/state" "SKILLDIRS=$T/s1 $T/s2" SYSTEMCTL=true LOGINCTL=true)
+opts=("BINDIR=$T/bin" "UNITDIR=$T/units" "CONFDIR=$T/conf" "STATEDIR=$T/state" "CLAUDE_SKILLS=$T/s1" "CODEX_SKILLS=$T/s2" SYSTEMCTL=true LOGINCTL=true)
 # Every writable destination and both service commands must be explicitly overridden.
-for key in BINDIR UNITDIR CONFDIR STATEDIR SKILLDIRS SYSTEMCTL LOGINCTL; do
+for key in BINDIR UNITDIR CONFDIR STATEDIR CLAUDE_SKILLS CODEX_SKILLS SYSTEMCTL LOGINCTL; do
  found=false
  for arg in "${opts[@]}"; do [[ $arg == "$key="* ]] && found=true; done
  $found || { echo "missing override: $key" >&2; exit 1; }
@@ -23,6 +23,9 @@ done
 make -f "$T/Makefile" aq-test-install "${opts[@]}"
 test -f "$T/s1/aq/SKILL.md"
 test -f "$T/s2/aq/references/aq-reference.md"
+# Each agent gets its own version of the skill.
+cmp -s deploy/skills/claude/aq/SKILL.md "$T/s1/aq/SKILL.md"
+cmp -s deploy/skills/codex/aq/SKILL.md "$T/s2/aq/SKILL.md"
 rg -q '^Environment=PATH=' "$T/units/aq.service"
 # Replacement of an existing skill must remove stale contents.
 touch "$T/s1/aq/stale"
