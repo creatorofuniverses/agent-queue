@@ -32,7 +32,7 @@ func toolDefinitions() []toolDef {
 		}
 		return map[string]any{"type": "object", "properties": p, "required": required, "additionalProperties": false}
 	}
-	submit := obj([]string{"cwd", "memory", "expected", "timeout", "priority", "name", "key", "within", "project", "client", "session_id"}, []string{"cwd", "argv", "memory", "timeout"})
+	submit := obj([]string{"cwd", "memory", "expected", "timeout", "priority", "profile", "name", "key", "within", "project", "client", "session_id"}, []string{"cwd", "argv", "timeout"})
 	reserve := obj([]string{"cwd", "memory", "ttl", "teardown_file", "task_memory", "docker_project", "priority", "name", "key", "project", "client", "session_id"}, []string{"cwd", "memory", "ttl", "teardown_file"})
 	for _, s := range []map[string]any{submit, reserve} {
 		p := s["properties"].(map[string]any)
@@ -67,6 +67,7 @@ func toolDefinitions() []toolDef {
 }
 
 type toolArgs struct {
+	Profile       string   `json:"profile"`
 	Cwd           string   `json:"cwd"`
 	Argv          []string `json:"argv"`
 	Memory        string   `json:"memory"`
@@ -217,7 +218,7 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 		}
 		if name == "queue_submit" {
 			op = "submit"
-			args, err = client.BuildSubmit(ctx, client.SubmitOptions{Cwd: a.Cwd, Argv: a.Argv, Memory: a.Memory, Expected: a.Expected, Timeout: a.Timeout, CPUs: cpus, Priority: a.Priority, Name: a.Name, Key: a.Key, Within: a.Within, Project: a.Project, Env: a.Env, NoNotify: a.NoNotify, Identity: id}, env)
+			args, err = client.BuildSubmit(ctx, client.SubmitOptions{Profile: a.Profile, Cwd: a.Cwd, Argv: a.Argv, Memory: a.Memory, Expected: a.Expected, Timeout: a.Timeout, CPUs: cpus, Priority: a.Priority, Name: a.Name, Key: a.Key, Within: a.Within, Project: a.Project, Env: a.Env, NoNotify: a.NoNotify, Identity: id}, env)
 		} else {
 			op = "reserve"
 			if !filepath.IsAbs(a.TeardownFile) {

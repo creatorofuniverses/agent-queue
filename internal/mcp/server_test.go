@@ -244,3 +244,19 @@ func TestServeCancelsPipe(t *testing.T) {
 		t.Fatal("stdin read ignored cancellation")
 	}
 }
+
+func TestMCPSubmitWithoutMemory(t *testing.T) {
+	cwd := t.TempDir()
+	called := false
+	out := serveText(t, tool("queue_submit", map[string]any{"cwd": cwd, "name": "build", "argv": []string{"true"}, "timeout": "1m", "no_notify": true}), func(_ context.Context, op string, args, out any) error {
+		r := args.(daemon.SubmitArgs)
+		called = true
+		if op != "submit" || r.Limit != 0 || r.Profile != cwd+":build" || !r.ProfileDerived {
+			t.Fatal(r)
+		}
+		return nil
+	}, nil)
+	if !called || out[0]["result"].(map[string]any)["isError"] == true {
+		t.Fatal(out)
+	}
+}

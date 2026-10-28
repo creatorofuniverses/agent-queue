@@ -10,31 +10,35 @@ import (
 // ItemView is the client-facing projection of an item. It deliberately has no
 // env field: env values may hold secrets and never leave the daemon.
 type ItemView struct {
-	Events         []EventView  `json:"events,omitempty"`
-	ClientType     string       `json:"client_type"`
-	ID             model.ItemID `json:"id"`
-	Name           string       `json:"name"`
-	State          model.State  `json:"state"`
-	Reason         model.Reason `json:"reason"`
-	Priority       string       `json:"priority"`
-	MemoryLimit    uint64       `json:"memory_limit"`
-	MemoryExpected uint64       `json:"memory_expected"`
-	CPUs           int          `json:"cpus"`
-	TimeoutSeconds int64        `json:"timeout_seconds"`
-	SessionID      string       `json:"session_id"`
-	Project        string       `json:"project"`
-	CreatedAt      time.Time    `json:"created_at"`
-	StartedAt      *time.Time   `json:"started_at,omitempty"`
-	EndedAt        *time.Time   `json:"ended_at,omitempty"`
-	WaitSeconds    float64      `json:"wait_seconds"`
-	RunSeconds     float64      `json:"run_seconds"`
-	ExitCode       *int         `json:"exit_code,omitempty"`
-	Signal         string       `json:"signal,omitempty"`
-	MemoryPeak     uint64       `json:"memory_peak"`
-	GitRev         string       `json:"git_rev,omitempty"`
-	GitDirty       bool         `json:"git_dirty"`
-	Diagnostic     string       `json:"diagnostic,omitempty"`
-	NodeID         string       `json:"node_id"`
+	Profile           string       `json:"profile,omitempty"`
+	MemoryFromProfile bool         `json:"memory_from_profile,omitempty"`
+	EstimatedSeconds  float64      `json:"estimated_seconds,omitempty"`
+	ExtendCount       int          `json:"extend_count,omitempty"`
+	Events            []EventView  `json:"events,omitempty"`
+	ClientType        string       `json:"client_type"`
+	ID                model.ItemID `json:"id"`
+	Name              string       `json:"name"`
+	State             model.State  `json:"state"`
+	Reason            model.Reason `json:"reason"`
+	Priority          string       `json:"priority"`
+	MemoryLimit       uint64       `json:"memory_limit"`
+	MemoryExpected    uint64       `json:"memory_expected"`
+	CPUs              int          `json:"cpus"`
+	TimeoutSeconds    int64        `json:"timeout_seconds"`
+	SessionID         string       `json:"session_id"`
+	Project           string       `json:"project"`
+	CreatedAt         time.Time    `json:"created_at"`
+	StartedAt         *time.Time   `json:"started_at,omitempty"`
+	EndedAt           *time.Time   `json:"ended_at,omitempty"`
+	WaitSeconds       float64      `json:"wait_seconds"`
+	RunSeconds        float64      `json:"run_seconds"`
+	ExitCode          *int         `json:"exit_code,omitempty"`
+	Signal            string       `json:"signal,omitempty"`
+	MemoryPeak        uint64       `json:"memory_peak"`
+	GitRev            string       `json:"git_rev,omitempty"`
+	GitDirty          bool         `json:"git_dirty"`
+	Diagnostic        string       `json:"diagnostic,omitempty"`
+	NodeID            string       `json:"node_id"`
 
 	// Reservation fields. Neither env nor the teardown script is ever part of a view.
 	Kind            model.Kind   `json:"kind"`
@@ -70,6 +74,7 @@ func optTime(t time.Time) *time.Time {
 
 func viewOf(it *model.Item, now time.Time) ItemView {
 	v := ItemView{
+		Profile: it.Profile, MemoryFromProfile: it.MemoryFromProfile, EstimatedSeconds: it.EstDuration.Seconds(), ExtendCount: it.ExtendCount,
 		ClientType: it.ClientType, ID: it.ID, Name: it.Name, State: it.State, Reason: it.Reason, Priority: it.Priority.String(),
 		MemoryLimit: it.Limit, MemoryExpected: it.Expected, CPUs: it.CPUs,
 		TimeoutSeconds: int64(it.Timeout / time.Second), SessionID: it.SessionID, Project: it.Project,

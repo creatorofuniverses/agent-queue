@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/model"
+	"resource-dispatcher/internal/profile"
 	"resource-dispatcher/internal/units"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ func (e *UsageError) Unwrap() error        { return e.Err }
 func usagef(format string, a ...any) error { return &UsageError{Message: fmt.Sprintf(format, a...)} }
 
 type SubmitOptions struct {
+	Profile                                                              string
 	Cwd, Name, Memory, Expected, Timeout, Priority, Key, Project, Within string
 	CPUs                                                                 int
 	Argv, Env                                                            []string
@@ -61,12 +63,25 @@ func BuildSubmit(ctx context.Context, o SubmitOptions, getenv func(string) strin
 	if err != nil || d < time.Second {
 		return daemon.SubmitArgs{}, usagef("submit: invalid --timeout %q", o.Timeout)
 	}
-	if o.Memory == "" {
-		return daemon.SubmitArgs{}, usagef("submit: --memory is required")
+	name := o.Profile
+	derived := name == "" && o.Name != ""
+	if name == "" {
+		name = DefaultProfile(ctx, o.Cwd, o.Project, o.Name)
 	}
-	limit, err := units.ParseSize(o.Memory)
-	if err != nil {
-		return daemon.SubmitArgs{}, usagef("submit: --memory: %v", err)
+	if name != "" {
+		if e := profile.ValidName(name); e != nil {
+			return daemon.SubmitArgs{}, usagef("submit: %v", e)
+		}
+	}
+	if o.Memory == "" && name == "" {
+		return daemon.SubmitArgs{}, usagef("submit: --memory is required (or --name/--profile with history)")
+	}
+	var limit uint64
+	if o.Memory != "" {
+		limit, err = units.ParseSize(o.Memory)
+		if err != nil {
+			return daemon.SubmitArgs{}, usagef("submit: --memory: %v", err)
+		}
 	}
 	var exp uint64
 	if o.Expected != "" {
@@ -90,7 +105,7 @@ func BuildSubmit(ctx context.Context, o SubmitOptions, getenv func(string) strin
 	}
 	proj, rev, dirty := DetectProject(ctx, o.Cwd, o.Project)
 	return daemon.SubmitArgs{
-		NoNotify: o.NoNotify, Name: o.Name, Argv: o.Argv, Cwd: o.Cwd, Env: env, Limit: limit, Expected: exp, CPUs: o.CPUs,
+		Profile: name, ProfileDerived: derived, NoNotify: o.NoNotify, Name: o.Name, Argv: o.Argv, Cwd: o.Cwd, Env: env, Limit: limit, Expected: exp, CPUs: o.CPUs,
 		TimeoutSeconds: int64(d / time.Second), Priority: o.Priority, SessionID: o.Identity.SessionID,
 		ClientType: o.Identity.ClientType, Project: proj, IdemKey: o.Key, GitRev: rev, GitDirty: dirty, Within: model.ItemID(o.Within),
 	}, nil

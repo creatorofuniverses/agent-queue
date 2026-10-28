@@ -22,6 +22,8 @@ import (
 
 // SubmitArgs is the submit request. Sizes are bytes.
 type SubmitArgs struct {
+	Profile        string            `json:"profile"`
+	ProfileDerived bool              `json:"profile_derived"`
 	NoNotify       bool              `json:"no_notify"`
 	Name           string            `json:"name"`
 	Argv           []string          `json:"argv"`
@@ -155,6 +157,14 @@ func (d *server) handle(ctx context.Context, op string, args json.RawMessage, w 
 
 func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, w protocol.StreamWriter) (any, error) {
 	switch op {
+	case "profile_show":
+		return d.profileShow(ctx, args)
+	case "profile_list":
+		var empty struct{}
+		if err := decode(args, &empty); err != nil {
+			return nil, err
+		}
+		return d.profileList(ctx)
 	case "ping":
 		return d.ping(ctx)
 	case "submit":
@@ -370,7 +380,7 @@ func (d *server) submit(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, badRequest("%v", err)
 	}
 	it, err := d.sched.Submit(ctx, scheduler.SubmitRequest{
-		NoNotify: a.NoNotify, Name: a.Name, Argv: a.Argv, Cwd: a.Cwd, Env: a.Env, Limit: a.Limit, Expected: a.Expected, CPUs: a.CPUs,
+		Profile: a.Profile, ProfileDerived: a.ProfileDerived, NoNotify: a.NoNotify, Name: a.Name, Argv: a.Argv, Cwd: a.Cwd, Env: a.Env, Limit: a.Limit, Expected: a.Expected, CPUs: a.CPUs,
 		Timeout:  time.Duration(a.TimeoutSeconds) * time.Second,
 		Priority: prio, SessionID: a.SessionID, ClientType: a.ClientType, Project: a.Project,
 		IdemKey: a.IdemKey, GitRev: a.GitRev, GitDirty: a.GitDirty, ParentID: a.Within,

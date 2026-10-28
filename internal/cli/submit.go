@@ -31,6 +31,7 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	cpus := fs.Int("cpus", 1, "CPUs")
 	priority := fs.String("priority", "normal", "low|normal|high")
 	timeout := fs.String("timeout", "", "task timeout, e.g. 30m (required)")
+	profile := fs.String("profile", "", "explicit profile name")
 	name := fs.String("name", "", "task name")
 	key := fs.String("key", "", "idempotency key")
 	flagClient := fs.String("client", "", "agent adapter name or cli")
@@ -57,7 +58,7 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	if err != nil {
 		return err
 	}
-	request, err := client.BuildSubmit(c.ctx, client.SubmitOptions{Cwd: cwd, Name: *name, Argv: argv, Memory: *memory, Expected: *expected, CPUs: *cpus, Timeout: *timeout, Priority: *priority, Key: *key, Project: *project, Within: *within, Env: envs, NoNotify: *noNotify, Identity: identity}, c.env)
+	request, err := client.BuildSubmit(c.ctx, client.SubmitOptions{Profile: *profile, Cwd: cwd, Name: *name, Argv: argv, Memory: *memory, Expected: *expected, CPUs: *cpus, Timeout: *timeout, Priority: *priority, Key: *key, Project: *project, Within: *within, Env: envs, NoNotify: *noNotify, Identity: identity}, c.env)
 	if err != nil {
 		return err
 	}

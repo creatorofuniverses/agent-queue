@@ -103,6 +103,15 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 	if v.Name != "" {
 		fmt.Fprintf(w, "name:      %s\n", v.Name)
 	}
+	if v.Profile != "" {
+		fmt.Fprintf(w, "profile:   %s\n", v.Profile)
+	}
+	if v.EstimatedSeconds > 0 {
+		fmt.Fprintf(w, "estimate:  %s\n", secs(v.EstimatedSeconds))
+	}
+	if v.MemoryFromProfile {
+		fmt.Fprintln(w, "memory source: (from profile)")
+	}
 	state := string(v.State)
 	if v.Reason != "" {
 		state += " (" + string(v.Reason) + ")"
