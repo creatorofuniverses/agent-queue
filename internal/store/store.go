@@ -158,7 +158,7 @@ created_at, admitted_at, started_at, ended_at,
 exit_code, signal, memory_peak, unit_name, job_dir, git_rev, git_dirty,
 cancel_requested, cancel_reason, logs_truncated, diagnostic,
 parent_id, task_memory, task_cpus, expires_at, warn_at, docker_project,
-teardown_attempt, teardown_launch_error, notify_grant, ttl_held, over_declared_notified, no_notify, finish_notified`
+teardown_attempt, teardown_launch_error, notify_grant, ttl_held, over_declared_notified, no_notify, finish_notified, profile, est_duration_ns, memory_from_profile, extend_count, logs_pruned, teardown_started_at, expired_at`
 
 func fmtTime(t time.Time) string {
 	if t.IsZero() {
@@ -209,6 +209,7 @@ func itemArgs(it *model.Item) ([]any, error) {
 		it.CancelRequested, it.CancelReason, it.LogsTruncated, it.Diagnostic,
 		string(it.ParentID), int64(it.TaskMemory), it.TaskCPUs, fmtTime(it.ExpiresAt), fmtTime(it.WarnAt), it.DockerProject,
 		it.TeardownAttempt, it.TeardownLaunchError, it.NotifyGrant, it.TTLHeld, it.OverDeclaredNotified, it.NoNotify, it.FinishNotified,
+		it.Profile, int64(it.EstDuration), it.MemoryFromProfile, it.ExtendCount, it.LogsPruned, fmtTime(it.TeardownStartedAt), fmtTime(it.ExpiredAt),
 	}, nil
 }
 
@@ -226,6 +227,8 @@ func scanItem(r scanner) (*model.Item, error) {
 		parent                            string
 		taskMem                           int64
 		expires, warn                     string
+		teardownStarted, expired          string
+		estDuration                       int64
 	)
 	err := r.Scan(&id, &kind, &it.Name, &state, &reason, &prio, &argv, &it.Cwd, &env,
 		&limit, &expected, &it.CPUs, &timeout,
@@ -234,12 +237,13 @@ func scanItem(r scanner) (*model.Item, error) {
 		&exit, &it.Signal, &peak, &it.UnitName, &it.JobDir, &it.GitRev, &it.GitDirty,
 		&it.CancelRequested, &it.CancelReason, &it.LogsTruncated, &it.Diagnostic,
 		&parent, &taskMem, &it.TaskCPUs, &expires, &warn, &it.DockerProject,
-		&it.TeardownAttempt, &it.TeardownLaunchError, &it.NotifyGrant, &it.TTLHeld, &it.OverDeclaredNotified, &it.NoNotify, &it.FinishNotified)
+		&it.TeardownAttempt, &it.TeardownLaunchError, &it.NotifyGrant, &it.TTLHeld, &it.OverDeclaredNotified, &it.NoNotify, &it.FinishNotified, &it.Profile, &estDuration, &it.MemoryFromProfile, &it.ExtendCount, &it.LogsPruned, &teardownStarted, &expired)
 	if err != nil {
 		return nil, err
 	}
 	it.ID, it.Kind, it.State, it.Reason = model.ItemID(id), model.Kind(kind), model.State(state), model.Reason(reason)
 	it.Priority = model.Priority(prio)
+	it.EstDuration = time.Duration(estDuration)
 	it.ParentID, it.TaskMemory = model.ItemID(parent), uint64(taskMem)
 	it.Limit, it.Expected, it.Timeout, it.MemoryPeak = uint64(limit), uint64(expected), time.Duration(timeout), uint64(peak)
 	if err := json.Unmarshal([]byte(argv), &it.Argv); err != nil {
@@ -259,7 +263,7 @@ func scanItem(r scanner) (*model.Item, error) {
 		dst *time.Time
 		src string
 	}{{&it.CreatedAt, created}, {&it.AdmittedAt, admitted}, {&it.StartedAt, started}, {&it.EndedAt, ended},
-		{&it.ExpiresAt, expires}, {&it.WarnAt, warn}} {
+		{&it.ExpiresAt, expires}, {&it.WarnAt, warn}, {&it.TeardownStartedAt, teardownStarted}, {&it.ExpiredAt, expired}} {
 		if *p.dst, err = parseTime(p.src); err != nil {
 			return nil, err
 		}

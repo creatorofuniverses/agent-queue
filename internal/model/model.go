@@ -140,12 +140,18 @@ type Resources struct {
 }
 
 type Item struct {
-	ID       ItemID
-	Kind     Kind
-	Name     string
-	State    State
-	Reason   Reason
-	Priority Priority
+	Profile                      string
+	EstDuration                  time.Duration
+	MemoryFromProfile            bool
+	ExtendCount                  int
+	LogsPruned                   bool
+	TeardownStartedAt, ExpiredAt time.Time
+	ID                           ItemID
+	Kind                         Kind
+	Name                         string
+	State                        State
+	Reason                       Reason
+	Priority                     Priority
 
 	Argv []string
 	Cwd  string
