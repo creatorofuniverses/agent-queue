@@ -30,7 +30,10 @@ const Version = "0.1.0"
 // Run starts the daemon and blocks until ctx ends (returning nil) or startup
 // or serving fails. A recovery error is fatal: admission must not open on
 // unreconciled state.
-type Options struct{ Usage platform.UsageMeter }
+type Options struct {
+	Usage    platform.UsageMeter
+	OOMKills platform.OOMKillLog
+}
 
 func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platform.Executor, host platform.HostMetrics, meter platform.StandMeter, opts Options) error {
 	if err := os.MkdirAll(paths.RuntimeDir, 0o700); err != nil {
@@ -116,14 +119,28 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 			meter.Run(runCtx)
 		}()
 	}
-	loops.Add(2)
+	loops.Add(3)
+	go func() {
+		defer loops.Done()
+		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses}, cfg.Stats.SampleInterval)
+	}()
 	go func() {
 		defer loops.Done()
 		RunGuard(runCtx, exec, host, cfg, sched.SetGuardActive, time.Second)
 	}()
 	go func() {
 		defer loops.Done()
-		RunIncidents(runCtx, host, st, sched.Pressure, 10*time.Second)
+		RunIncidents(runCtx, host, st, sched.Pressure, func() (uint64, error) {
+			a, e := exec.SliceOOMKills()
+			if e != nil {
+				return 0, e
+			}
+			b, e := exec.TeardownSliceOOMKills()
+			if e != nil {
+				return 0, e
+			}
+			return a + b, nil
+		}, opts.OOMKills, 10*time.Second)
 	}()
 
 	err = protocol.Serve(runCtx, paths.Socket(), d.handle)

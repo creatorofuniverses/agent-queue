@@ -465,6 +465,14 @@ func (s *Scheduler) expireLocked(ctx context.Context, items []*model.Item, now t
 		if now.Before(it.ExpiresAt) && !(it.TTLHeld && nested[it.ID] == 0) {
 			continue
 		}
+		if it.ExpiredAt.IsZero() && !now.Before(it.ExpiresAt) {
+			it.ExpiredAt = now
+			if err := s.persistLocked(ctx, it); err != nil {
+				it.ExpiredAt = time.Time{}
+				slog.Error("scheduler: record expiry", "id", it.ID, "err", err)
+				continue
+			}
+		}
 		if n := nested[it.ID]; n > 0 {
 			s.holdLocked(ctx, it, deadline[it.ID], n)
 			continue

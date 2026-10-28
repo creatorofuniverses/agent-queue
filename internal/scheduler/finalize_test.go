@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"testing"
+	"time"
 
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
@@ -59,5 +60,76 @@ func TestExitDetails(t *testing.T) {
 		if (c.code < 0) != (code == nil) || code != nil && *code != c.code || sig != c.signal {
 			t.Errorf("%q: got %v %q, want %d %q", c.status, code, sig, c.code, c.signal)
 		}
+	}
+}
+
+func TestGuardAttributionWindow(t *testing.T) {
+	e := newEnv(t, nil)
+	t0 := e.clk.Now()
+	e.s.SetGuardActive(true)
+	e.clk.Advance(time.Second)
+	e.s.SetGuardActive(true)
+	e.clk.Advance(19 * time.Second)
+	e.s.SetGuardActive(false)
+	e.clk.Advance(time.Second)
+	check := func(at time.Time, want model.Reason) {
+		t.Helper()
+		it := e.submit(t, e.req(100*mib))
+		e.tick(t)
+		e.ex.Finish(it.ID, platform.ExitInfo{ServiceResult: "oom-kill", OwnOOMKills: 1, EndedAt: at})
+		e.ex.SetAlive(it.ID, false)
+		e.tick(t)
+		e.wantState(t, it.ID, model.StateFailed, want)
+	}
+	check(t0.Add(19*time.Second), model.ReasonOOMHostGuard)
+	check(t0.Add(24*time.Second), model.ReasonOOMHostGuard)
+	check(t0.Add(30*time.Second), model.ReasonOOMGroup)
+	check(t0.Add(-10*time.Second), model.ReasonOOMGroup)
+	e.clk.Advance(t0.Add(40 * time.Second).Sub(e.clk.Now()))
+	e.s.SetGuardActive(true)
+	e.clk.Advance(time.Second)
+	e.s.SetGuardActive(false)
+	e.clk.Advance(time.Second)
+	check(t0.Add(19*time.Second), model.ReasonOOMHostGuard)
+	e.clk.Advance(t0.Add(60 * time.Second).Sub(e.clk.Now()))
+	e.s.SetGuardActive(true)
+	check(t0.Add(30*time.Second), model.ReasonOOMGroup)
+}
+func TestExpiredAtRecordedOnce(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		e := newResEnv(t)
+		r := e.rreq(100 * mib)
+		r.TTL = time.Minute
+		if nested {
+			r.TaskMemory = 256 * mib
+			r.TaskCPUs = 1
+		}
+		it := e.reserve(t, r)
+		e.tick(t)
+		if nested {
+			nr := e.req(100 * mib)
+			nr.ParentID = it.ID
+			e.submit(t, nr)
+			e.tick(t)
+		}
+		e.clk.Advance(61 * time.Second)
+		at := e.clk.Now()
+		e.tick(t)
+		got := e.get(t, it.ID)
+		if !got.ExpiredAt.Equal(at) {
+			t.Fatal(got)
+		}
+		e.clk.Advance(time.Second)
+		e.tick(t)
+		if !e.get(t, it.ID).ExpiredAt.Equal(at) {
+			t.Fatal("changed")
+		}
+	}
+	e := newResEnv(t)
+	it := e.reserve(t, e.rreq(100*mib))
+	e.tick(t)
+	e.s.Release(e.ctx, it.ID, false)
+	if !e.get(t, it.ID).ExpiredAt.IsZero() {
+		t.Fatal("explicit release expired")
 	}
 }

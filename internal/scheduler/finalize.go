@@ -150,7 +150,7 @@ func (s *Scheduler) reapMissingLocked(ctx context.Context, it *model.Item, alive
 
 // finalizeLocked records the outcome from ei and frees the item's resources.
 func (s *Scheduler) finalizeLocked(ctx context.Context, it *model.Item, ei *platform.ExitInfo) error {
-	st, reason := MapOutcome(*ei, it.CancelRequested, s.guard.Load())
+	st, reason := MapOutcome(*ei, it.CancelRequested, s.guardAt(ei.EndedAt))
 	if reason == model.ReasonCancelled && it.CancelReason == launchFailedCancel {
 		st, reason = model.StateFailed, model.ReasonLaunchFailed
 	}

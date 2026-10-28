@@ -895,7 +895,7 @@ func TestGuardActiveFlag(t *testing.T) {
 	e.s.SetGuardActive(true)
 	it := e.submit(t, e.req(gib))
 	e.tick(t)
-	e.finish(it.ID, platform.ExitInfo{ServiceResult: "oom-kill", ExitCode: "killed", ExitStatus: "KILL", OwnOOMKills: 1})
+	e.finish(it.ID, platform.ExitInfo{ServiceResult: "oom-kill", ExitCode: "killed", ExitStatus: "KILL", OwnOOMKills: 1, EndedAt: e.clk.Now()})
 	e.tick(t)
 	e.wantState(t, it.ID, model.StateFailed, model.ReasonOOMHostGuard)
 }

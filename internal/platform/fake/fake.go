@@ -24,6 +24,7 @@ type Executor struct {
 	beforeStop   func(model.ItemID)
 	sliceCur     uint64
 	sliceOOM     uint64
+	teardownOOM  uint64
 	ceilings     [][2]uint64
 	actualMax    uint64
 	ceilingErr   error
@@ -357,4 +358,15 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 	v := m.usage
 	v.Agents = append([]platform.AgentUsage(nil), v.Agents...)
 	return v, m.err
+}
+
+func (e *Executor) SetTeardownSliceOOMKills(n uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.teardownOOM = n
+}
+func (e *Executor) TeardownSliceOOMKills() (uint64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.teardownOOM, nil
 }

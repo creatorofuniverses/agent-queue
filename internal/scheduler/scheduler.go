@@ -84,14 +84,16 @@ type SubmitRequest struct {
 }
 
 type Scheduler struct {
-	last        passState
-	commitments Commitments
-	holderLive  map[model.ItemID]uint64
-	samples     map[model.ItemID]*runSamples
-	d           Deps
-	kick        chan struct{}
-	guard       atomic.Bool
-	bg          sync.WaitGroup // background stops and temp dir removals
+	guardMu        sync.Mutex
+	guardIntervals []guardInterval
+	last           passState
+	commitments    Commitments
+	holderLive     map[model.ItemID]uint64
+	samples        map[model.ItemID]*runSamples
+	d              Deps
+	kick           chan struct{}
+	guard          atomic.Bool
+	bg             sync.WaitGroup // background stops and temp dir removals
 
 	// mu guards everything below and serializes every state transition.
 	// It is never held across Launch, Stop or git.
@@ -833,5 +835,42 @@ func (s *Scheduler) Pressure() (closed bool, avg10 float64) {
 	return s.pressureClosed, s.pressureAvg
 }
 
-func (s *Scheduler) GuardActive() bool     { return s.guard.Load() }
-func (s *Scheduler) SetGuardActive(v bool) { s.guard.Store(v) }
+func (s *Scheduler) GuardActive() bool { return s.guard.Load() }
+func (s *Scheduler) SetGuardActive(v bool) {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	now := s.d.Now()
+	if v != s.guard.Load() {
+		if v {
+			s.guardIntervals = append(s.guardIntervals, guardInterval{From: now})
+		} else if n := len(s.guardIntervals); n > 0 {
+			s.guardIntervals[n-1].Until = now
+		}
+		s.guard.Store(v)
+	}
+	s.pruneGuardLocked(now)
+}
+
+type guardInterval struct{ From, Until time.Time }
+
+func (s *Scheduler) pruneGuardLocked(now time.Time) {
+	i := 0
+	for i < len(s.guardIntervals) && !s.guardIntervals[i].Until.IsZero() && s.guardIntervals[i].Until.Before(now.Add(-time.Hour)) {
+		i++
+	}
+	s.guardIntervals = s.guardIntervals[i:]
+	if len(s.guardIntervals) > 256 {
+		s.guardIntervals = s.guardIntervals[len(s.guardIntervals)-256:]
+	}
+}
+func (s *Scheduler) guardAt(at time.Time) bool {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	s.pruneGuardLocked(s.d.Now())
+	for _, v := range s.guardIntervals {
+		if !at.Before(v.From.Add(-5*time.Second)) && (v.Until.IsZero() || !at.After(v.Until.Add(5*time.Second))) {
+			return true
+		}
+	}
+	return false
+}

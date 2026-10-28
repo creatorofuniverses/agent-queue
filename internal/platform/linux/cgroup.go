@@ -194,3 +194,7 @@ func writeUint(path string, v uint64) error {
 	}
 	return nil
 }
+
+func (e *Executor) TeardownSliceOOMKills() (uint64, error) {
+	return readEvent(filepath.Join(e.teardownSliceDir(), "memory.events"), "oom_kill")
+}
