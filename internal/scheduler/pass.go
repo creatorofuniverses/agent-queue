@@ -35,6 +35,8 @@ type passState struct {
 	at      time.Time
 	summary PassSummary
 	starts  map[model.ItemID]time.Time
+	// aborted: the latest pass failed before saving, so this state is stale.
+	aborted bool
 }
 
 func (s *Scheduler) LastPass() PassSummary { s.mu.Lock(); defer s.mu.Unlock(); return s.last.summary }
@@ -51,11 +53,23 @@ func (s *Scheduler) waitingOf(it *model.Item) admission.Waiting {
 		d = it.Timeout + s.d.Cfg.Reservations.TeardownTimeout
 		history = true
 	} else if d <= 0 {
-		d = it.Timeout
+		// A task that hits its timeout is stopped and given the kill grace.
+		d = it.Timeout + s.d.Cfg.CancelGrace
 	}
 	return admission.Waiting{ID: it.ID, Res: it.Committed(), Duration: d, FromHistory: history, ExtraOnly: it.IsReservation()}
 }
 func (s *Scheduler) holdersLocked(items []*model.Item, now time.Time) []admission.Holder {
+	// A reservation is held past its TTL until its nested tasks end.
+	nestedEnd := map[model.ItemID]time.Time{}
+	for _, it := range items {
+		if it.ParentID != "" && (it.State == model.StateStarting || it.State == model.StateRunning) {
+			start := it.StartedAt
+			if start.IsZero() {
+				start = now
+			}
+			nestedEnd[it.ParentID] = maxTime(nestedEnd[it.ParentID], start.Add(it.Timeout+s.d.Cfg.CancelGrace))
+		}
+	}
 	var out []admission.Holder
 	for _, it := range items {
 		if it.ParentID != "" || it.State == model.StateQueued || it.State.Terminal() {
@@ -68,7 +82,7 @@ func (s *Scheduler) holdersLocked(items []*model.Item, now time.Time) []admissio
 		if it.IsReservation() {
 			switch it.State {
 			case model.StateGranted, model.StateExpiring:
-				h.End = maxTime(now, it.ExpiresAt).Add(s.d.Cfg.Reservations.TeardownTimeout)
+				h.End = maxTime(maxTime(now, it.ExpiresAt), nestedEnd[it.ID]).Add(s.d.Cfg.Reservations.TeardownTimeout)
 			case model.StateTearingDown:
 				if it.TeardownStartedAt.IsZero() {
 					h.End = now.Add(s.d.Cfg.Reservations.TeardownTimeout)

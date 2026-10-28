@@ -23,14 +23,17 @@ func (s *Scheduler) ProfileEstimate(ctx context.Context, name string) (profile.E
 	v, ok := profile.Compute(rs, profile.Params{Window: p.Window, MemoryPercentile: p.MemoryPercentile, DurationPercentile: p.DurationPercentile, LimitMargin: p.LimitMargin, MinMemory: minMemory, MaxMemory: s.d.Cfg.PoolMemory})
 	return v, ok, nil
 }
-func (s *Scheduler) applyProfile(ctx context.Context, r *SubmitRequest) (from bool, duration time.Duration, err error) {
+
+// applyProfile returns reject for a request that can never be admitted as given,
+// and err for a store failure the caller may retry.
+func (s *Scheduler) applyProfile(ctx context.Context, r *SubmitRequest) (from bool, duration time.Duration, reject, err error) {
 	if r.Profile != "" {
-		if err = profile.ValidName(r.Profile); err != nil {
+		if reject = profile.ValidName(r.Profile); reject != nil {
 			return
 		}
 		v, ok, e := s.ProfileEstimate(ctx, r.Profile)
 		if e != nil {
-			return false, 0, e
+			return false, 0, nil, e
 		}
 		if ok {
 			duration = min(v.Duration, r.Timeout)
@@ -42,11 +45,11 @@ func (s *Scheduler) applyProfile(ctx context.Context, r *SubmitRequest) (from bo
 				from = true
 			}
 		} else if r.Limit == 0 {
-			return false, 0, fmt.Errorf("memory not given and profile %s has no usable runs; pass --memory", r.Profile)
+			return false, 0, fmt.Errorf("memory not given and profile %s has no usable runs; pass --memory", r.Profile), nil
 		}
 	}
 	if r.Limit == 0 {
-		return false, 0, fmt.Errorf("memory limit is required")
+		return false, 0, fmt.Errorf("memory limit is required"), nil
 	}
 	return
 }
@@ -75,7 +78,13 @@ func (s *Scheduler) profileRunLocked(it *model.Item) *profile.Run {
 	if it.Profile == "" || start.IsZero() {
 		return nil
 	}
-	r := &profile.Run{ItemID: it.ID, Profile: it.Profile, EndedAt: it.EndedAt, State: it.State, Reason: it.Reason, CPUs: it.CPUs, Limit: it.Limit, Expected: it.Expected, MemoryFromProfile: it.MemoryFromProfile, EstDuration: it.EstDuration, Duration: it.EndedAt.Sub(start), MemoryPeak: it.MemoryPeak}
+	duration := it.EndedAt.Sub(start)
+	if duration <= 0 && !it.EndedAt.IsZero() {
+		// StartedAt is stamped after systemd-run returns, so a run of a few
+		// milliseconds can end before it; such a run still counts.
+		duration = max(it.EndedAt.Sub(it.AdmittedAt), time.Millisecond)
+	}
+	r := &profile.Run{ItemID: it.ID, Profile: it.Profile, EndedAt: it.EndedAt, State: it.State, Reason: it.Reason, CPUs: it.CPUs, Limit: it.Limit, Expected: it.Expected, MemoryFromProfile: it.MemoryFromProfile, EstDuration: it.EstDuration, Duration: duration, MemoryPeak: it.MemoryPeak}
 	if v := s.samples[it.ID]; v != nil {
 		r.Hist = v.Hist
 		r.Samples = v.Samples

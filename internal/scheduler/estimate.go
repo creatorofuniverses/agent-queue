@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"resource-dispatcher/internal/admission"
 	"resource-dispatcher/internal/model"
@@ -92,6 +93,9 @@ func (s *Scheduler) Estimate(ctx context.Context, r EstimateRequest) (Estimate, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	last := s.last
+	if last.aborted {
+		return v, errors.New("the last admission pass failed; retry the estimate")
+	}
 	index := len(last.items)
 	for i, it := range last.items {
 		if it.Priority < r.Priority {
@@ -104,6 +108,9 @@ func (s *Scheduler) Estimate(ctx context.Context, r EstimateRequest) (Estimate, 
 		v.QueueAheadMemory += it.Committed().MemoryBytes
 	}
 	q := admission.Waiting{Res: model.Resources{MemoryBytes: v.Expected, CPUs: v.CPUs}, Duration: v.Duration, FromHistory: v.DurationSource == "profile"}
+	if v.DurationSource == "timeout" {
+		q.Duration += s.d.Cfg.CancelGrace // same as waitingOf for a submitted task
+	}
 	queue := slices.Clone(last.waiting)
 	queue = slices.Insert(queue, index, q)
 	pass := admission.PlanPass(last.policy, last.after, last.holders, queue, last.at, s.d.Cfg.Scheduler.Backfill)

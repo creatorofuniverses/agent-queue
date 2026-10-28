@@ -40,6 +40,9 @@ func dirSize(dir string) (uint64, error) {
 		}
 		if !d.IsDir() {
 			info, e := d.Info()
+			if os.IsNotExist(e) {
+				return nil // removed during the walk
+			}
 			if e != nil {
 				return e
 			}
@@ -104,7 +107,9 @@ func retentionStep(ctx context.Context, st *store.Store, paths config.Paths, cfg
 	}
 	total, e := dirSize(filepath.Join(paths.StateDir, "jobs"))
 	if e != nil {
-		return e
+		// Unknown size: prune by age only, and keep the history and sample stages.
+		slog.Warn("retention: measure jobs", "err", e)
+		total = 0
 	}
 	for _, v := range candidates {
 		if e := ctx.Err(); e != nil {

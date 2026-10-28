@@ -253,6 +253,7 @@ type Host struct {
 	disk     uint64
 	oom      uint64
 	cpus     int
+	memErr   error
 }
 
 func NewHost() *Host { return &Host{cpus: 1} }
@@ -266,8 +267,11 @@ func (h *Host) SetNumCPU(n int)        { h.mu.Lock(); h.cpus = n; h.mu.Unlock() 
 func (h *Host) Memory() (platform.MemInfo, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.mem, nil
+	return h.mem, h.memErr
 }
+
+// FailMemory makes Memory return err until called again with nil.
+func (h *Host) FailMemory(err error) { h.mu.Lock(); h.memErr = err; h.mu.Unlock() }
 
 func (h *Host) PressureFullAvg10() (float64, error) {
 	h.mu.Lock()

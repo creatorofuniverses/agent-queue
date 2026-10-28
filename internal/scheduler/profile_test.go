@@ -7,6 +7,7 @@ import (
 	"errors"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
+	"resource-dispatcher/internal/store"
 	"strings"
 	"testing"
 	"time"
@@ -276,5 +277,34 @@ func TestExtendCountsExtensions(t *testing.T) {
 	e.s.Extend(e.ctx, it.ID, 0)
 	if e.get(t, it.ID).ExtendCount != 2 {
 		t.Fatal("count")
+	}
+}
+func TestProfileRunEndingBeforeStartIsUsable(t *testing.T) {
+	e := newEnv(t, nil)
+	r := e.req(512 * mib)
+	r.Profile = "quick"
+	it := e.submit(t, r)
+	e.tick(t)
+	// The runner stamps EndedAt before the daemon gets to stamp StartedAt.
+	e.ex.Finish(it.ID, platform.ExitInfo{ServiceResult: "success", ExitCode: "exited", ExitStatus: "0", MemoryPeak: 100 * mib, EndedAt: e.clk.Now().Add(-50 * time.Millisecond)})
+	e.ex.SetAlive(it.ID, false)
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateSucceeded, "")
+	if _, ok, err := e.s.ProfileEstimate(e.ctx, "quick"); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+}
+func TestProfileStoreErrorIsNotRejection(t *testing.T) {
+	e := newEnv(t, nil)
+	sqlExec(t, e.sqlDB(t), `DROP TABLE profile_runs`)
+	r := e.req(0)
+	r.Profile = "p"
+	r.IdemKey = "k"
+	if _, err := e.s.Submit(e.ctx, r); err == nil || errors.Is(err, ErrRejected) {
+		t.Fatal(err)
+	}
+	its, _ := e.st.List(e.ctx, store.ListFilter{IncludeTerminal: true})
+	if len(its) != 0 {
+		t.Fatal("transient store error stored a row", its)
 	}
 }

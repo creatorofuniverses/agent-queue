@@ -217,7 +217,10 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 		return nil, err
 	}
 	sum := sha256.Sum256(canon)
-	fromProfile, estDuration, profileErr := s.applyProfile(ctx, &r)
+	fromProfile, estDuration, profileErr, err := s.applyProfile(ctx, &r)
+	if err != nil {
+		return nil, fmt.Errorf("profile %s: %w", r.Profile, err)
+	}
 	now := s.d.Now()
 	it := &model.Item{
 		ID: model.NewID(), Kind: model.KindTask, Name: r.Name, State: model.StateQueued, Priority: r.Priority,
@@ -415,8 +418,13 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	return err
 }
 
-func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) ([]*model.Item, error) {
+func (s *Scheduler) admitLocked(ctx context.Context, items []*model.Item) (_ []*model.Item, err error) {
 	now := s.d.Now()
+	defer func() {
+		if err != nil {
+			s.last.starts, s.last.aborted = nil, true
+		}
+	}()
 	if avg, err := s.d.Host.PressureFullAvg10(); err != nil {
 		slog.Warn("scheduler: read memory pressure; gate keeps its state", "err", err)
 	} else {

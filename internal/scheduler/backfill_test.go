@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"context"
+	"errors"
 	"resource-dispatcher/internal/admission"
 	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/model"
@@ -182,7 +184,7 @@ func TestExpectedStartForQueued(t *testing.T) {
 	e, a, head := backfillEnv(t)
 	e.tick(t)
 	at, ok := e.s.ExpectedStart(head.ID)
-	if !ok || !at.Equal(e.get(t, a.ID).StartedAt.Add(time.Hour)) {
+	if !ok || !at.Equal(e.get(t, a.ID).StartedAt.Add(time.Hour+e.s.d.Cfg.CancelGrace)) {
 		t.Fatal(at, ok)
 	}
 	e.host.SetPressure(10)
@@ -222,5 +224,49 @@ func TestBackfillDoesNotResetAdmissionAlert(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no alert")
+	}
+}
+func TestAbortedPassClearsForecast(t *testing.T) {
+	e, _, head := backfillEnv(t)
+	e.tick(t)
+	if _, ok := e.s.ExpectedStart(head.ID); !ok {
+		t.Fatal("no forecast")
+	}
+	e.host.FailMemory(errors.New("meminfo"))
+	e.s.Tick(e.ctx)
+	if _, ok := e.s.ExpectedStart(head.ID); ok {
+		t.Fatal("stale forecast after an aborted pass")
+	}
+	ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
+	done := make(chan struct{})
+	go func() { defer close(done); e.s.Run(ctx) }()
+	_, err := e.s.Estimate(ctx, EstimateRequest{Limit: gib, CPUs: 1, Timeout: time.Minute})
+	cancel()
+	<-done
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("estimate from a stale pass", err)
+	}
+	e.host.FailMemory(nil)
+	e.tick(t)
+	if _, ok := e.s.ExpectedStart(head.ID); !ok {
+		t.Fatal("forecast not restored")
+	}
+}
+func TestReservationHolderWaitsForNestedTasks(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.PoolMemory = 16 * gib })
+	res := e.grantBudget(t, gib, 2*gib, 1)
+	nr := e.within(res.ID, gib)
+	nr.Timeout = 3 * time.Hour
+	n := e.submit(t, nr)
+	e.tick(t)
+	n = e.get(t, n.ID)
+	want := n.StartedAt.Add(3*time.Hour + e.s.d.Cfg.CancelGrace + e.s.d.Cfg.Reservations.TeardownTimeout)
+	if res = e.get(t, res.ID); !want.After(res.ExpiresAt) {
+		t.Fatal("nested deadline must be past the TTL for this test", res.ExpiresAt, want)
+	}
+	for _, h := range e.s.last.holders {
+		if h.ID == res.ID && !h.End.Equal(want) {
+			t.Fatal(h.End, want)
+		}
 	}
 }

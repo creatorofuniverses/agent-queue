@@ -153,3 +153,16 @@ func TestLogsOfPrunedItem(t *testing.T) {
 		t.Fatal(v, err)
 	}
 }
+func TestRetentionSurvivesUnmeasurableJobs(t *testing.T) {
+	s, p, cfg, now := retentionEnv(t)
+	old := retentionItem(t, s, p, now.Add(-8*24*time.Hour), 10)
+	live := retentionItem(t, s, p, time.Time{}, 10)
+	locked := filepath.Join(p.JobDir(live.ID), "locked")
+	os.MkdirAll(locked, 0700)
+	os.Chmod(locked, 0)
+	t.Cleanup(func() { os.Chmod(locked, 0700) })
+	if e := retentionStep(t.Context(), s, p, cfg, now); e != nil {
+		t.Fatal(e)
+	}
+	requirePath(t, p.JobDir(old.ID), false)
+}

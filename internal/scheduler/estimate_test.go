@@ -42,7 +42,7 @@ func TestEstimateBackfill(t *testing.T) {
 func TestEstimateQueued(t *testing.T) {
 	e, a, head := backfillEnv(t)
 	v := estimate(t, e, EstimateRequest{Limit: 10 * gib, CPUs: 1, Timeout: time.Hour})
-	want := e.get(t, a.ID).StartedAt.Add(2 * time.Hour)
+	want := e.get(t, a.ID).StartedAt.Add(2 * (time.Hour + e.s.d.Cfg.CancelGrace))
 	if v.Position != 2 || v.QueueAhead != 1 || v.QueueAheadMemory != 10*gib || v.Blocked.Blocker != admission.BlockPoolMemory || !v.ExpectedStart.Equal(want) || v.Confidence != "timeout" {
 		t.Fatal(v, head)
 	}
