@@ -2,8 +2,7 @@ English · [Русский](README.ru.md)
 
 # aq — give heavy tasks room to run
 
-> **Header illustration — to be added.**
-> Planned: several agents sharing one machine, with heavy jobs waiting for available resources.
+![Agents and you send heavy commands to aq; it queues them and runs them on one Linux machine within its memory and CPU](docs/assets/aq-header.png)
 
 Running tests in one terminal, building in another, and letting a couple of coding
 agents work alongside you? They all share the same RAM and CPUs. Starting every
