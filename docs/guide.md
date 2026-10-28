@@ -143,6 +143,13 @@ explicit `--profile`, the profile is `<main repository root>:<name>`; it is
 shared by all worktrees. `--project` replaces the root, and `--profile P` sets
 the whole name. With no name and no profile, no history is collected.
 
+Name the workload, not the run: the same suite keeps the same name across
+releases. A version, date, commit or ticket number in the name (`tests-b15`)
+starts a new, empty history every time it changes; keep that context outside
+aq. A different name is right when the memory shape differs (another suite,
+another worker count, a matrix entry such as `tests-pg16`). Leave `--project`
+unset inside a worktree, or that worktree gets its own history.
+
 The first run requires `--memory`. After at least one usable run, memory can be
 omitted:
 

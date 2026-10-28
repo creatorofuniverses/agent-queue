@@ -28,6 +28,18 @@ workload: the hint can also match quoted text or a light command.
 1. **Known task workload?** Use a stable `--name` (`tests`, `e2e`, `build`). Inspect
    `aq profile show tests`. With usable task history, omit `--memory` on submit
    and aq derives it from past peaks. Profiles share history across repository worktrees.
+
+   **Name the workload, not the run.** History accumulates per name, so the
+   same suite must get the same name every time: `tests`, `e2e`, `build-web`.
+   Keep out of it whatever changes between runs: the version or release
+   (`tests-b15`), date, commit hash, branch, ticket, plan task or wave number.
+   That context goes in the checkpoint (step 4), not in the name. Use a
+   different name only when the memory shape differs: another suite, another
+   worker count (`tests-serial` vs `tests`), another stand. A version belongs in
+   the name only when the versions are separate workloads kept running side by
+   side, e.g. a matrix `tests-pg15` / `tests-pg16`. Leave `--project` (MCP
+   `project`) unset in a worktree: a worktree path as the project gives that
+   worktree its own empty history.
 2. **New workload?** Set `--memory` from worker count and observed peaks: roughly
    300–800M per pytest worker, measured container memory for a stand, or 2× a
    previously observed peak. These are starting estimates. Too low risks OOM;
@@ -145,7 +157,8 @@ procedure rather than forcing release of a live stand.
   `aq submit --name tests --timeout 40m -- …` needs no `--memory`; use the same
   explicit Codex client/session as above.
 - **Several suites:** submit separate named tasks; aq admits each when it fits.
-- **Repeat after a fix:** keep the workload's `--name` so its profile learns.
+- **Repeat after a fix or on the next release:** keep the workload's `--name`
+  so its profile learns.
 - **Uncertain submit response:** reconcile first. With `--key some-stable-key`,
   retrying the identical request returns the same item instead of a duplicate.
 

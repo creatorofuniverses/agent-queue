@@ -29,6 +29,17 @@ but it is a hint: ignore it for light commands (it also fires on quoted text).
 1. **Known workload?** Give repeated work a stable `--name` (`tests`, `e2e`,
    `build`). Check history: `aq profile show tests`. With usable history you may
    omit `--memory`; aq takes the limit from past peaks.
+
+   **Name the workload, not the run.** History accumulates per name, so the
+   same suite must get the same name every time: `tests`, `e2e`, `build-web`.
+   Keep out of it whatever changes between runs: the version or release
+   (`tests-b15`), date, commit hash, branch, ticket, plan task or wave number.
+   That context goes in your receipt (step 4), not in the name. Use a different
+   name only when the memory shape differs: another suite, another worker count
+   (`tests-serial` vs `tests`), another stand. A version belongs in the name
+   only when the versions are separate workloads you keep running side by side,
+   e.g. a matrix `tests-pg15` / `tests-pg16`. Do not pass `--project` with a
+   worktree path: without it, all worktrees of a repository share one history.
 2. **New workload?** Pick `--memory` from what you know: about 300–800M per
    pytest worker, the sum of `docker stats` for a stand, 2× the last observed
    peak if you have one. Too low → OOM (exit 2) and you rerun with more; too high
@@ -112,7 +123,8 @@ TTL runs out.
   history, `aq submit --name tests --timeout 40m -- …` needs no `--memory`.
 - **Several suites.** Submit them as separate named tasks; aq starts each when
   it fits and may backfill short ones ahead of a big one.
-- **Repeat after a fix.** Use the same `--name` so the profile keeps learning.
+- **Repeat after a fix, or on the next release.** Use the same `--name` so the
+  profile keeps learning.
 - **Retrying a submit after an error.** Add `--key some-stable-key`: the same
   request returns the same task instead of a duplicate.
 

@@ -25,7 +25,7 @@ var helpGroups = []struct {
 
 var helps = map[string]cmdHelp{
 	"submit": {"aq submit [flags] -- COMMAND [ARGS...]", "queue a command with a memory and CPU budget",
-		"The command waits in the queue until its memory fits, then runs in its own systemd unit with that\nlimit. Prints the task ID. With --name the memory can come from the history of earlier runs\n(the profile <repo root>:<name>); otherwise --memory is required.",
+		"The command waits in the queue until its memory fits, then runs in its own systemd unit with that\nlimit. Prints the task ID. With --name the memory can come from the history of earlier runs\n(the profile <repo root>:<name>); otherwise --memory is required. Name the workload, not the run:\nkeep the name the same across releases (no version, date or commit in it) so the history adds up.",
 		[]string{"aq submit --memory 4G --timeout 30m --name tests -- pytest -n 8", "aq submit --name tests --timeout 30m -- pytest -n 8   # memory from history", "aq submit --within RES_ID --memory 2G --timeout 10m -- make e2e"}},
 	"wait": {"aq wait [--until expiring] ID", "block until a task ends or a reservation is granted",
 		"Prints one line with the outcome. Exit codes: 0 success, granted or expiry warning; 1 the command\nfailed; 2 OOM; 3 timeout; 4 cancelled; 5 infrastructure or rejected; 6 reservation no longer\nheld; 64 usage; 69 daemon not running; 130 interrupted.\nFor a reservation, --until expiring returns when its TTL is about to run out.",
