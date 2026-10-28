@@ -337,3 +337,24 @@ func (m *Meter) Usage(project string) (uint64, bool) {
 
 // Run measures nothing; it blocks until ctx ends.
 func (m *Meter) Run(ctx context.Context) { <-ctx.Done() }
+
+type UsageMeter struct {
+	mu    sync.Mutex
+	usage platform.Usage
+	err   error
+}
+
+func (m *UsageMeter) Set(v platform.Usage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.usage = v
+	m.err = nil
+}
+func (m *UsageMeter) Fail(e error) { m.mu.Lock(); defer m.mu.Unlock(); m.err = e }
+func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v := m.usage
+	v.Agents = append([]platform.AgentUsage(nil), v.Agents...)
+	return v, m.err
+}

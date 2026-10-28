@@ -66,7 +66,7 @@ func (h *harness) startDaemonCfg(t *testing.T, tweak func(*config.Config)) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host, nil) }()
+	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host, nil, daemon.Options{}) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

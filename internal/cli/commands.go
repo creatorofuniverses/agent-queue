@@ -54,7 +54,7 @@ func cmdDaemon(c *cmdCtx, args []string) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(c.stderr, nil)))
 	ctx, stop := signal.NotifyContext(c.ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return daemon.Run(ctx, paths, cfg, ex, linux.NewHost("/proc"), linux.NewDockerMeter(linux.DockerMeterConfig{}))
+	return daemon.Run(ctx, paths, cfg, ex, linux.NewHost("/proc"), linux.NewDockerMeter(linux.DockerMeterConfig{}), daemon.Options{Usage: linux.NewUsageMeter(linux.UsageMeterConfig{ProcRoot: "/proc", CgroupRoot: "/sys/fs/cgroup", Slices: []string{cfg.SliceName, cfg.TeardownSliceName()}})})
 }
 
 func cmdStatus(c *cmdCtx, args []string) error {

@@ -30,7 +30,9 @@ const Version = "0.1.0"
 // Run starts the daemon and blocks until ctx ends (returning nil) or startup
 // or serving fails. A recovery error is fatal: admission must not open on
 // unreconciled state.
-func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platform.Executor, host platform.HostMetrics, meter platform.StandMeter) error {
+type Options struct{ Usage platform.UsageMeter }
+
+func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platform.Executor, host platform.HostMetrics, meter platform.StandMeter, opts Options) error {
 	if err := os.MkdirAll(paths.RuntimeDir, 0o700); err != nil {
 		return err
 	}
@@ -90,7 +92,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	}
 	outbox := notify.NewOutbox(st, cfg, paths, router, deliverers, time.Now)
 	sched := scheduler.New(scheduler.Deps{Store: st, Exec: exec, Host: host, Meter: meter, Cfg: cfg, Paths: paths, Route: router.Route, OnEvents: outbox.Kick})
-	d := &server{sched: sched, st: st, paths: paths, router: router, outbox: outbox, cfg: cfg}
+	d := &server{host: host, opts: opts, sched: sched, st: st, paths: paths, router: router, outbox: outbox, cfg: cfg}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {
 		return fmt.Errorf("recover: %w", err)
@@ -135,6 +137,8 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 }
 
 type server struct {
+	host       platform.HostMetrics
+	opts       Options
 	router     *notify.Router
 	outbox     *notify.Outbox
 	cfg        config.Config

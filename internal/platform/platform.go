@@ -71,3 +71,16 @@ type StandMeter interface {
 	Usage(project string) (bytes uint64, ok bool) // ok=false: no fresh measurement
 	Run(ctx context.Context)                      // refresh loop until ctx ends
 }
+
+type AgentUsage struct {
+	Name  string `json:"name"`
+	Bytes uint64 `json:"bytes"`
+	Procs int    `json:"procs"`
+}
+type Usage struct {
+	Agents        []AgentUsage
+	Docker, Tasks uint64
+}
+type UsageMeter interface {
+	Usage(ctx context.Context, agents []string) (Usage, error)
+}
