@@ -81,7 +81,10 @@ func (s *Scheduler) reconcileLocked(ctx context.Context) (map[model.ItemID]bool,
 			// An unreadable result while processes remain is settled by Tick.
 			it.State = model.StateRunning
 			if it.StartedAt.IsZero() {
-				it.StartedAt = s.d.Now()
+				it.StartedAt = it.AdmittedAt
+				if it.StartedAt.IsZero() {
+					it.StartedAt = s.d.Now()
+				}
 			}
 			err = s.persistLocked(ctx, it)
 		case rerr != nil:

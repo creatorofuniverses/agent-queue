@@ -413,6 +413,7 @@ func (s *Scheduler) Extend(ctx context.Context, id model.ItemID, ttl time.Durati
 		it.ExpiresAt = exp
 	}
 	it.State, it.TTLHeld = model.StateGranted, false
+	it.ExtendCount++
 	it.WarnAt = s.warnAt(it.ExpiresAt, now)
 	if err := s.persistLocked(ctx, it); err != nil {
 		return nil, err

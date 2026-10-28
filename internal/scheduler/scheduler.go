@@ -25,6 +25,7 @@ import (
 	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
+	"resource-dispatcher/internal/profile"
 	"resource-dispatcher/internal/store"
 	"resource-dispatcher/internal/units"
 )
@@ -58,32 +59,36 @@ type Deps struct {
 }
 
 type SubmitRequest struct {
-	NoNotify   bool              `json:"no_notify,omitempty"`
-	Name       string            `json:"name"`
-	Argv       []string          `json:"argv"`
-	Cwd        string            `json:"cwd"`
-	Env        map[string]string `json:"env"`
-	Limit      uint64            `json:"limit"`
-	Expected   uint64            `json:"expected"`
-	CPUs       int               `json:"cpus"`
-	Timeout    time.Duration     `json:"timeout"`
-	Priority   model.Priority    `json:"priority"`
-	SessionID  string            `json:"session_id"`
-	ClientType string            `json:"client_type"`
-	Project    string            `json:"project"`
-	IdemKey    string            `json:"-"`
-	GitRev     string            `json:"git_rev"`
-	GitDirty   bool              `json:"git_dirty"`
+	Profile        string            `json:"-"`
+	ProfileDerived bool              `json:"-"`
+	HashProfile    string            `json:"profile,omitempty"`
+	NoNotify       bool              `json:"no_notify,omitempty"`
+	Name           string            `json:"name"`
+	Argv           []string          `json:"argv"`
+	Cwd            string            `json:"cwd"`
+	Env            map[string]string `json:"env"`
+	Limit          uint64            `json:"limit"`
+	Expected       uint64            `json:"expected"`
+	CPUs           int               `json:"cpus"`
+	Timeout        time.Duration     `json:"timeout"`
+	Priority       model.Priority    `json:"priority"`
+	SessionID      string            `json:"session_id"`
+	ClientType     string            `json:"client_type"`
+	Project        string            `json:"project"`
+	IdemKey        string            `json:"-"`
+	GitRev         string            `json:"git_rev"`
+	GitDirty       bool              `json:"git_dirty"`
 	// ParentID runs the task within a reservation's task budget. omitempty keeps the
 	// hash of a non-nested request equal to plan 1's, so a repeated --key still matches.
 	ParentID model.ItemID `json:"parent_id,omitempty"`
 }
 
 type Scheduler struct {
-	d     Deps
-	kick  chan struct{}
-	guard atomic.Bool
-	bg    sync.WaitGroup // background stops and temp dir removals
+	samples map[model.ItemID]*runSamples
+	d       Deps
+	kick    chan struct{}
+	guard   atomic.Bool
+	bg      sync.WaitGroup // background stops and temp dir removals
 
 	// mu guards everything below and serializes every state transition.
 	// It is never held across Launch, Stop or git.
@@ -130,6 +135,7 @@ func New(d Deps) *Scheduler {
 	p := d.Cfg.Pressure
 	return &Scheduler{
 		d:               d,
+		samples:         map[model.ItemID]*runSamples{},
 		cleaningSince:   map[model.ItemID]time.Time{},
 		cleaningAlerted: map[model.ItemID]bool{},
 		kick:            make(chan struct{}, 1),
@@ -196,11 +202,17 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 	if r.Expected == 0 {
 		r.Expected = r.Limit
 	}
+	if !r.ProfileDerived {
+		r.HashProfile = r.Profile
+	} else {
+		r.HashProfile = ""
+	}
 	canon, err := json.Marshal(r)
 	if err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256(canon)
+	fromProfile, estDuration, profileErr := s.applyProfile(ctx, &r)
 	now := s.d.Now()
 	it := &model.Item{
 		ID: model.NewID(), Kind: model.KindTask, Name: r.Name, State: model.StateQueued, Priority: r.Priority,
@@ -208,12 +220,17 @@ func (s *Scheduler) Submit(ctx context.Context, r SubmitRequest) (*model.Item, e
 		SessionID: r.SessionID, ClientType: r.ClientType, Project: r.Project, IdemKey: r.IdemKey,
 		RequestHash: hex.EncodeToString(sum[:]), NodeID: "local", CreatedAt: now,
 		GitRev: r.GitRev, GitDirty: r.GitDirty, ParentID: r.ParentID, NoNotify: r.NoNotify,
+		Profile: r.Profile, MemoryFromProfile: fromProfile, EstDuration: estDuration,
 	}
 	var (
 		stored  *model.Item
 		created bool
 	)
-	switch vErr := validate(r, s.policy(0)); {
+	vErr := profileErr
+	if vErr == nil {
+		vErr = validate(r, s.policy(0))
+	}
+	switch {
 	case vErr != nil:
 		s.rejectItem(it, vErr.Error())
 		stored, created, err = s.d.Store.InsertItem(ctx, it)
@@ -289,12 +306,14 @@ func (s *Scheduler) endLocked(it *model.Item, st model.State, r model.Reason, di
 // temp dir (never its JobDir).
 func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...model.Event) error {
 	prevNotified := it.FinishNotified
+	var run *profile.Run
 	if it.State.Terminal() && it.State != model.StateRejected && !it.IsReservation() && !it.FinishNotified {
 		evs = append(evs, s.newEvents(it, model.EventTaskFinished, it.Diagnostic, model.AudienceSession)...)
 		if it.Reason.Infra() {
 			evs = append(evs, s.newEvents(it, model.EventTaskFailedInfra, string(it.Reason)+": "+it.Diagnostic, model.AudienceOperator)...)
 		}
 		it.FinishNotified = true
+		run = s.profileRunLocked(it)
 	}
 	if it.State.Terminal() {
 		it.Env = nil // values may be secrets; a terminal item never needs them
@@ -305,7 +324,7 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...mo
 			evs[i].CreatedAt = now
 		}
 	}
-	if err := s.d.Store.UpdateWithEvents(ctx, it, evs); err != nil {
+	if err := s.d.Store.UpdateFinal(ctx, it, evs, run); err != nil {
 		it.FinishNotified = prevNotified
 		return err
 	}
@@ -319,6 +338,7 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...mo
 		}
 	}
 	if it.State.Terminal() {
+		delete(s.samples, it.ID)
 		delete(s.cleaningSince, it.ID)
 		delete(s.cleaningAlerted, it.ID)
 		delete(s.resultSeen, it.ID)
@@ -484,6 +504,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			nestedQueued = append(nestedQueued, it)
 		case model.StateStarting, model.StateRunning:
 			cur, _ := s.d.Exec.MemoryCurrent(it.ID)
+			s.sampleLocked(it, cur)
 			nestedCur[it.ParentID] += cur
 		}
 	}
@@ -511,6 +532,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			switch it.State {
 			case model.StateStarting, model.StateRunning:
 				cur, _ := s.d.Exec.MemoryCurrent(it.ID)
+				s.sampleLocked(it, cur)
 				snap.Unconsumed += satSub(it.Expected, cur)
 			case model.StateCleaning, model.StateRecovering:
 			default:
