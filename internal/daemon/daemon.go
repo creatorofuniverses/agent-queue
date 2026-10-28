@@ -95,6 +95,9 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	}
 	outbox := notify.NewOutbox(st, cfg, paths, router, deliverers, time.Now)
 	sched := scheduler.New(scheduler.Deps{Store: st, Exec: exec, Host: host, Meter: meter, Cfg: cfg, Paths: paths, Route: router.Route, OnEvents: outbox.Kick})
+	if opts.Usage != nil {
+		opts.Usage = &boundedUsage{inner: opts.Usage}
+	}
 	d := &server{host: host, opts: opts, sched: sched, st: st, paths: paths, router: router, outbox: outbox, cfg: cfg}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {

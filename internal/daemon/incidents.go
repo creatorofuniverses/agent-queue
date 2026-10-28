@@ -65,8 +65,9 @@ func (s *incidentSampler) step(ctx context.Context) {
 			}
 		}
 		s.oomSeen, s.oomPrev = true, n
+		// Advance with the kernel baseline so both deltas span one interval.
+		s.sliceSeen, s.slicePrev = valid, slice
 	}
-	s.sliceSeen, s.slicePrev = valid, slice
 	if s.oomd != nil && s.steps%6 == 0 {
 		kills, err := s.oomd.Kills(ctx)
 		if err != nil {

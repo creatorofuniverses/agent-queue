@@ -44,3 +44,13 @@ func TestStatsCSVEmptyTableHasHeader(t *testing.T) {
 		t.Fatal(code, out, errout)
 	}
 }
+
+func TestStatsCSVIntegersAreNotExponents(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	h.run("submit", "--memory", "512M", "--timeout", "1m", "--", "true")
+	code, out, errout := h.run("stats", "export", "--format", "csv", "--table", "items")
+	if code != 0 || !strings.Contains(out, "536870912") || strings.Contains(out, "e+") {
+		t.Fatal(code, out, errout)
+	}
+}

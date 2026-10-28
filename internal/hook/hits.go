@@ -73,9 +73,16 @@ func rotateHits(path string) error {
 			now = now.Add(time.Nanosecond)
 			continue
 		}
+		if os.IsNotExist(e) {
+			return nil // another writer rotated it first
+		}
 		if e != nil {
 			return e
 		}
-		return os.Remove(path)
+		if e = os.Remove(path); os.IsNotExist(e) {
+			// Whoever unlinked path linked the same inode first; drop the twin.
+			return os.Remove(dst)
+		}
+		return e
 	}
 }

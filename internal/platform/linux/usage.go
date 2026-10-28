@@ -9,6 +9,7 @@ import (
 	"resource-dispatcher/internal/platform"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 type UsageMeterConfig struct {
@@ -32,14 +33,14 @@ func NewUsageMeter(cfg UsageMeterConfig) *UsageMeter {
 }
 func workingSet(dir string) (uint64, error) {
 	cur, e := readUint(filepath.Join(dir, "memory.current"))
-	if errors.Is(e, fs.ErrNotExist) {
+	if cgroupGone(e) {
 		return 0, nil
 	}
 	if e != nil {
 		return 0, e
 	}
 	inactive, e := statValue(filepath.Join(dir, "memory.stat"), "inactive_file")
-	if errors.Is(e, fs.ErrNotExist) {
+	if cgroupGone(e) {
 		return 0, nil
 	}
 	if e != nil {
@@ -50,6 +51,9 @@ func workingSet(dir string) (uint64, error) {
 	}
 	return cur - inactive, nil
 }
+
+// A cgroup removed between open and read returns ENODEV instead of ENOENT.
+func cgroupGone(e error) bool        { return errors.Is(e, fs.ErrNotExist) || errors.Is(e, syscall.ENODEV) }
 func withinCG(path, dir string) bool { return path == dir || strings.HasPrefix(path, dir+"/") }
 func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage, error) {
 	v := platform.Usage{Agents: make([]platform.AgentUsage, len(agents))}

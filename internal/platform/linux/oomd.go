@@ -17,15 +17,19 @@ import (
 type OOMDJournal struct {
 	CursorFile string
 	Run        func(context.Context, ...string) ([]byte, error)
+	// baselined: the -n 0 call ran but journalctl wrote no cursor because the
+	// unit had no entries yet; later calls must read from the start, not re-baseline.
+	baselined bool
 }
 
 func NewOOMDJournal(cursorFile string) *OOMDJournal { return &OOMDJournal{CursorFile: cursorFile} }
 func (j *OOMDJournal) Kills(ctx context.Context) ([]platform.OOMKill, error) {
 	_, e := os.Stat(j.CursorFile)
-	first := errors.Is(e, os.ErrNotExist)
-	if e != nil && !first {
+	missing := errors.Is(e, os.ErrNotExist)
+	if e != nil && !missing {
 		return nil, e
 	}
+	first := missing && !j.baselined
 	args := []string{"-u", "systemd-oomd", "--cursor-file=" + j.CursorFile, "-o", "json", "--no-pager", "-q"}
 	if first {
 		args = append(args, "-n", "0")
@@ -39,8 +43,17 @@ func (j *OOMDJournal) Kills(ctx context.Context) ([]platform.OOMKill, error) {
 		}
 	}
 	b, e := run(ctx, args...)
-	if e != nil || first {
+	if e != nil {
+		if !missing && badCursor(e) {
+			// A corrupt cursor fails every call; drop it and re-baseline.
+			os.Remove(j.CursorFile)
+			j.baselined = false
+		}
 		return nil, e
+	}
+	if first {
+		j.baselined = true
+		return nil, nil
 	}
 	var out []platform.OOMKill
 	sc := bufio.NewScanner(bytes.NewReader(b))
@@ -72,4 +85,9 @@ func (j *OOMDJournal) Kills(ctx context.Context) ([]platform.OOMKill, error) {
 		out = append(out, platform.OOMKill{At: time.UnixMicro(us).UTC(), Cgroup: cg})
 	}
 	return out, sc.Err()
+}
+
+func badCursor(e error) bool {
+	var x *exec.ExitError
+	return errors.As(e, &x) && bytes.Contains(x.Stderr, []byte("cursor"))
 }

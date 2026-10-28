@@ -2,11 +2,13 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"resource-dispatcher/internal/admission"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/platform"
 	"resource-dispatcher/internal/scheduler"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,6 +42,35 @@ type TopView struct {
 	Physical    PhysicalView          `json:"physical"`
 	Commitments scheduler.Commitments `json:"commitments"`
 	Queue       QueueView             `json:"queue"`
+}
+
+// boundedUsage lets callers give up on a scan blocked in a /proc read (a D-state
+// process holding its mmap lock ignores ctx) and keeps at most one scan in flight.
+type boundedUsage struct {
+	inner platform.UsageMeter
+	busy  atomic.Bool
+}
+
+func (b *boundedUsage) Usage(ctx context.Context, agents []string) (platform.Usage, error) {
+	if !b.busy.CompareAndSwap(false, true) {
+		return platform.Usage{}, errors.New("previous usage scan still running")
+	}
+	type result struct {
+		u platform.Usage
+		e error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer b.busy.Store(false)
+		u, e := b.inner.Usage(ctx, agents)
+		done <- result{u, e}
+	}()
+	select {
+	case r := <-done:
+		return r.u, r.e
+	case <-ctx.Done():
+		return platform.Usage{}, ctx.Err()
+	}
 }
 
 func physical(ctx context.Context, usage platform.UsageMeter, agents []string, mem platform.MemInfo) PhysicalView {

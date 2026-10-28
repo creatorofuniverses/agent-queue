@@ -102,3 +102,35 @@ func TestIncidentsRecordOOMDKills(t *testing.T) {
 		t.Fatal(incs, f, e)
 	}
 }
+
+type flakyOOMHost struct {
+	*fake.Host
+	fail bool
+}
+
+func (h *flakyOOMHost) KernelOOMKills() (uint64, error) {
+	if h.fail {
+		return 0, errTest
+	}
+	return h.Host.KernelOOMKills()
+}
+
+func TestKernelOOMReadFailureKeepsSliceBaseline(t *testing.T) {
+	s, h, st := newIncTest(t, func() (bool, float64) { return false, 0 })
+	fh := &flakyOOMHost{Host: h}
+	s.host = fh
+	n := uint64(4)
+	s.sliceOOMKills = func() (uint64, error) { return n, nil }
+	h.SetOOMKills(10)
+	s.step(t.Context())
+	// One task-slice kill lands while the kernel counter is unreadable.
+	n, fh.fail = 5, true
+	h.SetOOMKills(11)
+	s.step(t.Context())
+	fh.fail = false
+	s.step(t.Context())
+	incs, e := st.Incidents(t.Context(), time.Time{})
+	if e != nil || len(incs) != 0 {
+		t.Fatal(incs, e)
+	}
+}

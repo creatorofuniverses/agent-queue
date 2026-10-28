@@ -56,7 +56,7 @@ func toolDefinitions() []toolDef {
 	estimate := obj([]string{"memory", "expected", "timeout", "priority", "profile", "name", "cwd", "project"}, []string{})
 	estimate["properties"].(map[string]any)["cpus"] = map[string]any{"type": "integer"}
 	return []toolDef{
-		{"queue_estimate", "Forecast admission without submitting.", estimate},
+		{"queue_estimate", "Forecast admission without submitting. Pass the same cwd you will submit with: a profile derived from name uses cwd's repository (default: the MCP server's directory).", estimate},
 		{"queue_submit", "Queue a command with memory and time limits. " + wakeDescription, submit},
 		{"queue_reserve", "Reserve a stand and task budget with a teardown script. " + wakeDescription, reserve},
 		{"queue_extend", "Extend a granted reservation.", obj([]string{"id", "ttl"}, []string{"id", "ttl"})},

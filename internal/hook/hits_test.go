@@ -39,3 +39,10 @@ func TestAppendHitRotationKeepsHistory(t *testing.T) {
 		t.Fatal(files, hits, e, err)
 	}
 }
+
+func TestRotateHitsLostRaceIsNotAnError(t *testing.T) {
+	// Another writer rotated the file between our size check and Link.
+	if e := rotateHits(filepath.Join(t.TempDir(), "hook-hits.jsonl")); e != nil {
+		t.Fatal(e)
+	}
+}

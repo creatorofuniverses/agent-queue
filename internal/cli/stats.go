@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -51,8 +52,11 @@ func cmdStats(c *cmdCtx, args []string) error {
 		csvw := csv.NewWriter(c.stdout)
 		header := false
 		e = callStreamOn(c.ctx, paths, "stats_export", map[string]string{"since": at, "table": *table}, func(raw json.RawMessage) error {
+			// UseNumber keeps integers out of %g notation in CSV cells.
 			var chunk daemon.ExportChunk
-			if e := json.Unmarshal(raw, &chunk); e != nil {
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.UseNumber()
+			if e := dec.Decode(&chunk); e != nil {
 				return e
 			}
 			if *format == "csv" && !header {
