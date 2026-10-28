@@ -117,12 +117,10 @@ func (o *Outbox) deliverOne(ctx context.Context, ch model.Channel) bool {
 	}
 	var it *model.Item
 	if e.ItemID != "" {
-		it, err = o.st.Get(ctx, e.ItemID)
-		if err != nil && err != store.ErrNotFound {
-			if ctx.Err() == nil {
-				_ = o.st.MarkRetry(ctx, e.ID, e.Attempts, o.now().Add(time.Second), "cannot read item")
-			}
-			return false
+		if it, err = o.st.Get(ctx, e.ItemID); err == store.ErrNotFound {
+			err = nil
+		} else if err != nil {
+			err = fmt.Errorf("cannot read item: %w", err) // an ordinary failed attempt: backoff, then give up
 		}
 	}
 	msg := Message{Event: *e, Item: it}
@@ -130,9 +128,11 @@ func (o *Outbox) deliverOne(ctx context.Context, ch model.Channel) bool {
 		msg.StdoutPath = filepath.Join(o.paths.JobDir(it.ID), "stdout.log")
 	}
 	d := o.deliverers[ch]
-	if d == nil {
+	switch {
+	case err != nil:
+	case d == nil:
 		err = fmt.Errorf("channel %s is not configured", ch)
-	} else {
+	default:
 		attempt, cancel := context.WithTimeout(ctx, o.cfg.Notify.DeliveryTimeout)
 		err = d.Deliver(attempt, msg)
 		cancel()
@@ -140,10 +140,8 @@ func (o *Outbox) deliverOne(ctx context.Context, ch model.Channel) bool {
 	now := o.now()
 	if err == nil {
 		// A finished delivery is recorded even during shutdown, so restart does not repeat it.
-		if err = o.st.MarkSent(context.WithoutCancel(ctx), e.ID, now); err != nil {
-			slog.Error("outbox: mark sent", "event", e.ID, "err", err)
-		}
-		return err == nil && ctx.Err() == nil
+		ok := o.record(ctx, "mark sent", e.ID, func(c context.Context) error { return o.st.MarkSent(c, e.ID, now) })
+		return ok && ctx.Err() == nil
 	}
 	// Shutdown leaves a failed claim durable; restart retries the same event ID.
 	if ctx.Err() != nil {
@@ -166,11 +164,10 @@ func (o *Outbox) deliverOne(ctx context.Context, ch model.Channel) bool {
 		} else {
 			slog.Error("outbox: operator delivery failed", "event", e.ID, "err", lastErr)
 		}
-		if err = o.st.MarkFailed(ctx, e.ID, attempts, lastErr, evs); err != nil {
-			slog.Error("outbox: mark failed", "event", e.ID, "err", err)
-		} else {
-			o.Kick()
+		if !o.record(ctx, "mark failed", e.ID, func(c context.Context) error { return o.st.MarkFailed(c, e.ID, attempts, lastErr, evs) }) {
+			return false
 		}
+		o.Kick()
 	} else {
 		delay := o.cfg.Notify.RetryMin
 		for n := 1; n < attempts && delay < o.cfg.Notify.RetryMax; n++ {
@@ -181,9 +178,28 @@ func (o *Outbox) deliverOne(ctx context.Context, ch model.Channel) bool {
 			}
 		}
 		delay = time.Duration(float64(min(delay, o.cfg.Notify.RetryMax)) * o.jitter())
-		if err = o.st.MarkRetry(ctx, e.ID, attempts, now.Add(delay), lastErr); err != nil {
-			slog.Error("outbox: mark retry", "event", e.ID, "err", err)
+		if !o.record(ctx, "mark retry", e.ID, func(c context.Context) error { return o.st.MarkRetry(c, e.ID, attempts, now.Add(delay), lastErr) }) {
+			return false
 		}
 	}
-	return err == nil
+	return true
+}
+
+// record writes a delivery outcome, retrying until it lands: ClaimDue only sees pending
+// rows, so a lost outcome would strand the event in delivering until a restart. The
+// writes are no-ops once the row left delivering, so repeating one is safe. During
+// shutdown it tries once; ResetDelivering picks up whatever is left.
+func (o *Outbox) record(ctx context.Context, what, id string, write func(context.Context) error) bool {
+	for delay := o.cfg.Notify.RetryMin; ; delay = min(2*delay, o.cfg.Notify.RetryMax) {
+		err := write(context.WithoutCancel(ctx))
+		if err == nil {
+			return true
+		}
+		slog.Error("outbox: "+what, "event", id, "err", err)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(delay):
+		}
+	}
 }

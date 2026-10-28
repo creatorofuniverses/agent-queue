@@ -2,12 +2,14 @@ package notify
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
 	"resource-dispatcher/internal/config"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/store"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -282,6 +284,57 @@ func TestOutboxRetriesFailedStart(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("outbox did not stop")
+	}
+}
+func TestOutboxRecordRetriesOutcomeWrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Notify.RetryMin = time.Millisecond
+	o := NewOutbox(outboxStore(t), cfg, config.Paths{}, NewRouter(cfg), nil, time.Now)
+	calls := 0
+	ok := o.record(context.Background(), "mark retry", "e", func(context.Context) error {
+		if calls++; calls < 3 {
+			return errors.New("database is locked")
+		}
+		return nil
+	})
+	if !ok || calls != 3 {
+		t.Fatal(ok, calls)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls = 0
+	if o.record(ctx, "mark sent", "e", func(context.Context) error { calls++; return errors.New("x") }) || calls != 1 {
+		t.Fatal("shutdown: want one attempt and false", calls)
+	}
+}
+func TestOutboxItemReadFailureIsAnAttempt(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "aq.db")
+	s, e := store.Open(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if _, _, e = s.InsertItem(ctx, &model.Item{ID: "i", Kind: model.KindTask, State: model.StateSucceeded, Argv: []string{"true"}, CreatedAt: time.Now()}); e != nil {
+		t.Fatal(e)
+	}
+	db, e := sql.Open("sqlite", p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+	if _, e = db.Exec(`UPDATE items SET argv='{' WHERE id='i'`); e != nil { // Get now fails to decode
+		t.Fatal(e)
+	}
+	ch := model.ExecChannel("codex")
+	put(t, s, "e", ch, time.Now(), model.AudienceSession)
+	delivered := false
+	o := NewOutbox(s, config.Default(), config.Paths{}, NewRouter(config.Default()), map[model.Channel]Deliverer{ch: deliverFunc(func(context.Context, Message) error { delivered = true; return nil })}, time.Now)
+	o.jitter = func() float64 { return 1 }
+	o.deliverOne(ctx, ch)
+	ev := eventStatus(s, "e")
+	if delivered || ev.Status != model.EventPending || ev.Attempts != 1 || !strings.HasPrefix(ev.LastError, "cannot read item") {
+		t.Fatal(delivered, ev)
 	}
 }
 func TestOutboxRedeliversAfterRestart(t *testing.T) {

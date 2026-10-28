@@ -197,19 +197,16 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 	op := ""
 	switch name {
 	case "queue_submit", "queue_reserve":
-		auto, err := client.DetectIdentity(agents, env, "", "")
-		ambiguous := errors.Is(err, client.ErrAmbiguousIdentity)
-		if err != nil && !ambiguous {
+		id, err := client.DetectIdentity(agents, env, a.Client, a.SessionID)
+		if errors.Is(err, client.ErrAmbiguousIdentity) {
+			id, err = client.Identity{ClientType: "cli", SessionID: a.SessionID}, nil
+		}
+		if err != nil {
 			return toolError(err)
 		}
-		if auto.SessionID == "" && !a.NoNotify && (a.Client == "" || a.SessionID == "") {
+		// §9.5: the identity actually submitted must reach a session; no silent cli in MCP.
+		if !a.NoNotify && (id.SessionID == "" || id.ClientType == "cli") {
 			return toolError(errors.New(identityUnknown))
-		}
-		id := client.Identity{ClientType: "cli", SessionID: a.SessionID} // ambiguous env with no_notify
-		if !ambiguous || a.Client != "" {
-			if id, err = client.DetectIdentity(agents, env, a.Client, a.SessionID); err != nil {
-				return toolError(err)
-			}
 		}
 		cpus := 0
 		if name == "queue_submit" {

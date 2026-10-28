@@ -122,6 +122,17 @@ func TestMCPIdentityRequired(t *testing.T) {
 		testMCPIdentityRequired(t, env)
 	}
 }
+func TestMCPExplicitClientNeedsItsSession(t *testing.T) {
+	// The environment's Codex thread must not vouch for an explicit Claude client with no session.
+	args := submitArgs()
+	args["client"] = "claude"
+	called := false
+	out := serveText(t, tool("queue_submit", args), func(context.Context, string, any, any) error { called = true; return nil }, map[string]string{"CODEX_THREAD_ID": "parent"})
+	r := out[0]["result"].(map[string]any)
+	if called || r["isError"] != true || !strings.Contains(r["content"].([]any)[0].(map[string]any)["text"].(string), "session identity unknown") {
+		t.Fatal(called, r)
+	}
+}
 func testMCPIdentityRequired(t *testing.T, env map[string]string) {
 	for _, tc := range []struct {
 		c, s   string
