@@ -57,6 +57,9 @@ func (d *server) stats(ctx context.Context, raw json.RawMessage) (any, error) {
 		if in.Incidents, e = d.st.Incidents(ctx, since); e != nil {
 			return nil, e
 		}
+		if in.PSIClosedAtSince, e = d.st.PSIClosedAt(ctx, since); e != nil {
+			return nil, e
+		}
 		if in.Hits, e = hook.ReadHits(d.paths.StateDir, since); e != nil {
 			return nil, e
 		}

@@ -22,6 +22,8 @@ type Input struct {
 	Hits                         []hook.Hit
 	Patterns                     []string
 	SliceName, TeardownSliceName string
+	// PSIClosedAtSince: admission was closed by pressure when the window began.
+	PSIClosedAtSince bool
 }
 type Summary struct {
 	Since        time.Time          `json:"since"`
@@ -381,6 +383,10 @@ func summarizeIncidents(s *Summary, in Input) {
 	incs := append([]model.Incident(nil), in.Incidents...)
 	sort.SliceStable(incs, func(i, j int) bool { return incs[i].At.Before(incs[j].At) })
 	var closed time.Time
+	if in.PSIClosedAtSince {
+		closed = in.Since
+		g.PSIEpisodes++
+	}
 	for _, v := range incs {
 		switch v.Kind {
 		case "kernel_oom":

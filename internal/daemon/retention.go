@@ -153,7 +153,9 @@ func retentionStep(ctx context.Context, st *store.Store, paths config.Paths, cfg
 			}
 		}
 	}
-	if _, e = st.DeleteHistory(ctx, before); e != nil {
+	// A deleted row turns its jobs/ dir into an orphan, so history never goes
+	// before the logs are due (owner decision: clamp rather than reject config).
+	if _, e = st.DeleteHistory(ctx, now.Add(-max(cfg.Retention.HistoryMaxAge, cfg.Retention.LogsMaxAge))); e != nil {
 		return e
 	}
 	if e = st.ThinHostSamples(ctx, now.Add(-cfg.Retention.SamplesFullRes)); e != nil {

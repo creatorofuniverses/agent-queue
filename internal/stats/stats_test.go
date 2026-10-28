@@ -65,3 +65,14 @@ func TestSummarizeProfileFilter(t *testing.T) {
 		t.Fatal(s)
 	}
 }
+func TestPSIEpisodeOpenAtWindowStart(t *testing.T) {
+	since := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	in := Input{Since: since, Until: since.Add(time.Hour), PSIClosedAtSince: true, Incidents: []model.Incident{{At: since.Add(10 * time.Minute), Kind: "psi_open"}}}
+	if g := Summarize(in).Incidents; g.PSIClosedSeconds != 600 || g.PSIEpisodes != 1 {
+		t.Fatal(g)
+	}
+	in.Incidents = nil // closed through the whole window
+	if g := Summarize(in).Incidents; g.PSIClosedSeconds != 3600 {
+		t.Fatal(g)
+	}
+}

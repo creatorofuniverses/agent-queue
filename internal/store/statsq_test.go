@@ -61,3 +61,21 @@ func TestExportBatchesAndSince(t *testing.T) {
 		t.Fatal(sizes, e)
 	}
 }
+func TestPSIClosedAt(t *testing.T) {
+	s := openTemp(t)
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	if v, e := s.PSIClosedAt(t.Context(), at); e != nil || v {
+		t.Fatal(v, e)
+	}
+	for _, inc := range []model.Incident{{At: at.Add(-20 * time.Minute), Kind: "psi_close"}, {At: at.Add(-15 * time.Minute), Kind: "psi_open"}, {At: at.Add(-10 * time.Minute), Kind: "psi_close"}, {At: at.Add(-5 * time.Minute), Kind: "kernel_oom", Value: 1}, {At: at.Add(5 * time.Minute), Kind: "psi_open"}} {
+		if e := s.AddIncident(t.Context(), inc); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if v, e := s.PSIClosedAt(t.Context(), at); e != nil || !v {
+		t.Fatal(v, e)
+	}
+	if v, e := s.PSIClosedAt(t.Context(), at.Add(-12*time.Minute)); e != nil || v {
+		t.Fatal(v, e)
+	}
+}

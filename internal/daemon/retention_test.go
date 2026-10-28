@@ -166,3 +166,18 @@ func TestRetentionSurvivesUnmeasurableJobs(t *testing.T) {
 	}
 	requirePath(t, p.JobDir(old.ID), false)
 }
+func TestRetentionHistoryWaitsForLogs(t *testing.T) {
+	s, p, cfg, now := retentionEnv(t)
+	cfg.Retention.HistoryMaxAge = 24 * time.Hour // shorter than logs_max_age (7d)
+	it := retentionItem(t, s, p, now.Add(-2*24*time.Hour), 1)
+	os.Chtimes(p.JobDir(it.ID), now.Add(-2*time.Hour), now.Add(-2*time.Hour))
+	for i := 0; i < 2; i++ {
+		if e := retentionStep(t.Context(), s, p, cfg, now); e != nil {
+			t.Fatal(e)
+		}
+	}
+	requirePath(t, p.JobDir(it.ID), true)
+	if got, e := s.Get(t.Context(), it.ID); e != nil || got == nil {
+		t.Fatal("row deleted before its logs expired", e)
+	}
+}
