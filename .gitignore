@@ -1,1 +1,7 @@
 /bin/
+
+# Local development records; excluded from the public repository.
+/docs/codex/
+/docs/superpowers/
+/docs/notes/
+/.private-history/
