@@ -10,8 +10,8 @@ import (
 	"slices"
 	"time"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 // claimTeardownsLocked gives the free teardown slots (teardown_concurrency minus the

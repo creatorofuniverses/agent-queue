@@ -1,9 +1,9 @@
 package store
 
 import (
-	"agent-queue/internal/model"
 	"context"
 	"database/sql"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"time"
 )
 

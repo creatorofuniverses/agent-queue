@@ -1,9 +1,9 @@
 package hook
 
 import (
-	"agent-queue/internal/config"
 	"bytes"
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"os"
 	"path/filepath"
 	"strings"

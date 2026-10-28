@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/units"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
 var (

@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"agent-queue/internal/config"
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/platform/linux"
-	"agent-queue/internal/protocol"
-	"agent-queue/internal/units"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/linux"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
 // Doctor failure codes.

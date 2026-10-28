@@ -1,11 +1,11 @@
 package store
 
 import (
-	"agent-queue/internal/model"
-	"agent-queue/internal/profile"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"time"
 )
 

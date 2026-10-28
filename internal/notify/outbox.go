@@ -1,11 +1,11 @@
 package notify
 
 import (
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
-	"agent-queue/internal/store"
 	"context"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"log/slog"
 	"math/rand/v2"
 	"path/filepath"

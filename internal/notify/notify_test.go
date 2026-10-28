@@ -1,12 +1,12 @@
 package notify
 
 import (
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"net/http"
 	"net/http/httptest"
 	"os"

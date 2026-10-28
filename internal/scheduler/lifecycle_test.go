@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 // grantTTL reserves stand + budget for ttl and grants it with one Tick; t0 is the grant time.

@@ -1,7 +1,7 @@
 package daemon
 
 import (
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"testing"
 	"time"
 )

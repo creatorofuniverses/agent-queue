@@ -15,13 +15,13 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
-	"agent-queue/internal/notify"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/protocol"
-	"agent-queue/internal/scheduler"
-	"agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/notify"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
+	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 // Version is reported by ping.

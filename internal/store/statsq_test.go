@@ -1,9 +1,9 @@
 package store
 
 import (
-	"agent-queue/internal/model"
 	"context"
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"reflect"
 	"strings"
 	"testing"

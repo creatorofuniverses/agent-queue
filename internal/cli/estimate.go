@@ -1,10 +1,10 @@
 package cli
 
 import (
-	"agent-queue/internal/client"
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/units"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 	"os"
 )
 

@@ -1,4 +1,4 @@
-module agent-queue
+module github.com/creatorofuniverses/agent-queue
 
 go 1.26.0
 

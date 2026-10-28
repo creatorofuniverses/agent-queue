@@ -1,10 +1,10 @@
 package daemon
 
 import (
-	"agent-queue/internal/platform"
-	"agent-queue/internal/platform/fake"
 	"context"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
 	"testing"
 	"time"
 )

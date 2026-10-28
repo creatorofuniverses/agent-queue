@@ -2,9 +2,9 @@
 package profile
 
 import (
-	"agent-queue/internal/model"
 	"cmp"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"math"
 	"slices"
 	"time"

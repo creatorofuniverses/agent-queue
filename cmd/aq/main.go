@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"agent-queue/internal/cli"
-	"agent-queue/internal/runner"
+	"github.com/creatorofuniverses/agent-queue/internal/cli"
+	"github.com/creatorofuniverses/agent-queue/internal/runner"
 )
 
 func main() {

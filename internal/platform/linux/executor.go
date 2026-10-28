@@ -15,9 +15,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/runner"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/runner"
 )
 
 type ExecutorConfig struct {

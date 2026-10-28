@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"agent-queue/internal/client"
-	"agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 )
 
 // stringList is a repeatable string flag.

@@ -1,13 +1,13 @@
 package cli
 
 import (
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/stats"
-	"agent-queue/internal/units"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/stats"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 	"time"
 )
 

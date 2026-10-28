@@ -1,10 +1,10 @@
 package daemon
 
 import (
-	"agent-queue/internal/platform"
-	"agent-queue/internal/scheduler"
-	"agent-queue/internal/store"
 	"context"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"log/slog"
 	"time"
 )

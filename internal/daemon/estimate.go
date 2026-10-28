@@ -1,11 +1,11 @@
 package daemon
 
 import (
-	"agent-queue/internal/admission"
-	"agent-queue/internal/model"
-	"agent-queue/internal/scheduler"
 	"context"
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 	"time"
 )
 

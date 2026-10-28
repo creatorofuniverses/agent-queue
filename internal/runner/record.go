@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 // RecordResult writes JobDir/result.json from systemd's ExecStopPost env and the unit cgroup.

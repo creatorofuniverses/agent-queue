@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 // Recover reconciles stored items with units left by a previous daemon. Admission,

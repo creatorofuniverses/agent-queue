@@ -21,13 +21,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"agent-queue/internal/admission"
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/profile"
-	"agent-queue/internal/store"
-	"agent-queue/internal/units"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/profile"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
 // ErrRejected: the request failed validation; the item is stored as REJECTED.

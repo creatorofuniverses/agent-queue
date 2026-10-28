@@ -1,12 +1,12 @@
 package notify
 
 import (
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
-	"agent-queue/internal/store"
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"path/filepath"
 	"reflect"
 	"strings"

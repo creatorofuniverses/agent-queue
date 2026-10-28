@@ -1,10 +1,10 @@
 package notify
 
 import (
-	"agent-queue/internal/model"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"strings"
 	"time"
 	"unicode/utf8"

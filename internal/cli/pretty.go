@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
-	"agent-queue/internal/stats"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/stats"
 )
 
 // Pretty renderers: used only when c.ui.pretty (a person at a terminal).

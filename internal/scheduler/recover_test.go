@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/admission"
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/platform/fake"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
 )
 
 // hookExec wraps the fake executor: it records Stop/Alive/ReadResult calls in order,

@@ -1,12 +1,12 @@
 package linux
 
 import (
-	"agent-queue/internal/platform"
 	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"os"
 	"os/exec"
 	"strconv"

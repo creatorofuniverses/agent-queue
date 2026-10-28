@@ -1,15 +1,15 @@
 package daemon
 
 import (
-	"agent-queue/internal/platform"
 	"context"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"agent-queue/internal/platform/fake"
-	"agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 var errTest = errors.New("test error")

@@ -1,7 +1,7 @@
 package profile
 
 import (
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"strings"
 	"testing"
 	"time"

@@ -3,11 +3,11 @@
 package e2e
 
 import (
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
-	"agent-queue/internal/stats"
 	"encoding/json"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"os"
 	"os/exec"
 	"strconv"

@@ -1,13 +1,13 @@
 package scheduler
 
 import (
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/store"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"strings"
 	"testing"
 	"time"

@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 // userManagerCgroup returns the user@UID.service cgroup (relative to the cgroup root)

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/config"
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
-	"agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 func bigPool(c *config.Config) { c.PoolMemory = 8 * gib }

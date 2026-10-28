@@ -2,9 +2,9 @@
 package notify
 
 import (
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 type Router struct{ cfg config.Config }

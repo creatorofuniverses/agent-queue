@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 func testSpec() platform.LaunchSpec {

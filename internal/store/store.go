@@ -19,7 +19,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 var (

@@ -1,10 +1,10 @@
 package scheduler
 
 import (
-	"agent-queue/internal/admission"
-	"agent-queue/internal/model"
 	"context"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"log/slog"
 	"time"
 )

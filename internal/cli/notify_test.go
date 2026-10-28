@@ -1,11 +1,11 @@
 package cli
 
 import (
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
-	"agent-queue/internal/protocol"
 	"context"
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"os"
 	"path/filepath"
 	"strings"

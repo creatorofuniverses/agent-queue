@@ -4,9 +4,9 @@ import (
 	"slices"
 	"testing"
 
-	"agent-queue/internal/config"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/platform/fake"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
 )
 
 func newGuardTest(avail, sliceCur uint64) (*guard, *fake.Executor, *fake.Host, *[]bool) {

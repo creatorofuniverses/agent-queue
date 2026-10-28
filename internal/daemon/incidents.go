@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 type incidentSampler struct {

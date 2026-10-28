@@ -1,10 +1,10 @@
 package store
 
 import (
-	"agent-queue/internal/model"
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"strings"
 	"time"
 )

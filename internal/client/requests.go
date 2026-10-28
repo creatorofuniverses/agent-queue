@@ -2,12 +2,12 @@
 package client
 
 import (
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
-	"agent-queue/internal/profile"
-	"agent-queue/internal/units"
 	"context"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/profile"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 	"os"
 	"path/filepath"
 	"strings"

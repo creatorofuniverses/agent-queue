@@ -3,8 +3,8 @@ package daemon
 import (
 	"time"
 
-	"agent-queue/internal/admission"
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 // ItemView is the client-facing projection of an item. It deliberately has no

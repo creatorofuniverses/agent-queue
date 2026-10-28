@@ -1,16 +1,16 @@
 package mcp
 
 import (
-	"agent-queue/internal/client"
-	"agent-queue/internal/config"
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
-	"agent-queue/internal/protocol"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"os"
 	"path/filepath"
 	"time"

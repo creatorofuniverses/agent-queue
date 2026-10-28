@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/admission"
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/protocol"
-	"agent-queue/internal/scheduler"
-	"agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
+	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 func (e *env) reserveArgs(mem uint64) ReserveArgs {

@@ -1,9 +1,9 @@
 package linux
 
 import (
-	"agent-queue/internal/platform"
 	"context"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"io/fs"
 	"os"
 	"path/filepath"

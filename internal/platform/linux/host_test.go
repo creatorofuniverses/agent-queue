@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 var _ platform.HostMetrics = (*Host)(nil)

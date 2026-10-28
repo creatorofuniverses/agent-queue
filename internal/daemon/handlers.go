@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
-	"agent-queue/internal/protocol"
-	"agent-queue/internal/scheduler"
-	"agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
+	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 // SubmitArgs is the submit request. Sizes are bytes.

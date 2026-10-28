@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 func openTemp(t *testing.T) *Store {

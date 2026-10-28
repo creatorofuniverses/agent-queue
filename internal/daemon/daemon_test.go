@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/platform/fake"
-	"agent-queue/internal/protocol"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 )
 
 const (

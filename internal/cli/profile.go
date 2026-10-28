@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"agent-queue/internal/client"
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/units"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 	"text/tabwriter"
 	"time"
 )

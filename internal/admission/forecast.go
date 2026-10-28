@@ -1,7 +1,7 @@
 package admission
 
 import (
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"math"
 	"slices"
 	"sort"

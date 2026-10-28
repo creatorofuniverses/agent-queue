@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/admission"
-	"agent-queue/internal/config"
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
-	"agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 // floor16G is the reserve floor of a 16 GiB host (10 %).

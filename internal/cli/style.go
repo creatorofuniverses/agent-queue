@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/units"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
 // ui is how human output is drawn. Plain output (no TTY, AQ_UI=plain) is the

@@ -13,7 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"agent-queue/internal/units"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
 type PressureConfig struct {

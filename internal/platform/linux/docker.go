@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 // DockerMeterConfig configures the compose-project meter.

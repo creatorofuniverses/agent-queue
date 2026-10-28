@@ -1,10 +1,10 @@
 package notify
 
 import (
-	"agent-queue/internal/config"
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"io"
 	"net/http"
 	"os"

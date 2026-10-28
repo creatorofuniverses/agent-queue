@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"agent-queue/internal/client"
-	"agent-queue/internal/config"
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
-	"agent-queue/internal/protocol"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 )
 
 // usageError is a command line mistake; it exits with 64.

@@ -1,9 +1,9 @@
 package client
 
 import (
-	"agent-queue/internal/config"
 	"errors"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"strings"
 )
 

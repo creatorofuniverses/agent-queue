@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"agent-queue/internal/admission"
-	"agent-queue/internal/config"
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 // guardMin is the lowest ceiling the guard sets.

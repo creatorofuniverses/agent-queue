@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 type Capabilities struct {

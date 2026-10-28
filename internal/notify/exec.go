@@ -1,10 +1,10 @@
 package notify
 
 import (
-	"agent-queue/internal/config"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"os/exec"
 	"strings"
 	"sync"

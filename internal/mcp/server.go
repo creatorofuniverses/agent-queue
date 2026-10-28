@@ -2,11 +2,11 @@
 package mcp
 
 import (
-	"agent-queue/internal/config"
 	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"io"
 	"sync"
 )

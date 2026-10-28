@@ -1,10 +1,10 @@
 package daemon
 
 import (
-	"agent-queue/internal/model"
-	"agent-queue/internal/profile"
-	"agent-queue/internal/store"
 	"context"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/profile"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"os"
 	"testing"
 	"time"

@@ -1,12 +1,12 @@
 package store
 
 import (
-	"agent-queue/internal/hook"
-	"agent-queue/internal/model"
-	"agent-queue/internal/profile"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/hook"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"strings"
 	"time"
 )

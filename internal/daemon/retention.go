@@ -1,12 +1,12 @@
 package daemon
 
 import (
-	"agent-queue/internal/config"
-	"agent-queue/internal/hook"
-	"agent-queue/internal/model"
-	"agent-queue/internal/store"
 	"context"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/hook"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"io/fs"
 	"log/slog"
 	"os"

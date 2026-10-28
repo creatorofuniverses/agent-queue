@@ -13,14 +13,14 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"agent-queue/internal/client"
-	"agent-queue/internal/config"
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/hook"
-	"agent-queue/internal/mcp"
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform/linux"
-	"agent-queue/internal/units"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/hook"
+	"github.com/creatorofuniverses/agent-queue/internal/mcp"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/linux"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
 func cmdVersion(c *cmdCtx, args []string) error {

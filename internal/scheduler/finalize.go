@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"agent-queue/internal/model"
-	"agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 // MapOutcome turns a unit's recorded result into the item's final state and reason.

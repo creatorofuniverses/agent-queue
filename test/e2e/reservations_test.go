@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"agent-queue/internal/daemon"
-	"agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 // writeScript writes a teardown script into dir and returns its path.

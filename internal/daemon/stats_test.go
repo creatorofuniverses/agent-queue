@@ -1,10 +1,10 @@
 package daemon
 
 import (
-	"agent-queue/internal/protocol"
-	"agent-queue/internal/stats"
 	"context"
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
+	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"testing"
 )
 

@@ -1,8 +1,8 @@
 package client
 
 import (
-	"agent-queue/internal/config"
 	"errors"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"testing"
 )
 
