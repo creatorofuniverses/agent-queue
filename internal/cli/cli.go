@@ -43,6 +43,7 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{
+		"stats":    cmdStats,
 		"profile":  cmdProfile,
 		"estimate": cmdEstimate,
 		"top":      cmdTop,
@@ -68,7 +69,7 @@ func init() {
 
 const usageText = `usage: aq <command> [flags]
 
-commands: top estimate profile daemon submit status result logs cancel list wait reserve extend release teardown doctor ack hook mcp version
+commands: stats top estimate profile daemon submit status result logs cancel list wait reserve extend release teardown doctor ack hook mcp version
 `
 
 // Main runs the aq CLI and returns the process exit code.

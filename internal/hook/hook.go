@@ -115,8 +115,8 @@ func AppendHit(stateDir string, at time.Time, idx int, client string) error {
 		return err
 	}
 	p := filepath.Join(stateDir, "hook-hits.jsonl")
-	if st, err := os.Stat(p); err == nil && st.Size() > 1<<20 {
-		if err = os.Rename(p, p+".1"); err != nil {
+	if st, err := os.Stat(p); err == nil && st.Size() > hitRotationBytes {
+		if err = rotateHits(p); err != nil {
 			return err
 		}
 	} else if err != nil && !os.IsNotExist(err) {

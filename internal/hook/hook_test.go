@@ -75,8 +75,8 @@ func TestAppendHitRotatesAndOmitsCommand(t *testing.T) {
 	if e := AppendHit(dir, time.Now(), 0, "codex"); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := os.Stat(path + ".1"); e != nil {
-		t.Fatal(e)
+	if files, e := RotatedHitFiles(dir); e != nil || len(files) != 1 {
+		t.Fatal(files, e)
 	}
 	b, e := os.ReadFile(path)
 	if e != nil || strings.Count(string(b), "\n") != 1 || strings.Contains(string(b), "command") {

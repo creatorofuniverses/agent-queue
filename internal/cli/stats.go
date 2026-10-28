@@ -1,0 +1,116 @@
+package cli
+
+import (
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"resource-dispatcher/internal/daemon"
+	"resource-dispatcher/internal/stats"
+	"resource-dispatcher/internal/units"
+	"time"
+)
+
+func cmdStats(c *cmdCtx, args []string) error {
+	export := len(args) > 0 && args[0] == "export"
+	if export {
+		args = args[1:]
+	}
+	fs := c.newFlagSet("stats")
+	since := fs.String("since", "7d", "history window")
+	asJSON := fs.Bool("json", false, "JSON output")
+	name := fs.String("profile", "", "profile filter")
+	format := fs.String("format", "jsonl", "jsonl|csv")
+	table := fs.String("table", "", "export table")
+	pos, e := parseFlags(fs, args)
+	if e != nil {
+		return e
+	}
+	if len(pos) > 0 {
+		return usagef("stats: unexpected arguments")
+	}
+	duration, e := units.ParseDuration(*since)
+	if e != nil {
+		return usagef("stats: invalid --since: %v", e)
+	}
+	at := time.Now().Add(-duration).UTC().Format(time.RFC3339Nano)
+	if export {
+		if *format != "jsonl" && *format != "csv" {
+			return usagef("stats export: --format must be jsonl or csv")
+		}
+		if *format == "csv" && *table == "" {
+			return usagef("stats export: csv requires --table")
+		}
+		if *name != "" {
+			return usagef("stats export: --profile is unsupported")
+		}
+		paths, e := c.paths()
+		if e != nil {
+			return e
+		}
+		enc := json.NewEncoder(c.stdout)
+		csvw := csv.NewWriter(c.stdout)
+		header := false
+		e = callStreamOn(c.ctx, paths, "stats_export", map[string]string{"since": at, "table": *table}, func(raw json.RawMessage) error {
+			var chunk daemon.ExportChunk
+			if e := json.Unmarshal(raw, &chunk); e != nil {
+				return e
+			}
+			if *format == "csv" && !header {
+				if e := csvw.Write(chunk.Columns); e != nil {
+					return e
+				}
+				header = true
+			}
+			for _, row := range chunk.Rows {
+				if *format == "jsonl" {
+					obj := map[string]any{"table": chunk.Table}
+					for i, k := range chunk.Columns {
+						obj[k] = row[i]
+					}
+					if e := enc.Encode(obj); e != nil {
+						return e
+					}
+				} else {
+					cells := make([]string, len(row))
+					for i, v := range row {
+						if v != nil {
+							cells[i] = fmt.Sprint(v)
+						}
+					}
+					if e := csvw.Write(cells); e != nil {
+						return e
+					}
+				}
+			}
+			return nil
+		})
+		csvw.Flush()
+		if e != nil {
+			return e
+		}
+		return csvw.Error()
+	}
+	var v stats.Summary
+	if e = c.call(c.ctx, "stats", map[string]string{"since": at, "profile": *name}, &v); e != nil {
+		return e
+	}
+	if *asJSON {
+		return printJSON(c, v)
+	}
+	printStats(c, v)
+	return nil
+}
+func printStats(c *cmdCtx, v stats.Summary) {
+	fmt.Fprintf(c.stdout, "items:\n")
+	for _, g := range v.Items {
+		fmt.Fprintf(c.stdout, "  %s/%s: %d, outcomes %v, priority %v, wait p50/p90 %.1fs/%.1fs, run %.1fs/%.1fs\n", g.Kind, g.ClientType, g.Count, g.Outcomes, g.ByPriority, g.WaitP50, g.WaitP90, g.RunP50, g.RunP90)
+	}
+	fmt.Fprintln(c.stdout, "profiles:")
+	for _, p := range v.Profiles {
+		fmt.Fprintf(c.stdout, "  %s: %d runs, %d usable, %d OOM, %d timeouts, %d from profile, %d peak over expected; peak/expected p50/p90 %.2f/%.2f, duration/estimate %.2f/%.2f\n", p.Profile, p.Runs, p.Usable, p.OOM, p.Timeouts, p.MemoryFromProfile, p.PeakOverExpected, p.PeakToExpectedP50, p.PeakToExpectedP90, p.DurationToEstimateP50, p.DurationToEstimateP90)
+	}
+	if v.Profile != "" {
+		return
+	}
+	fmt.Fprintf(c.stdout, "queue: %+v\nhost: %+v\nreservations: %+v\ndelivery: %+v\nhook: %+v\nincidents: %+v\n", v.Queue, v.Host, v.Reservations, v.Delivery, v.Hook, v.Incidents)
+}

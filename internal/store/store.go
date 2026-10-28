@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,7 +34,8 @@ var migrationsFS embed.FS
 const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 type Store struct {
-	db *sql.DB
+	stateDir string
+	db       *sql.DB
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.
@@ -50,7 +52,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, stateDir: filepath.Dir(path)}
 	if err := s.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
