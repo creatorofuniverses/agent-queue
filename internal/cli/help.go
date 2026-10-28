@@ -42,7 +42,7 @@ var helps = map[string]cmdHelp{
 		"The reservation is granted when its memory fits and is held for --ttl. Nested tasks run inside it\nwith aq submit --within. On expiry or release the teardown script stops the stand.",
 		[]string{"aq reserve --memory 6G --ttl 2h --docker-project mystand --teardown ./stand-down.sh", "aq reserve --memory 4G --task-memory 4G --task-cpus 4 --ttl 1h --teardown ./down.sh"}},
 	"extend":   {"aq extend --ttl DURATION ID", "extend a reservation's TTL", "", []string{"aq extend RES_ID --ttl 1h"}},
-	"release":  {"aq release [--force] ID", "release a reservation now and tear its stand down", "", []string{"aq release RES_ID"}},
+	"release":  {"aq release [--force] ID", "free a reservation whose stand you have shut down (no teardown script runs)", "", []string{"aq release RES_ID"}},
 	"teardown": {"aq teardown --retry ID", "run a failed teardown again", "", []string{"aq teardown --retry RES_ID"}},
 	"top":      {"aq top [--json]", "host memory, what uses it, and what aq has committed", "", []string{"aq top"}},
 	"estimate": {"aq estimate [flags]", "forecast when a task would start, without submitting it", "",

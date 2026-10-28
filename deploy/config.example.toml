@@ -23,7 +23,7 @@ unit_prefix = "aq-"
 # Close admission when PSI memory full avg10 >= this value for longer than close_after.
 close_full_avg10 = 5.0
 close_after = "10s"
-# Reopen when avg10 <= this value for longer than open_after.
+# Reopen when avg10 stays below this value for longer than open_after.
 open_full_avg10 = 1.0
 open_after = "30s"
 

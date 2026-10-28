@@ -1,156 +1,162 @@
-# aq — локальный диспетчер ресурсов
+English · [Русский](README.ru.md)
 
-`aq` ставит тяжёлые команды (тесты, сборки, обучение) в очередь к общему пулу
-памяти и CPU и запускает каждую в отдельном transient unit systemd с жёсткими
-лимитами cgroup v2. Несколько агентов, одновременно запустивших `pytest -n 16`,
-больше не вешают машину: задачи ждут своей очереди, а задача, превысившая свой
-лимит, получает OOM внутри собственной cgroup, не задевая хост.
+# aq — a local resource dispatcher
 
-Состав:
+`aq` queues heavy commands (tests, builds, training) against a shared pool of
+memory and CPU and runs each one in its own systemd transient unit with hard
+cgroup v2 limits. Several agents that start `pytest -n 16` at the same time no
+longer hang the machine: tasks wait their turn, and a task that exceeds its limit
+gets an OOM inside its own cgroup without affecting the host.
 
-- один бинарник `aq`: демон (`aq daemon`) и клиентские команды;
-- демон работает как пользовательский сервис `aq.service` и общается с
-  клиентами через Unix-сокет `$XDG_RUNTIME_DIR/agent-queue/aq.sock`;
-- задачи запускаются в `aq.slice` (лимит памяти слайса = `pool_memory`),
-  каждая — unit `aq-<id>.service` с `MemoryMax`, `MemorySwapMax=0`,
-  `CPUQuota`, `RuntimeMaxSec`;
-- состояние: `~/.local/state/agent-queue/` (`aq.db`, логи задач в `jobs/<id>/`),
-  конфиг: `~/.config/agent-queue/config.toml`.
+Components:
 
-## Требования
+- one `aq` binary: the daemon (`aq daemon`) and the client commands;
+- the daemon runs as the user service `aq.service` and talks to clients over the
+  Unix socket `$XDG_RUNTIME_DIR/agent-queue/aq.sock`;
+- tasks run in `aq.slice` (the slice memory limit = `pool_memory`), each as a
+  unit `aq-<id>.service` with `MemoryMax`, `MemorySwapMax=0`, `CPUQuota`,
+  `RuntimeMaxSec`;
+- state: `~/.local/state/agent-queue/` (`aq.db`, task logs in `jobs/<id>/`),
+  config: `~/.config/agent-queue/config.toml`.
 
-- Linux с cgroup v2 и делегированными пользователю контроллерами `memory`, `cpu`, `pids`;
-- systemd ≥ 254 (пользовательский менеджер);
-- Go 1.26 и [just](https://github.com/casey/just) для сборки.
+## Requirements
 
-## Установка
+- Linux with cgroup v2 and the `memory`, `cpu`, `pids` controllers delegated to the user;
+- systemd ≥ 254 (user manager);
+- Go 1.26 and [just](https://github.com/casey/just) to build.
+
+## Installation
 
 ```sh
 just install
 ```
 
-`just install` собирает `bin/aq` и:
+`just install` builds `bin/aq` and:
 
-- кладёт бинарник в `~/.local/bin/aq`;
-- кладёт `aq.service` и `aq.slice` в `~/.config/systemd/user/`;
-- копирует `deploy/config.example.toml` в `~/.config/agent-queue/config.toml`,
-  только если конфига ещё нет (существующий не трогается);
-- выполняет `systemctl --user daemon-reload`, включает `aq.service` и
-  (пере)запускает его — повторный `just install` обновляет работающий демон;
-- копирует скилл `aq` каждому агенту свой: `deploy/skills/claude/aq` в
-  `~/.claude/skills/aq`, `deploy/skills/codex/aq` в `~/.codex/skills/aq` (пути
-  меняются через `CLAUDE_SKILLS`/`CODEX_SKILLS`, пустое значение — не ставить);
-  хуки подключаются отдельно;
-- если linger выключен, печатает подсказку: без `loginctl enable-linger $USER`
-  демон и все задачи останавливаются при выходе из последней сессии.
+- puts the binary in `~/.local/bin/aq`;
+- puts `aq.service` and `aq.slice` in `~/.config/systemd/user/`;
+- copies `deploy/config.example.toml` to `~/.config/agent-queue/config.toml`
+  only if there is no config yet (an existing one is not touched);
+- runs `systemctl --user daemon-reload`, enables `aq.service` and
+  (re)starts it, so running `just install` again updates the running daemon;
+- copies the `aq` skill separately for each agent: `deploy/skills/claude/aq` to
+  `~/.claude/skills/aq`, `deploy/skills/codex/aq` to `~/.codex/skills/aq` (the
+  paths can be changed with `CLAUDE_SKILLS`/`CODEX_SKILLS`; an empty value means
+  do not install); hooks are set up separately;
+- if linger is off, prints a hint: without `loginctl enable-linger $USER`
+  the daemon and all tasks stop when the last session ends.
 
-Перед установкой проверьте `pool_memory` в примере конфига: значение по
-умолчанию `16G` должно быть не больше `MemTotal` минус 10 % резерва, иначе демон
-не запустится (`CONFIG_INVALID`).
+Before installing, check `pool_memory` in the example config: the default
+`16G` must be no more than `MemTotal` minus the 10 % reserve, otherwise the
+daemon will not start (`CONFIG_INVALID`).
 
-Каталоги переопределяются переменными окружения: `BINDIR`, `UNITDIR`, `CONFDIR`,
-`STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
-`SYSTEMCTL=true just install` только раскладывает файлы.
+Directories can be overridden with environment variables: `BINDIR`, `UNITDIR`,
+`CONFDIR`, `STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, and `SYSTEMCTL` (default
+`systemctl --user`). For example, `SYSTEMCTL=true just install` only lays out
+the files.
 
-Если установленный `aq` отвечает и в очереди есть задачи или резервы, `install`,
-`uninstall` и `purge` сначала показывают их и спрашивают подтверждение (без
-терминала — прерываются): задачи переживают перезапуск демона, но фоновые
-`aq wait` агентов обрываются, и агенты не узнают результат. `FORCE=1 just install`
-пропускает вопрос.
+If the installed `aq` responds and the queue has tasks or reservations,
+`install`, `uninstall` and `purge` first show them and ask for confirmation
+(without a terminal they abort): tasks survive a daemon restart, but the agents'
+background `aq wait` processes are cut off, and the agents do not learn the
+result. `FORCE=1 just install` skips the question.
 
-Проверка после установки:
+Check after installation:
 
 ```sh
 aq doctor
 systemctl --user status aq.service
 ```
 
-Все строки `aq doctor` должны быть `ok`. Если запустить `aq doctor` до первого
-старта демона, он честно покажет `SLICE_MISSING`, `KILL_DROPIN_MISSING` и
-`DAEMON_UNAVAILABLE`: `aq.slice` и runtime drop-in
-`$XDG_RUNTIME_DIR/systemd/user/aq-.service.d/99-aq-kill.conf` создаёт сам демон
-при старте. После `systemctl --user start aq.service` эти проверки проходят.
+All `aq doctor` lines should be `ok`. If you run `aq doctor` before the daemon
+has started for the first time, it will correctly report `SLICE_MISSING`,
+`KILL_DROPIN_MISSING` and `DAEMON_UNAVAILABLE`: `aq.slice` and the runtime
+drop-in `$XDG_RUNTIME_DIR/systemd/user/aq-.service.d/99-aq-kill.conf` are
+created by the daemon at startup. After `systemctl --user start aq.service`
+these checks pass.
 
-Удаление:
+Removal:
 
 ```sh
-just uninstall   # останавливает и выключает сервис, удаляет бинарник и units
-just purge       # то же плюс удаляет ~/.local/state/agent-queue (БД и логи)
+just uninstall   # stops and disables the service, removes the binary and units
+just purge       # same, plus removes ~/.local/state/agent-queue (DB and logs)
 ```
 
-`just uninstall` сохраняет БД, логи и конфиг. `just purge` удаляет состояние,
-но конфиг тоже оставляет.
+`just uninstall` keeps the DB, logs and config. `just purge` removes the state
+but also keeps the config.
 
-## Справка и вывод
+## Help and output
 
-`aq help` — список команд по группам, `aq help CMD` (или `aq CMD --help`) —
-описание, флаги и примеры команды. Ошибка во флагах печатается один раз с
-подсказкой, где смотреть справку.
+`aq help` lists commands by group; `aq help CMD` (or `aq CMD --help`) shows the
+description, flags and examples for a command. A flag error is printed once,
+with a hint on where to find the help.
 
-Вывод зависит от того, кто его читает:
+The output depends on who reads it:
 
-- **человек в терминале** — цветные состояния, таблицы, полосы памяти в `aq top`
-  и `aq status`, короткие ID и длительности вида `3m05s`;
-- **агент или скрипт** (stdout не терминал) — прежний простой текст, формат
-  которого не меняется: его читают скиллы;
-- `--json` — машинный вывод в любом режиме.
+- **a person at a terminal**: colored states, tables, memory bars in `aq top`
+  and `aq status`, short IDs and durations like `3m05s`;
+- **an agent or script** (stdout is not a terminal): the same plain text as
+  before, with a format that does not change because skills parse it;
+- `--json`: machine-readable output in any mode.
 
-`AQ_UI=pretty` или `AQ_UI=plain` выбирает режим явно (например, для
-`aq list | less -R`), `NO_COLOR=1` убирает цвета. Везде, где команда принимает ID
-задачи или резерва, достаточно уникального префикса от 4 символов
-(`aq status 5a0e71f2`), как его показывает `aq list`.
+`AQ_UI=pretty` or `AQ_UI=plain` selects the mode explicitly (for example, for
+`aq list | less -R`); `NO_COLOR=1` turns colors off. Wherever a command takes a
+task or reservation ID, a unique prefix of at least 4 characters is enough
+(`aq status 5a0e71f2`), as shown by `aq list`.
 
-## Запуск задач
+## Running tasks
 
 ```sh
 aq submit --memory 4G --cpus 2 --timeout 30m -- \
   bash -lc '/path/.venv/bin/python -m pytest -n "$AQ_CPUS"'
 ```
 
-- `--memory` (без пригодной истории обязателен) — жёсткий лимит памяти задачи: `4G`, `512M`,
-  `1024K`, `2T` (двоичные единицы), голое число — MiB; минимум `64M`.
-- `--timeout` (обязательно) — максимальное время работы, например `30m`.
-- `--cpus` — сколько CPU пула занять (по умолчанию 1); задаёт `CPUQuota`.
-- `--priority low|normal|high`, `--name`, `--key` (идемпотентность: повторный
-  `submit` с тем же ключом возвращает ту же задачу), `--session`, `--env K=V`,
-  `--expected` (ожидаемое потребление, по умолчанию = `--memory`), `--json`.
+- `--memory` (required when there is no usable history): the hard memory limit
+  of the task: `4G`, `512M`, `1024K`, `2T` (binary units); a bare number is MiB;
+  the minimum is `64M`.
+- `--timeout` (required): the maximum run time, for example `30m`.
+- `--cpus`: how many pool CPUs to take (default 1); sets `CPUQuota`.
+- `--priority low|normal|high`, `--name`, `--key` (idempotency: a repeated
+  `submit` with the same key returns the same task), `--session`, `--env K=V`,
+  `--expected` (expected consumption, default = `--memory`), `--json`.
 
-Команда передаётся как argv, без неявного shell, и systemd не раскрывает в ней
-переменные. Поэтому `$AQ_CPUS` нужно раскрывать внутри задачи: запуск через
-`bash -lc '…'` в одинарных кавычках оставляет `$AQ_CPUS` нетронутым для вашего
-shell, и раскрывает его уже `bash` внутри unit, где сервис выставил
-`AQ_CPUS=<--cpus>`. Без `bash -lc` переменную раскрыл бы ваш shell до запуска
-`aq` (и получил бы пустую строку). Кроме `AQ_CPUS` задача получает `AQ_JOB_ID`,
-собственные `TMPDIR`/`TMP`/`TEMP`, а из вызывающего окружения — `PATH`, `HOME`,
-`LANG`, `LC_*`, `VIRTUAL_ENV`.
+The command is passed as argv, with no implicit shell, and systemd does not
+expand variables in it. So `$AQ_CPUS` has to be expanded inside the task: running
+through `bash -lc '…'` in single quotes leaves `$AQ_CPUS` untouched by your
+shell, and `bash` inside the unit expands it, where the service has set
+`AQ_CPUS=<--cpus>`. Without `bash -lc`, your shell would expand the variable
+before `aq` starts (and get an empty string). Besides `AQ_CPUS`, the task gets
+`AQ_JOB_ID`, its own `TMPDIR`/`TMP`/`TEMP`, and from the calling environment
+`PATH`, `HOME`, `LANG`, `LC_*`, `VIRTUAL_ENV`.
 
-`aq submit` печатает id задачи и сразу возвращает управление.
+`aq submit` prints the task id and returns immediately.
 
-## Профили и оценки
+## Profiles and estimates
 
-Давайте повторяющимся прогонам стабильное `--name`, например `tests-unit`.
-Без явного `--profile` профиль — `<основной корень репозитория>:<name>`;
-он общий для всех worktree. `--project` заменяет корень, а `--profile P`
-задаёт имя целиком. Без имени и профиля история не собирается.
+Give recurring runs a stable `--name`, for example `tests-unit`. Without an
+explicit `--profile`, the profile is `<main repository root>:<name>`; it is
+shared by all worktrees. `--project` replaces the root, and `--profile P` sets
+the whole name. With no name and no profile, no history is collected.
 
-Первый запуск требует `--memory`. После хотя бы одного пригодного прогона
-память можно опустить:
+The first run requires `--memory`. After at least one usable run, memory can be
+omitted:
 
 ```sh
 aq submit --name tests-unit --memory 2G --cpus 2 --timeout 15m -- pytest tests/unit
 aq profile list
-aq profile show tests-unit          # короткое имя = <корень репозитория>:tests-unit
+aq profile show tests-unit          # short name = <repository root>:tests-unit
 aq submit --name tests-unit --cpus 2 --timeout 15m -- pytest tests/unit
 ```
 
-Пригодны успешные прогоны и `COMMAND_FAILED` с ненулевыми пиком и длительностью.
-OOM, таймауты и отмены не повышают лимит автоматически. По последним 10 пригодным
-прогонам лимит равен максимальному пику × 1.2 с округлением вверх до MiB
-(от 64 MiB до размера пула); expected — p90 выборок `memory.current`, не выше
-лимита. Явный `--memory` всегда выигрывает, `--expected` можно переопределить.
-Оценка длительности — p90 истории, ограниченный `--timeout`.
+Successful runs and `COMMAND_FAILED` runs with a nonzero peak and duration are
+usable. OOMs, timeouts and cancellations do not raise the limit automatically.
+Based on the last 10 usable runs, the limit is the maximum peak × 1.2, rounded
+up to MiB (from 64 MiB up to the pool size); expected is the p90 of the
+`memory.current` samples, no higher than the limit. An explicit `--memory`
+always wins, and `--expected` can be overridden. The duration estimate is the
+history p90, capped by `--timeout`.
 
-Перед тяжёлым прогоном узнайте, придётся ли ждать:
+Before a heavy run, find out whether you will have to wait:
 
 ```sh
 aq estimate --name tests-unit --cpus 2 --timeout 15m
@@ -161,43 +167,43 @@ aq estimate --name tests-unit --cpus 2 --timeout 15m
 # confidence: partial
 ```
 
-`aq estimate` ничего не ставит в очередь. Без истории можно передать `--memory`,
-а без оценки длительности — `--timeout`. Уверенность: `now`, `history`,
-`partial`, `timeout` или `unknown`. `aq list` показывает колонку `START`,
-`aq status` — ожидаемый старт ждущего элемента.
+`aq estimate` does not queue anything. Without history you can pass `--memory`,
+and without a duration estimate, `--timeout`. Confidence is one of `now`,
+`history`, `partial`, `timeout` or `unknown`. `aq list` shows a `START` column,
+and `aq status` shows the expected start of a waiting item.
 
-Backfill разрешает более поздней задаче обогнать заблокированную голову,
-если она помещается сейчас и по оценке освободит ресурсы до старта головы
-или укладывается в свободный остаток после головы. Резервы обгоняют только
-через этот остаток: общие слоты снятия могут задержать освобождение.
-Давление, диск и восстановление закрывают обгон; недостижимая голова тоже.
-Оценки могут ошибаться, поэтому фактический старт иногда позже прогноза.
-Отключение — `[scheduler] backfill = false`.
+Backfill lets a later task overtake a blocked head if it fits now and, by
+estimate, will free its resources before the head starts, or fits into the free
+remainder left after the head. Reservations overtake only through this
+remainder: shared teardown slots can delay the release. Pressure, disk and
+recovery close the overtaking; so does an unreachable head. Estimates can be
+wrong, so the actual start is sometimes later than predicted. To disable it, set
+`[scheduler] backfill = false`.
 
-## Наблюдение и ожидание
+## Watching and waiting
 
 ```sh
-aq list              # активные задачи: состояние, память, ожидание, BLOCKED_BY
-aq list --all        # включая завершённые
-aq status <id>       # подробности: состояние, причина, пик памяти, код выхода
-aq result <id>       # то же плюс пути к stdout.log/stderr.log
+aq list              # active tasks: state, memory, wait, BLOCKED_BY
+aq list --all        # including finished ones
+aq status <id>       # details: state, reason, memory peak, exit code
+aq result <id>       # same plus paths to stdout.log/stderr.log
 aq logs <id> [--stream stderr] [--tail 100] [--follow]
-aq wait <id>         # ждёт завершения, печатает итог и выходит с кодом:
+aq wait <id>         # waits for completion, prints the outcome and exits with a code:
 ```
 
-| Код `aq wait` | Значение |
+| `aq wait` code | Meaning |
 |---|---|
 | 0 | `SUCCEEDED` |
-| 1 | `COMMAND_FAILED` (команда вышла с ненулевым кодом; он в `aq status`) |
+| 1 | `COMMAND_FAILED` (the command exited with a nonzero code; it is in `aq status`) |
 | 2 | `OOM`, `OOM_GROUP`, `OOM_HOST_GUARD` |
 | 3 | `TIMEOUT` |
 | 4 | `CANCELLED` |
-| 5 | инфраструктура: `LAUNCH_FAILED`, `LOST`, `STORAGE_FULL`, `REJECTED` |
-| 6 | резерв больше не удерживается (см. «Резервы») |
-| 64 | ошибка использования |
-| 69 | демон недоступен |
+| 5 | infrastructure: `LAUNCH_FAILED`, `LOST`, `STORAGE_FULL`, `REJECTED` |
+| 6 | the reservation is no longer held (see "Reservations") |
+| 64 | usage error |
+| 69 | daemon unavailable |
 
-Типичный сценарий агента:
+A typical agent flow:
 
 ```sh
 id=$(aq submit --memory 4G --cpus 2 --timeout 30m -- make test)
@@ -205,12 +211,13 @@ aq wait "$id"; code=$?
 aq logs "$id" --tail 50
 ```
 
-У всех команд просмотра есть `--json` для разбора программами.
+All viewing commands have `--json` for parsing by programs.
 
-`aq top` (или `--json`) показывает один снимок: память/PSI/swap,
-непересекающиеся физические категории agents/docker/tasks/other, отдельно
-обязательства задач/стендов/бюджетов и причины задержки головы. Эти две картины
-между собой не складываются. Если «всё медленно», начните с этого снимка.
+`aq top` (or `--json`) shows a single snapshot: memory/PSI/swap, the
+non-overlapping physical categories agents/docker/tasks/other, and separately
+the commitments of tasks/stands/budgets and the reasons the head is delayed.
+These two views do not add up to each other. If "everything is slow", start with
+this snapshot.
 
 ```sh
 aq stats --since 7d
@@ -219,27 +226,29 @@ aq stats export --since 7d --format jsonl
 aq stats export --since 7d --format csv --table host
 ```
 
-Сводки охватывают исходы и ожидание задач, точность профилей, очередь и хост,
-резервы, доставку, срабатывания хука и инциденты OOM/PSI. Фильтр профиля
-возвращает только элементы и прогоны этого профиля. Таблицы выгрузки:
-`items`, `runs`, `host`, `incidents`, `events`, `hook`; CSV требует `--table`.
-Команды, окружение, cwd, идентификаторы сессий и тексты ошибок доставки
-в статистику и выгрузку не входят.
+The summaries cover task outcomes and waiting, profile accuracy, queue and host,
+reservations, delivery, hook hits and OOM/PSI incidents. A profile filter
+returns only the items and runs of that profile. Export tables are `items`,
+`runs`, `host`, `incidents`, `events`, `hook`; CSV requires `--table`. Commands,
+environment, cwd, session identifiers and delivery error texts are not included
+in statistics or exports.
 
-## Хранение
+## Retention
 
-Раз в 10 минут и после восстановления демон удаляет логи завершённых элементов
-старше 7 дней, включая логи снятий резерва. Общий предел `jobs/` — 5 GiB:
-при превышении удаляются старейшие завершённые. Активные элементы, в том числе
-`TEARDOWN_FAILED/UNKNOWN`, сохраняются. После удаления `logs_pruned = true`,
-`aq logs` отвечает `removed by retention`, а `aq result` не показывает пути.
-Сироты без строки БД и неактивные временные каталоги удаляются после часа.
+Every 10 minutes and after recovery, the daemon deletes the logs of finished
+items older than 7 days, including reservation teardown logs. The total limit
+for `jobs/` is 5 GiB: when it is exceeded, the oldest finished items are
+deleted. Active items, including `TEARDOWN_FAILED/UNKNOWN`, are kept. After
+deletion `logs_pruned = true`, `aq logs` answers `removed by retention`, and
+`aq result` does not show paths. Orphans with no DB row and inactive temporary
+directories are removed after an hour.
 
-История элементов, их события/прогоны, инциденты и повёрнутые файлы хука
-хранятся 90 дней. Хост измеряется раз в 30 секунд, хранится 30 дней;
-старше 2 дней остаётся первая строка каждой 10-минутной корзины со span 600 с.
+Item history, their events/runs, incidents and rotated hook files are kept for
+90 days. The host is measured every 30 seconds and kept for 30 days; for data
+older than 2 days, the first row of each 10-minute bucket with a span of 600 s
+remains.
 
-Новые ключи (полный пример — `deploy/config.example.toml`):
+New keys (a full example is in `deploy/config.example.toml`):
 
 ```toml
 [profiles]
@@ -260,66 +269,72 @@ sample_interval = "30s"
 agent_processes = ["claude", "codex"]
 ```
 
-Длительности конфига поддерживают дни: `7d`, `1d12h`. История берёт 1–100
-прогонов, процентили — 50–100, запас лимита — 1–4. Хранение положительно,
-`samples_full_res < samples_max_age`, общий предел логов не меньше 256 MiB,
-интервал хоста — от 5 с до 5 мин; имена процессов непусты и без `/`.
+Config durations support days: `7d`, `1d12h`. History takes 1–100 runs,
+percentiles are 50–100, limit margin is 1–4. Retention values must be positive,
+`samples_full_res < samples_max_age`, the total log limit is at least 256 MiB,
+the host interval is from 5 s to 5 min; process names are non-empty and contain
+no `/`.
 
-## Диагностика: `aq doctor`
+## Diagnostics: `aq doctor`
 
-`aq doctor` проверяет cgroup v2, делегирование контроллеров, наличие слайса,
-реальное применение `MemoryMax` (пробный unit на 64M), конфиг, свободное место,
-доступность демона, версию systemd и runtime drop-in остановки задач. Каждая
-ошибка помечена кодом (`CGROUP_V2_MISSING`, `CONTROLLER_MISSING`,
-`SLICE_MISSING`, `PROBE_FAILED`, `CONFIG_INVALID`, `DISK_LOW`,
-`DAEMON_UNAVAILABLE`, `SYSTEMD_TOO_OLD`, `KILL_DROPIN_MISSING`) и подсказкой.
+`aq doctor` checks cgroup v2, controller delegation, the presence of the slice,
+that `MemoryMax` is really applied (a probe unit at 64M), the config, free
+space, daemon availability, the systemd version and the runtime drop-in for
+stopping tasks. Each error is marked with a code (`CGROUP_V2_MISSING`,
+`CONTROLLER_MISSING`, `SLICE_MISSING`, `PROBE_FAILED`, `CONFIG_INVALID`,
+`DISK_LOW`, `DAEMON_UNAVAILABLE`, `SYSTEMD_TOO_OLD`, `KILL_DROPIN_MISSING`) and
+a hint.
 
-## Изменение пула
+## Changing the pool
 
-Отредактируйте `~/.config/agent-queue/config.toml` (`pool_memory`, `pool_cpus`,
-`reserve_floor_percent` и т. д.; все ключи с описанием — в
-`deploy/config.example.toml`) и перезапустите демон:
+Edit `~/.config/agent-queue/config.toml` (`pool_memory`, `pool_cpus`,
+`reserve_floor_percent`, etc.; all keys are described in
+`deploy/config.example.toml`) and restart the daemon:
 
 ```sh
 systemctl --user restart aq.service
 ```
 
-Работающие задачи при перезапуске демона не прерываются: это отдельные units
-systemd, и новый демон подхватывает их состояние и результаты.
+Running tasks are not interrupted when the daemon restarts: they are separate
+systemd units, and the new daemon picks up their state and results.
 
-## OOM и другие сбои
+## OOM and other failures
 
-Если задача превысила `--memory`, ядро убивает её внутри её cgroup, а `aq wait`
-выходит с кодом 2. Подробности:
+If a task exceeds `--memory`, the kernel kills it inside its cgroup, and
+`aq wait` exits with code 2. Details:
 
 ```sh
-aq status <id>                    # причина OOM, пик памяти (memory peak)
-journalctl --user -u aq-<id>      # журнал unit задачи (systemd: oom-kill и т. п.)
+aq status <id>                    # OOM reason, memory peak
+journalctl --user -u aq-<id>      # the task unit's journal (systemd: oom-kill, etc.)
 aq logs <id> --stream stderr
 ```
 
-`OOM_GROUP` — задачу убил лимит пула (`aq.slice`), `OOM_HOST_GUARD` — защитник
-хоста, временно снизивший потолок слайса из-за нехватки памяти на машине.
-Увеличьте `--memory` или уменьшите параллелизм команды.
+`OOM_GROUP` means the task was killed by the pool limit (`aq.slice`);
+`OOM_HOST_GUARD` means the host guard, which temporarily lowered the slice
+ceiling because the machine was short of memory. Increase `--memory` or reduce
+the command's parallelism.
 
-## Отмена
+## Cancellation
 
 ```sh
 aq cancel <id> [--reason "..."]
 ```
 
-Задача в очереди снимается сразу. У работающей останавливается весь unit:
-systemd шлёт SIGTERM, через `cancel_grace` (по умолчанию 10 с) — SIGKILL всем
-процессам cgroup, включая ушедших в `setsid`/демонизированных потомков.
+A queued task is removed immediately. For a running task, the whole unit is
+stopped: systemd sends SIGTERM, and after `cancel_grace` (default 10 s) SIGKILL
+to all processes in the cgroup, including those that went into `setsid` and
+daemonized descendants.
 
-## Резервы
+## Reservations
 
-Резерв нужен, когда память занимает не сама команда, а то, что живёт дольше неё
-или вне её cgroup: compose-стенд (база, брокер, сервисы приложения) или
-контейнеры, которые тесты поднимают через testcontainers. Контейнеры работают в
-cgroup dockerd, лимиты задачи на них не действуют, и без резерва пул о них не
-знает. Резерв заранее занимает в пуле память (и, если нужно, CPU) стенда на
-заданный срок, а также бюджет для задач, которые будут работать со стендом.
+A reservation is needed when the memory is taken not by the command itself but
+by something that outlives it or lives outside its cgroup: a compose stand
+(database, broker, application services) or containers that tests start through
+testcontainers. Containers run in the dockerd cgroup, the task's limits do not
+apply to them, and without a reservation the pool does not know about them. A
+reservation takes the stand's memory (and CPU, if needed) in the pool in advance
+for a given time, along with a budget for the tasks that will work with the
+stand.
 
 ```sh
 cat > teardown.sh <<'EOF'
@@ -328,138 +343,147 @@ EOF
 
 out=$(aq reserve --memory 6G --cpus 2 --task-memory 4G --task-cpus 4 \
   --ttl 2h --teardown teardown.sh --docker-project myapp-e2e)
-# out: "<id> GRANTED" или "<id> QUEUED position=… blocked_by=…"
+# out: "<id> GRANTED" or "<id> QUEUED position=… blocked_by=…"
 id=${out%% *}
-aq wait "$id"                      # ждёт выдачи; код 0 = GRANTED/EXPIRING
-docker compose -p myapp-e2e up -d  # стенд поднимаем только после выдачи
+aq wait "$id"                      # waits for the grant; code 0 = GRANTED/EXPIRING
+docker compose -p myapp-e2e up -d  # bring the stand up only after the grant
 ```
 
-- `--memory` (обязательно) — память стенда; `--cpus` — CPU стенда (по
-  умолчанию 0).
-- `--task-memory` и `--task-cpus` — бюджет вложенных задач (`submit --within`),
-  задаются только вместе: минимум `64M` и 1 CPU.
-- `--ttl` (обязательно) — срок резерва, отсчитывается от выдачи; не больше
-  `max_ttl` (24 ч).
-- `--teardown` (обязательно) — файл скрипта снятия (до 64 KiB).
-- `--docker-project` — compose-проект стенда. Демон раз в 5 с замеряет через
-  `/var/run/docker.sock` память контейнеров с меткой
-  `com.docker.compose.project=<project>` и считает ещё не выбранной только
-  разницу между заявленным и замеренным. Без `--docker-project` весь `--memory`
-  стенда всё время жизни резерва считается невыбранным: это надёжно, но память
-  недоиспользуется. Один проект может принадлежать только одному незавершённому
-  резерву (пока тот не `TORN_DOWN`, `RELEASED` или `CANCELLED`). Если стенд
-  превысил заявленное, записывается уведомление.
-- `--name`, `--key`, `--session`, `--priority`, `--env K=V`, `--json` — как у
+- `--memory` (required): the stand's memory; `--cpus`: the stand's CPU
+  (default 0).
+- `--task-memory` and `--task-cpus`: the budget for nested tasks
+  (`submit --within`); they are set only together: minimum `64M` and 1 CPU.
+- `--ttl` (required): the reservation lifetime, counted from the grant; no more
+  than `max_ttl` (24 h).
+- `--teardown` (required): the teardown script file (up to 64 KiB).
+- `--docker-project`: the stand's compose project. Every 5 s the daemon
+  measures, through `/var/run/docker.sock`, the memory of containers labeled
+  `com.docker.compose.project=<project>` and counts as not yet used only the
+  difference between the declared and the measured amount. Without
+  `--docker-project`, the stand's whole `--memory` counts as unused for the
+  entire life of the reservation: this is safe, but memory is underused. One
+  project can belong to only one unfinished reservation (until it is
+  `TORN_DOWN`, `RELEASED` or `CANCELLED`). If the stand exceeded the declared
+  amount, a notification is recorded.
+- `--name`, `--key`, `--session`, `--priority`, `--env K=V`, `--json`: as for
   `submit`.
 
-Стенд и бюджет задач вместе занимают пул, пока резерв не освобождён. Резерв
-встаёт в очередь так же, как задача, а `aq reserve` отвечает после ближайшего
-прохода допуска: сразу `GRANTED`, если влез, иначе `QUEUED` с позицией и
-причиной ожидания.
+The stand and the task budget together occupy the pool until the reservation is
+released. A reservation is queued the same way as a task, and `aq reserve`
+answers after the nearest admission pass: `GRANTED` right away if it fit,
+otherwise `QUEUED` with the position and the reason for waiting.
 
-### Скрипт снятия
+### The teardown script
 
-При `reserve` клиент передаёт содержимое скрипта, и демон хранит его копию в
-`jobs/<id>/teardown.sh`. По истечении срока демон запускает `bash <копия>`
-отдельным unit `aq-teardown-<id>.service` в слайсе `aqtd.slice`: вне пула, с
-лимитами `teardown_memory`, 1 CPU и `teardown_timeout` (по умолчанию 5 мин).
-Скрипт должен быть:
+On `reserve`, the client sends the contents of the script, and the daemon keeps
+a copy in `jobs/<id>/teardown.sh`. When the lifetime ends, the daemon runs
+`bash <copy>` as a separate unit `aq-teardown-<id>.service` in the slice
+`aqtd.slice`: outside the pool, with the limits `teardown_memory`, 1 CPU and
+`teardown_timeout` (default 5 min). The script must be:
 
-- **самодостаточным** — не зависеть от файлов рабочего каталога: к моменту
-  снятия worktree может быть удалён. cwd скрипта — исходный каталог резерва,
-  если он ещё существует, иначе пустой служебный `jobs/<id>/teardown-<n>/cwd`;
-  исходный путь передаётся в `AQ_ORIGINAL_CWD`, id резерва — в
-  `AQ_RESERVATION_ID`;
-- **идемпотентным** — повторный запуск безопасен: `docker compose -p <project>
-  down`, а не «удалить то, что я создал».
+- **self-contained**: it must not depend on files in the working directory,
+  because the worktree may be deleted by the time of teardown. The script's cwd
+  is the reservation's original directory if it still exists, otherwise the
+  empty service directory `jobs/<id>/teardown-<n>/cwd`; the original path is
+  passed in `AQ_ORIGINAL_CWD`, and the reservation id in `AQ_RESERVATION_ID`;
+- **idempotent**: running it again is safe: `docker compose -p <project>
+  down`, not "delete what I created".
 
-Окружение скрипта захватывается при `reserve`: то же, что у `submit`, плюс
-`DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG` и `--env`.
+The script's environment is captured at `reserve`: the same as for `submit`,
+plus `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG` and `--env`.
 
-### Задачи на стенде: `submit --within`
+### Tasks on a stand: `submit --within`
 
-pytest против стенда, как и тесты, которые сами поднимают контейнеры через
-testcontainers, запускаются внутри резерва:
+pytest against a stand, like tests that start containers themselves through
+testcontainers, run inside a reservation:
 
 ```sh
 aq submit --within "$id" --memory 3G --cpus 4 --timeout 30m -- \
   bash -lc 'pytest -n "$AQ_CPUS" tests/e2e'
 ```
 
-Вложенная задача не проходит повторный допуск в пул и не стоит в очереди: она
-стартует сразу, в бюджете резерва. Если сумма `expected` неоконченных вложенных
-задач вместе с новой больше `--task-memory` или сумма их CPU больше
-`--task-cpus`, `submit` сразу отказывает (`REJECTED`, «task budget», код 5).
-Так два агента, получившие по резерву, не блокируют друг друга. Контейнеры,
-которые поднимает сама задача, живут в cgroup dockerd, а не задачи: заложите их
-память в `--memory` резерва (замер `--docker-project` видит только контейнеры
-compose-проекта), и пусть скрипт снятия убирает и их.
+A nested task does not go through admission to the pool again and does not wait
+in the queue: it starts immediately, within the reservation's budget. If the sum
+of `expected` of the unfinished nested tasks together with the new one exceeds
+`--task-memory`, or the sum of their CPUs exceeds `--task-cpus`, `submit`
+refuses at once (`REJECTED`, "task budget", code 5). This way two agents that
+each got a reservation do not block each other. Containers started by the task
+itself live in the dockerd cgroup, not the task's: include their memory in the
+reservation's `--memory` (the `--docker-project` measurement sees only the
+containers of the compose project), and have the teardown script remove them
+too.
 
-### Продление и освобождение
-
-```sh
-aq extend "$id" --ttl 1h   # срок истечёт не раньше чем через 1 ч от сейчас
-aq release "$id"           # стенд погашен самим агентом: освободить без скрипта
-```
-
-`extend` не прибавляет срок, а задаёт «не раньше чем сейчас + D», поэтому
-повтор безопасен; продлить можно в `GRANTED` и `EXPIRING`. `release`
-освобождает выданный резерв, если в нём нет неоконченных вложенных задач, а
-резерв из очереди отменяет (`CANCELLED`). `aq cancel` для резерва действует
-только в очереди.
-
-### Истечение и неудачное снятие
-
-- За `expiry_warning` (15 мин) до конца срока резерв переходит в `EXPIRING`, и
-  записывается предупреждение «продли или будет снят».
-- По истечении срока резерв переходит в `TEARING_DOWN` и запускается скрипт
-  снятия (одновременно не больше `teardown_concurrency`; остальные ждут слота в
-  `EXPIRING`). Код 0 → `TORN_DOWN`, память возвращается в пул.
-- Если в резерве ещё работают вложенные задачи, он не снимается: срок
-  сдвигается до их дедлайна (`started_at + timeout + 2 × cancel_grace`),
-  `aq status` показывает `ttl held: yes`, новые `--within` отклоняются.
-  Как только последняя вложенная задача закончилась, резерв снимается сразу,
-  не дожидаясь сдвинутого срока.
-- Ненулевой код, таймаут или OOM скрипта → `TEARDOWN_FAILED`; unit снятия
-  пропал без результата → `TEARDOWN_UNKNOWN`. В обоих случаях резерв
-  **остаётся в учёте пула**, автоматических повторов нет. Разберитесь со
-  стендом (`aq logs <id> --stream stderr` показывает логи последней попытки,
-  все попытки лежат в `jobs/<id>/teardown-<n>/`) и выберите:
+### Extending and releasing
 
 ```sh
-aq teardown --retry "$id"  # запустить скрипт снятия ещё раз
-aq release --force "$id"   # стенд убран вручную: освободить без скрипта
+aq extend "$id" --ttl 1h   # expiry will be no earlier than 1 h from now
+aq release "$id"           # the agent shut the stand down itself: release without the script
 ```
 
-Падение или перезапуск демона снятие не прерывают: unit работает сам, а новый
-демон забирает его результат.
+`extend` does not add to the lifetime; it sets "no earlier than now + D", so
+repeating it is safe; you can extend in `GRANTED` and `EXPIRING`. `release`
+releases a granted reservation if it has no unfinished nested tasks, and cancels
+a queued reservation (`CANCELLED`). `aq cancel` on a reservation works only
+while it is queued.
 
-Коды `aq wait` для резерва (возвращается, как только резерв вышел из очереди):
+### Expiry and failed teardown
 
-| Код | Значение |
+- `expiry_warning` (15 min) before the end of the lifetime, the reservation
+  moves to `EXPIRING`, and a warning is recorded: "extend or it will be torn
+  down".
+- When the lifetime ends, the reservation moves to `TEARING_DOWN` and the
+  teardown script runs (no more than `teardown_concurrency` at a time; the rest
+  wait for a slot in `EXPIRING`). Exit code 0 → `TORN_DOWN`, the memory returns
+  to the pool.
+- If nested tasks are still running in the reservation, it is not torn down: the
+  lifetime is pushed to their deadline (`started_at + timeout + 2 ×
+  cancel_grace`), `aq status` shows `ttl held: yes`, and new `--within`
+  submissions are rejected. As soon as the last nested task has finished, the
+  reservation is torn down immediately, without waiting for the pushed lifetime.
+- A nonzero exit code, timeout or OOM of the script → `TEARDOWN_FAILED`; the
+  teardown unit disappeared without a result → `TEARDOWN_UNKNOWN`. In both cases
+  the reservation **stays accounted in the pool**, and there are no automatic
+  retries. Sort out the stand (`aq logs <id> --stream stderr` shows the logs of
+  the last attempt; all attempts are in `jobs/<id>/teardown-<n>/`) and choose:
+
+```sh
+aq teardown --retry "$id"  # run the teardown script again
+aq release --force "$id"   # the stand was removed by hand: release without the script
+```
+
+A crash or restart of the daemon does not interrupt teardown: the unit runs on
+its own, and the new daemon picks up its result.
+
+`aq wait` codes for a reservation (returned as soon as the reservation leaves
+the queue):
+
+| Code | Meaning |
 |---|---|
-| 0 | `GRANTED`, `EXPIRING` — резерв выдан |
+| 0 | `GRANTED`, `EXPIRING`: the reservation is granted |
 | 4 | `CANCELLED` |
 | 5 | `REJECTED` |
-| 6 | резерв больше не удерживается: `RELEASED`, `TEARING_DOWN`, `TORN_DOWN`, `TEARDOWN_FAILED`, `TEARDOWN_UNKNOWN` |
+| 6 | the reservation is no longer held: `RELEASED`, `TEARING_DOWN`, `TORN_DOWN`, `TEARDOWN_FAILED`, `TEARDOWN_UNKNOWN` |
 
-Уведомления о выдаче из очереди, истечении и превышении заявки идут владельцу;
-истечение, удержание задачами, итог и принудительное снятие — оператору (см. ниже).
+Notifications about a grant from the queue, expiry and exceeding the declared
+amount go to the owner; expiry, holds by tasks, the outcome and forced teardown
+go to the operator (see below).
 
-## Уведомления
+## Notifications
 
-Клиент обнаруживает сессию по настроенному адаптеру с непустой `identity_env`:
-Codex (`CODEX_THREAD_ID`, push через `codex queue`) или Claude
-(`CLAUDE_CODE_SESSION_ID`, client-wait через фоновый `aq wait`). Если непусты
-переменные нескольких адаптеров (сессия запущена из шелла другого агента и
-унаследовала его переменную), aq не угадывает: submit/reserve завершаются с кодом
-64, MCP требует явные `client` и `session_id`. `--client NAME --session S` задают их явно; `--no-notify` у submit/reserve
-отключает только уведомления сессии. Без обнаруженной сессии CLI работает как
-`cli`. Указанный push-адаптер без сессии — ошибка; отсутствующая в PATH демона
-команда доставки отклоняет заявку до сохранения. PATH сервиса включает
+The client detects the session through a configured adapter with a non-empty
+`identity_env`: Codex (`CODEX_THREAD_ID`, push via `codex queue`) or Claude
+(`CLAUDE_CODE_SESSION_ID`, client-wait via a background `aq wait`). If the
+variables of several adapters are non-empty (the session was started from
+another agent's shell and inherited its variable), aq does not guess:
+submit/reserve exit with code 64, and MCP requires explicit `client` and
+`session_id`. `--client NAME --session S` set them explicitly; `--no-notify` on
+submit/reserve turns off only session notifications. Without a detected session
+the CLI works as `cli`. A push adapter that is named but has no session is an
+error; a delivery command missing from the daemon's PATH rejects the request
+before it is saved. The service PATH includes
 `%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
 
-Новый push-клиент добавляется без правки ядра:
+A new push client is added without changing the core:
 
 ```toml
 [[agents]]
@@ -469,31 +493,33 @@ delivery = "push"
 command = ["pi", "send", "{session}", "{text}"]
 ```
 
-Если есть хотя бы один `[[agents]]`, список **заменяет** умолчания целиком.
-Команда — argv без shell; также поддерживаются `{event_id}`, `{item_id}`,
-`{kind}`. `delivery = "client-wait"` требует пустую command.
+If there is at least one `[[agents]]`, the list **replaces** the defaults
+entirely. The command is argv with no shell; `{event_id}`, `{item_id}`, `{kind}`
+are also supported. `delivery = "client-wait"` requires an empty command.
 
-После submit/reserve Claude запускает `aq wait ID` с `run_in_background` и
-заканчивает ход; Codex получает пинг автоматически. `aq wait RES_ID --until
-expiring` ждёт предупреждения об истечении или превышении заявки стенда.
-Если он вернулся с `GRANTED`/`stand_over_declared`, обработайте и подтвердите
-событие, затем запустите этот waiter снова фоном для будущего истечения.
+After submit/reserve, Claude starts `aq wait ID` with `run_in_background` and
+ends its turn; Codex gets a ping automatically. `aq wait RES_ID --until
+expiring` waits for the warning about expiry or about the stand exceeding its
+declared amount. If it returned with `GRANTED`/`stand_over_declared`, handle and
+acknowledge the event, then start this waiter again in the background for the
+future expiry.
 
 ```sh
-aq list --mine             # свои активные + завершённые с неподтверждёнными событиями
-aq list --session SESSION  # явный фильтр
+aq list --mine             # own active items + finished ones with unacknowledged events
+aq list --session SESSION  # explicit filter
 aq result ITEM_ID
-aq ack EVENT_ID            # после записи результата в чек-пойнт
+aq ack EVENT_ID            # after the result is written to a checkpoint
 ```
 
-Событие атомарно сохраняется вместе с изменением состояния. Push/webhook
-повторяются с backoff и jitter до успешной доставки (sent); sent без ack
-повторно не будит сессию. Падение демона может дать дубль с тем же event_id:
-сверяйте квитанцию и пропускайте уже обработанные события. Ack до захвата
-события отменяет доставку, после захвата пинг ещё может прийти. `aq wait`
-показывает доставленные event IDs; прерванный waiter можно запустить снова.
+An event is saved atomically together with the state change. Push/webhook are
+retried with backoff and jitter until delivery succeeds (sent); sent without an
+ack does not wake the session again. A daemon crash can produce a duplicate with
+the same event_id: check the receipt and skip events that were already handled.
+An ack before the event is picked up cancels the delivery; after pickup, a ping
+may still arrive. `aq wait` shows the delivered event IDs; an interrupted waiter
+can be started again.
 
-Операторские тревоги включаются через конфиг:
+Operator alerts are enabled through the config:
 
 ```toml
 [webhook]
@@ -502,27 +528,28 @@ token_file = "/absolute/path/to/token"
 timeout = "10s"
 ```
 
-POST с `Content-Type: application/json`, `Idempotency-Key: EVENT_ID`, при токене
-`Authorization: Bearer TOKEN`. Токен читается заново при каждой попытке.
-Тело содержит `event_id, kind, audience, item_id, item_kind, item_name, state,
+A POST with `Content-Type: application/json`, `Idempotency-Key: EVENT_ID`, and
+with a token, `Authorization: Bearer TOKEN`. The token is re-read on every
+attempt. The body contains `event_id, kind, audience, item_id, item_kind, item_name, state,
 reason, project, session_id, client_type, detail, text, created_at` (RFC3339).
-Значений env, скрипта снятия и логов в уведомлениях нет; текст ограничен 8 KiB.
-Без URL операторские события сохраняются skipped. Через `give_up_after`
-неудачная доставка становится failed; сбой session-доставки создаёт
-`delivery_failed` оператору, сбой операторской — только логируется.
-Пороги и таймауты — в `[notify]` примера конфига. `aq doctor` показывает
-`ADAPTER_UNAVAILABLE`, `WEBHOOK_FAILING`, а также отключённый webhook.
+Notifications contain no env values, teardown script or logs; the text is
+limited to 8 KiB. Without a URL, operator events are saved as skipped. After
+`give_up_after`, a failed delivery becomes failed; a session delivery failure
+creates `delivery_failed` for the operator, an operator delivery failure is only
+logged. Thresholds and timeouts are in `[notify]` of the example config.
+`aq doctor` shows `ADAPTER_UNAVAILABLE`, `WEBHOOK_FAILING`, and also a disabled
+webhook.
 
 ## MCP
 
-Один бинарник работает как stdio MCP-сервер; демон должен быть запущен отдельно.
-Примеры подключения (выполните самостоятельно):
+The same binary works as a stdio MCP server; the daemon must be started
+separately. Connection examples (run them yourself):
 
 ```sh
 claude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
 ```
 
-В конфиге Codex:
+In the Codex config:
 
 ```toml
 [mcp_servers.aq]
@@ -531,62 +558,79 @@ args = ["mcp"]
 env_vars = ["XDG_RUNTIME_DIR"]
 ```
 
-Либо задайте `[mcp_servers.aq.env] AQ_RUNTIME_DIR = "/run/user/1000/agent-queue"`
-(для своего UID), при нестандартных путях также AQ_STATE_DIR и AQ_CONFIG.
-Codex 0.164 фильтрует окружение MCP: сессия автоматически не передаётся.
-Для `queue_submit`/`queue_reserve` передавайте **client и session_id** текущей
-сессии явно, либо осознанно `no_notify: true`. Неизвестная идентичность —
-ошибка, а не молчаливое отключение уведомлений. Если launcher передал правильную
-переменную сессии в MCP env явно, aq обнаружит её.
-[Матрица клиентов и фактические проверки](docs/notes/aq-clients.md).
+Or set `[mcp_servers.aq.env] AQ_RUNTIME_DIR = "/run/user/1000/agent-queue"`
+(for your own UID); with non-standard paths, also AQ_STATE_DIR and AQ_CONFIG.
+Codex 0.164 filters the MCP environment: the session is not passed automatically.
+For `queue_submit`/`queue_reserve`, pass the **client and session_id** of the
+current session explicitly, or deliberately `no_notify: true`. An unknown
+identity is an error, not a silent disabling of notifications. If the launcher
+passed the correct session variable in the MCP env explicitly, aq will detect
+it.
 
-Инструменты: queue_submit, queue_reserve, queue_extend, queue_release,
+Tools: queue_submit, queue_reserve, queue_extend, queue_release,
 queue_cancel, queue_status, queue_result, queue_list, queue_ack, queue_logs, queue_estimate.
-`cwd` и `teardown_file` абсолютные; queue_logs: tail 1..2000 (по умолчанию 200),
-без follow. MCP не будит простаивающую сессию: Claude всё ещё запускает
-`aq wait ID` фоном после постановки через MCP; Codex получает daemon push.
+`cwd` and `teardown_file` are absolute; queue_logs: tail 1..2000 (default 200),
+no follow. MCP does not wake an idle session: Claude still starts
+`aq wait ID` in the background after submitting through MCP; Codex gets the
+daemon push.
 
-## Хук
+## Hook
 
-`aq hook pretooluse` мягко напоминает о тяжёлой команде вне aq: pytest с `-n`,
-compose up/run, docker run. Он не обращается к демону, не блокирует и при ошибке
-молчит. Шаблоны — `[hook].patterns`. В счётчик hook-hits.jsonl пишутся только
-время, индекс шаблона и клиент, без текста команды; ротация после 1 MiB.
+`aq hook pretooluse` gently reminds about a heavy command run outside aq:
+pytest with `-n`, compose up/run, docker run. It does not contact the daemon,
+does not block, and stays silent on error. Patterns are in `[hook].patterns`.
+The hook-hits.jsonl counter records only the time, the pattern index and the
+client, without the command text; it rotates after 1 MiB.
 
-Установка не меняет настройки хуков. Вручную объедините нужный фрагмент
-[Claude](deploy/hooks/claude-settings.json) или [Codex](deploy/hooks/codex-hooks.json)
-с настройками клиента (не перезаписывайте существующие hooks). В обоих matcher
-`Bash`; Codex требует доверить новое определение через `/hooks`.
-Скилл aq ([Claude](deploy/skills/claude/aq/SKILL.md), [Codex](deploy/skills/codex/aq/SKILL.md))
-описывает, как агенту работать с aq: что считать тяжёлым, как оценить память,
-когда `submit`, а когда `reserve` со стендом, как получить результат и убрать за собой.
+Installation does not change hook settings. Merge the fragment you need,
+[Claude](deploy/hooks/claude-settings.json) or [Codex](deploy/hooks/codex-hooks.json),
+into the client's settings by hand (do not overwrite existing hooks). The
+matcher is `Bash` in both; Codex requires you to trust the new definition
+through `/hooks`.
+The aq skill ([Claude](deploy/skills/claude/aq/SKILL.md), [Codex](deploy/skills/codex/aq/SKILL.md))
+describes how an agent should work with aq: what counts as heavy, how to
+estimate memory, when to `submit` and when to `reserve` with a stand, how to get
+the result and clean up after itself.
 
-## Восстановление
+## Recovery
 
-- Если демон упал или был перезапущен, задачи продолжают работать сами; при
-  старте демон сверяет БД с systemd и забирает результаты завершившихся задач
-  (их записывает `ExecStopPost` unit задачи в `jobs/<id>/result.json`).
-  Задача, чей unit исчез без результата, получает `LOST`.
-- `systemd` перезапускает упавший демон сам (`Restart=on-failure`).
-- Пока демон восстанавливается, новые задачи не стартуют.
+- If the daemon crashed or was restarted, tasks keep running on their own; at
+  startup the daemon reconciles the DB with systemd and collects the results of
+  tasks that finished (the task unit's `ExecStopPost` writes them to
+  `jobs/<id>/result.json`). A task whose unit disappeared without a result gets
+  `LOST`.
+- `systemd` restarts a crashed daemon by itself (`Restart=on-failure`).
+- While the daemon is recovering, new tasks do not start.
 
-## Ограничения текущей версии
+## Limitations of the current version
 
-- Смерть сессии-владельца резерва не определяется; автоматического снятия по
-  этому признаку нет.
-- Оценки не гарантируют время старта; посекундные выборки CPU задач пока не собираются.
-- Только Linux с systemd и cgroup v2, только пользовательский режим.
+- The death of a reservation's owner session is not detected; there is no
+  automatic teardown on that basis.
+- Estimates do not guarantee a start time; per-second CPU samples of tasks are
+  not collected yet.
+- Linux with systemd and cgroup v2 only, user mode only.
 
-## Разработка
+## Development
 
 ```sh
 just build              # bin/aq
 just test               # go test -race ./...
-just test-integration   # go test -tags integration -p 1 ./... (реальный systemd)
-just test-install       # рецепты install/uninstall во временный каталог
+just test-integration   # go test -tags integration -p 1 ./... (real systemd)
+just test-install       # install/uninstall recipes into a temporary directory
 ```
 
-Интеграционные и e2e-тесты (`test/e2e/`) запускают настоящие units в отдельных
-слайсах `aqtest.slice` и `aqe2e.slice` с пулом 1 GiB (снятия резервов — в
-`aqtesttd.slice` и `aqe2etd.slice`) и после себя их останавливают;
-установленный `aq.service` им не нужен.
+The integration and e2e tests (`test/e2e/`) start real units in separate slices
+`aqtest.slice` and `aqe2e.slice` with a 1 GiB pool (reservation teardowns go in
+`aqtesttd.slice` and `aqe2etd.slice`) and stop them afterwards; the installed
+`aq.service` is not needed for them.
+
+## Further reading
+
+- [docs/architecture.md](docs/architecture.md) — how aq works and why: execution
+  model, admission and backfill, reservations, profiles, notifications,
+  recovery, design decisions and known limitations.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and change guidelines.
+
+## License
+
+[MIT](LICENSE)
