@@ -17,11 +17,11 @@ func cmdStats(c *cmdCtx, args []string) error {
 		args = args[1:]
 	}
 	fs := c.newFlagSet("stats")
-	since := fs.String("since", "7d", "history window")
+	since := fs.String("since", "7d", "history window `DURATION`, e.g. 1d or 12h")
 	asJSON := fs.Bool("json", false, "JSON output")
-	name := fs.String("profile", "", "profile filter")
-	format := fs.String("format", "jsonl", "jsonl|csv")
-	table := fs.String("table", "", "export table")
+	name := fs.String("profile", "", "only this profile `KEY` or task name")
+	format := fs.String("format", "jsonl", "export `FORMAT`: jsonl or csv")
+	table := fs.String("table", "", "export `TABLE`: items, runs, host, incidents, events or hook (csv needs one)")
 	pos, e := parseFlags(fs, args)
 	if e != nil {
 		return e
@@ -95,26 +95,12 @@ func cmdStats(c *cmdCtx, args []string) error {
 		return csvw.Error()
 	}
 	var v stats.Summary
-	if e = c.call(c.ctx, "stats", map[string]string{"since": at, "profile": *name}, &v); e != nil {
+	if e = c.call(c.ctx, "stats", map[string]string{"since": at, "profile": c.profileKey(*name)}, &v); e != nil {
 		return e
 	}
 	if *asJSON {
 		return printJSON(c, v)
 	}
-	printStats(c, v)
+	c.printStats(v)
 	return nil
-}
-func printStats(c *cmdCtx, v stats.Summary) {
-	fmt.Fprintf(c.stdout, "items:\n")
-	for _, g := range v.Items {
-		fmt.Fprintf(c.stdout, "  %s/%s: %d, outcomes %v, priority %v, wait p50/p90 %.1fs/%.1fs, run %.1fs/%.1fs\n", g.Kind, g.ClientType, g.Count, g.Outcomes, g.ByPriority, g.WaitP50, g.WaitP90, g.RunP50, g.RunP90)
-	}
-	fmt.Fprintln(c.stdout, "profiles:")
-	for _, p := range v.Profiles {
-		fmt.Fprintf(c.stdout, "  %s: %d runs, %d usable, %d OOM, %d timeouts, %d from profile, %d peak over expected; peak/expected p50/p90 %.2f/%.2f, duration/estimate %.2f/%.2f\n", p.Profile, p.Runs, p.Usable, p.OOM, p.Timeouts, p.MemoryFromProfile, p.PeakOverExpected, p.PeakToExpectedP50, p.PeakToExpectedP90, p.DurationToEstimateP50, p.DurationToEstimateP90)
-	}
-	if v.Profile != "" {
-		return
-	}
-	fmt.Fprintf(c.stdout, "queue: %+v\nhost: %+v\nreservations: %+v\ndelivery: %+v\nhook: %+v\nincidents: %+v\n", v.Queue, v.Host, v.Reservations, v.Delivery, v.Hook, v.Incidents)
 }

@@ -23,6 +23,10 @@ func cmdTop(c *cmdCtx, args []string) error {
 	if *asJSON {
 		return printJSON(c, v)
 	}
+	if c.ui.pretty {
+		c.prettyTop(v)
+		return nil
+	}
 	printTop(c, v)
 	return nil
 }
@@ -39,5 +43,9 @@ func printTop(c *cmdCtx, v daemon.TopView) {
 	}
 	p := v.Commitments
 	fmt.Fprintf(c.stdout, "commitments (pool %s / %d cpus): %s / %d cpus; tasks %s, stands %s, budgets %s; unconsumed %s\n", units.FormatSize(p.PoolMemory), p.PoolCPUs, units.FormatSize(p.Memory), p.CPUs, units.FormatSize(p.TasksExpected), units.FormatSize(p.Stands), units.FormatSize(p.Budgets), units.FormatSize(p.TasksUnconsumed+p.StandsUnconsumed+p.BudgetsUnconsumed+p.TeardownUnconsumed))
-	fmt.Fprintf(c.stdout, "queue: %d queued, %d running, %d held; head %s blocked by %s %s\n", v.Queue.Queued, v.Queue.Running, v.Queue.Held, v.Queue.HeadID, v.Queue.BlockedBy, v.Queue.BlockedDetail)
+	head := "none"
+	if v.Queue.HeadID != "" {
+		head = string(v.Queue.HeadID) + " blocked by " + blockedText(v.Queue.BlockedBy, v.Queue.BlockedDetail)
+	}
+	fmt.Fprintf(c.stdout, "queue: %d queued, %d running, %d held; head %s\n", v.Queue.Queued, v.Queue.Running, v.Queue.Held, head)
 }

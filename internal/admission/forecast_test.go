@@ -147,6 +147,7 @@ func TestPlanPassPrefixThenBackfill(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
 // Codex branch review r2: with one teardown slot, a backfilled reservation that
 // expires first would take the slot the head's holder needs.
 func TestPlanPassReservationWaitsForTeardownSlot(t *testing.T) {

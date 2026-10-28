@@ -13,7 +13,7 @@ func TestStatsText(t *testing.T) {
 	if code != 0 {
 		t.Fatal(code, out, errout)
 	}
-	for _, s := range []string{"items:", "profiles:", "queue:", "host:", "reservations:", "delivery:", "hook:", "incidents:"} {
+	for _, s := range []string{"aq stats", "Items", "Queue", "Hook hints", "Incidents"} {
 		if !strings.Contains(out, s) {
 			t.Fatal(out)
 		}

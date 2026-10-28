@@ -11,14 +11,14 @@ import (
 func cmdEstimate(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("estimate")
 	o := client.EstimateOptions{}
-	fs.StringVar(&o.Memory, "memory", "", "memory limit")
-	fs.StringVar(&o.Expected, "expected", "", "expected memory")
-	fs.StringVar(&o.Timeout, "timeout", "", "duration bound")
-	fs.StringVar(&o.Priority, "priority", "normal", "priority")
-	fs.StringVar(&o.Profile, "profile", "", "profile name")
-	fs.StringVar(&o.Name, "name", "", "task name")
-	fs.StringVar(&o.Project, "project", "", "project")
-	fs.IntVar(&o.CPUs, "cpus", 1, "CPUs")
+	fs.StringVar(&o.Memory, "memory", "", "memory `SIZE` limit (default: from the --name profile)")
+	fs.StringVar(&o.Expected, "expected", "", "expected memory `SIZE`")
+	fs.StringVar(&o.Timeout, "timeout", "", "timeout `DURATION`; bounds the duration when there is no history")
+	fs.StringVar(&o.Priority, "priority", "normal", "`P`riority: low, normal or high")
+	fs.StringVar(&o.Profile, "profile", "", "explicit profile `KEY`")
+	fs.StringVar(&o.Name, "name", "", "task `NAME`; selects the profile <repo root>:<name>")
+	fs.StringVar(&o.Project, "project", "", "project `DIR`")
+	fs.IntVar(&o.CPUs, "cpus", 1, "`N` CPUs")
 	asJSON := fs.Bool("json", false, "JSON output")
 	pos, e := parseFlags(fs, args)
 	if e != nil {
@@ -42,6 +42,10 @@ func cmdEstimate(c *cmdCtx, args []string) error {
 	if *asJSON {
 		return printJSON(c, v)
 	}
+	if c.ui.pretty {
+		c.prettyEstimate(v)
+		return nil
+	}
 	if v.StartsNow {
 		if v.Backfill {
 			fmt.Fprintln(c.stdout, "starts now (backfill)")
@@ -54,6 +58,10 @@ func cmdEstimate(c *cmdCtx, args []string) error {
 			fmt.Fprintln(c.stdout, "expected start unknown")
 		}
 	}
-	fmt.Fprintf(c.stdout, "memory: %s limit, %s expected\nduration: %s (%s)\nblocked by: %s %s\nconfidence: %s\n", units.FormatSize(v.Limit), units.FormatSize(v.Expected), secs(v.DurationSeconds), v.DurationSource, v.BlockedBy, v.BlockedDetail, v.Confidence)
+	fmt.Fprintf(c.stdout, "memory: %s limit, %s expected\nduration: %s (%s)\n", units.FormatSize(v.Limit), units.FormatSize(v.Expected), secs(v.DurationSeconds), v.DurationSource)
+	if v.BlockedBy != "" {
+		fmt.Fprintf(c.stdout, "blocked by: %s\n", blockedText(v.BlockedBy, v.BlockedDetail))
+	}
+	fmt.Fprintf(c.stdout, "confidence: %s\n", v.Confidence)
 	return nil
 }

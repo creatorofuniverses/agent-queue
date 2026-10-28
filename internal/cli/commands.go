@@ -61,7 +61,7 @@ func cmdDaemon(c *cmdCtx, args []string) error {
 func cmdStatus(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("status")
 	asJSON := fs.Bool("json", false, "print JSON")
-	id, err := parseID(fs, args)
+	id, err := c.parseItemID(fs, args)
 	if err != nil {
 		return err
 	}
@@ -72,6 +72,10 @@ func cmdStatus(c *cmdCtx, args []string) error {
 	if *asJSON {
 		return printJSON(c, v)
 	}
+	if c.ui.pretty {
+		c.prettyView(v, nil)
+		return nil
+	}
 	printView(c, v)
 	return nil
 }
@@ -79,7 +83,7 @@ func cmdStatus(c *cmdCtx, args []string) error {
 func cmdResult(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("result")
 	asJSON := fs.Bool("json", false, "print JSON")
-	id, err := parseID(fs, args)
+	id, err := c.parseItemID(fs, args)
 	if err != nil {
 		return err
 	}
@@ -89,6 +93,10 @@ func cmdResult(c *cmdCtx, args []string) error {
 	}
 	if *asJSON {
 		return printJSON(c, v)
+	}
+	if c.ui.pretty {
+		c.prettyView(v.ItemView, &v)
+		return nil
 	}
 	printView(c, v.ItemView)
 	if v.LogsPruned {
@@ -174,10 +182,10 @@ func secs(s float64) string {
 
 func cmdLogs(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("logs")
-	stream := fs.String("stream", "stdout", "stdout|stderr")
-	tail := fs.Int("tail", 100, "number of trailing lines (0 = all)")
+	stream := fs.String("stream", "stdout", "`STREAM`: stdout or stderr")
+	tail := fs.Int("tail", 100, "`N` trailing lines (0 = all)")
 	follow := fs.Bool("follow", false, "stream new lines until the task ends")
-	id, err := parseID(fs, args)
+	id, err := c.parseItemID(fs, args)
 	if err != nil {
 		return err
 	}
@@ -226,7 +234,7 @@ func cmdLogs(c *cmdCtx, args []string) error {
 func cmdCancel(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("cancel")
 	reason := fs.String("reason", "", "reason")
-	id, err := parseID(fs, args)
+	id, err := c.parseItemID(fs, args)
 	if err != nil {
 		return err
 	}
@@ -234,7 +242,7 @@ func cmdCancel(c *cmdCtx, args []string) error {
 	if err := c.call(c.ctx, "cancel", map[string]string{"id": id, "reason": *reason}, &v); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.stdout, "%s %s\n", v.ID, v.State)
+	fmt.Fprintf(c.stdout, "%s %s\n", v.ID, c.ui.stateText(v.State, v.Reason))
 	return nil
 }
 
@@ -265,6 +273,13 @@ func cmdList(c *cmdCtx, args []string) error {
 	}
 	if *asJSON {
 		return printJSON(c, views)
+	}
+	if c.ui.pretty {
+		c.prettyList(views, *all)
+		if *session != "" {
+			c.prettyEvents(views)
+		}
+		return nil
 	}
 	tw := tabwriter.NewWriter(c.stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\tKIND\tSTATE\tPRIORITY\tMEMORY\tEXPIRES\tSTART\tWAIT\tRUN\tBLOCKED_BY")
@@ -311,7 +326,7 @@ func cmdWait(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("wait")
 	until := fs.String("until", "", "wait condition: expiring (reservation only)")
 	asJSON := fs.Bool("json", false, "print JSON")
-	id, err := parseID(fs, args)
+	id, err := c.parseItemID(fs, args)
 	if err != nil {
 		return err
 	}
@@ -334,7 +349,7 @@ func cmdWait(c *cmdCtx, args []string) error {
 		}
 		return &exitError{code: ExitCodeFor(v)}
 	}
-	line := fmt.Sprintf("%s %s", v.ID, v.State)
+	line := fmt.Sprintf("%s %s", v.ID, c.ui.paintState(v.State))
 	if v.Reason != "" {
 		line += " " + string(v.Reason)
 	}

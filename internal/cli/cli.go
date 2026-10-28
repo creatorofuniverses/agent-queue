@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/config"
+	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/model"
 	"resource-dispatcher/internal/protocol"
 )
@@ -35,6 +37,9 @@ type cmdCtx struct {
 	env    func(string) string
 	stdout io.Writer
 	stderr io.Writer
+	ui     ui
+	// helpAsked: the user asked for help, so usage goes to stdout.
+	helpAsked bool
 }
 
 type command func(c *cmdCtx, args []string) error
@@ -64,27 +69,46 @@ func init() {
 		"teardown": cmdTeardown,
 		"doctor":   cmdDoctor,
 		"version":  cmdVersion,
+		"help":     cmdHelpCommand,
 	}
 }
 
-const usageText = `usage: aq <command> [flags]
-
-commands: stats top estimate profile daemon submit status result logs cancel list wait reserve extend release teardown doctor ack hook mcp version
-`
+func isHelpArg(a string) bool { return a == "-h" || a == "--help" || a == "-help" }
 
 // Main runs the aq CLI and returns the process exit code.
 func Main(args []string, env func(string) string, stdout, stderr io.Writer) int {
+	c := &cmdCtx{ctx: context.Background(), env: env, stdout: stdout, stderr: stderr, ui: detectUI(stdout, env)}
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usageText)
+		printOverview(c.ui, stderr)
 		return exitUsage
+	}
+	if isHelpArg(args[0]) {
+		printOverview(c.ui, stdout)
+		return exitOK
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {
-		fmt.Fprintf(stderr, "aq: unknown command %q\n%s", args[0], usageText)
+		fmt.Fprintf(stderr, "aq: unknown command %q; run 'aq help' for the list\n", args[0])
 		return exitUsage
 	}
-	c := &cmdCtx{ctx: context.Background(), env: env, stdout: stdout, stderr: stderr}
-	return exitCode(cmd(c, args[1:]), stderr)
+	rest := args[1:]
+	if args[0] == "help" && len(rest) > 0 {
+		args, rest = rest, []string{"--help"}
+		if cmd, ok = commands[args[0]]; !ok {
+			fmt.Fprintf(stderr, "aq: help: unknown command %q\n", args[0])
+			return exitUsage
+		}
+	}
+	if len(rest) > 0 && isHelpArg(rest[0]) {
+		c.helpAsked = true
+		switch args[0] {
+		case "version", "hook":
+			// No FlagSet of their own.
+			commandUsage(c.ui, stdout, args[0], flag.NewFlagSet(args[0], flag.ContinueOnError))
+			return exitOK
+		}
+	}
+	return exitCode(cmd(c, rest), stderr)
 }
 
 func exitCode(err error, stderr io.Writer) int {
@@ -126,7 +150,15 @@ func exitCode(err error, stderr io.Writer) int {
 // newFlagSet makes a FlagSet that reports errors through the returned error.
 func (c *cmdCtx) newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet("aq "+name, flag.ContinueOnError)
-	fs.SetOutput(c.stderr)
+	// The flag package's own messages are dropped: exitCode prints the error once.
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {
+		if c.helpAsked {
+			commandUsage(c.ui, c.stdout, name, fs)
+		} else {
+			fmt.Fprintf(c.stderr, "run 'aq help %s' for usage\n", name)
+		}
+	}
 	return fs
 }
 
@@ -159,6 +191,32 @@ func parseID(fs *flag.FlagSet, args []string) (string, error) {
 		return "", usagef("%s: expected exactly one ID", fs.Name())
 	}
 	return pos[0], nil
+}
+
+// parseItemID is parseID for a task or reservation ID; a unique prefix of at
+// least 4 characters (as aq list shows) stands for the full ID.
+func (c *cmdCtx) parseItemID(fs *flag.FlagSet, args []string) (string, error) {
+	id, err := parseID(fs, args)
+	if err != nil || len(id) >= 36 || len(id) < 4 {
+		return id, err
+	}
+	var views []daemon.ItemView
+	if err := c.call(c.ctx, "list", map[string]any{"all": true}, &views); err != nil {
+		return id, nil // the real request reports the daemon error
+	}
+	var match []string
+	for _, v := range views {
+		if strings.HasPrefix(string(v.ID), id) {
+			match = append(match, string(v.ID))
+		}
+	}
+	switch len(match) {
+	case 0:
+		return id, nil
+	case 1:
+		return match[0], nil
+	}
+	return "", usagef("ID prefix %s matches %d items; give more characters", id, len(match))
 }
 
 // paths resolves directories from the injected env (AQ_STATE_DIR, AQ_RUNTIME_DIR, AQ_CONFIG).

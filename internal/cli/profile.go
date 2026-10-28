@@ -2,6 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"strings"
+
+	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/daemon"
 	"resource-dispatcher/internal/units"
 	"text/tabwriter"
@@ -9,11 +13,15 @@ import (
 )
 
 func cmdProfile(c *cmdCtx, args []string) error {
-	if len(args) == 0 {
-		return usagef("profile: expected show P or list")
-	}
 	fs := c.newFlagSet("profile")
 	asJSON := fs.Bool("json", false, "JSON output")
+	if len(args) > 0 && isHelpArg(args[0]) {
+		_, e := parseFlags(fs, args)
+		return e
+	}
+	if len(args) == 0 {
+		return usagef("profile: expected show NAME or list")
+	}
 	pos, e := parseFlags(fs, args[1:])
 	if e != nil {
 		return e
@@ -24,11 +32,15 @@ func cmdProfile(c *cmdCtx, args []string) error {
 			return usagef("profile show: expected profile name")
 		}
 		var v daemon.ProfileView
-		if e = c.call(c.ctx, "profile_show", map[string]string{"profile": pos[0]}, &v); e != nil {
+		if e = c.call(c.ctx, "profile_show", map[string]string{"profile": c.profileKey(pos[0])}, &v); e != nil {
 			return e
 		}
 		if *asJSON {
 			return printJSON(c, v)
+		}
+		if c.ui.pretty {
+			c.prettyProfile(v)
+			return nil
 		}
 		printProfile(c, v)
 		return nil
@@ -42,6 +54,10 @@ func cmdProfile(c *cmdCtx, args []string) error {
 		}
 		if *asJSON {
 			return printJSON(c, vs)
+		}
+		if c.ui.pretty {
+			c.prettyProfiles(vs)
+			return nil
 		}
 		w := tabwriter.NewWriter(c.stdout, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(w, "PROFILE\tRUNS\tUSABLE\tLAST ENDED")
@@ -64,7 +80,20 @@ func printProfile(c *cmdCtx, v daemon.ProfileView) {
 	w := tabwriter.NewWriter(c.stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "ENDED\tSTATE\tDURATION\tPEAK\tP90\tUSABLE")
 	for _, r := range v.Runs {
-		fmt.Fprintf(w, "%s\t%s/%s\t%s\t%s\t%s\t%t\n", r.EndedAt.Format(time.RFC3339), r.State, r.Reason, secs(r.DurationSeconds), units.FormatSize(r.MemoryPeak), units.FormatSize(r.SampleP90), r.Usable)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%t\n", r.EndedAt.Format(time.RFC3339), stateReason(r.State, r.Reason), secs(r.DurationSeconds), units.FormatSize(r.MemoryPeak), units.FormatSize(r.SampleP90), r.Usable)
 	}
 	w.Flush()
+}
+
+// profileKey resolves a bare task name to <repo root>:<name> like aq submit
+// --name does; a full key (containing ':') is used as given.
+func (c *cmdCtx) profileKey(name string) string {
+	if name == "" || strings.Contains(name, ":") {
+		return name
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return name
+	}
+	return client.DefaultProfile(c.ctx, cwd, "", name)
 }

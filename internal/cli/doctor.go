@@ -122,9 +122,9 @@ func cmdDoctor(c *cmdCtx, args []string) error {
 	} else {
 		for _, ch := range checks {
 			if ch.OK {
-				fmt.Fprintf(c.stdout, "ok    %-14s %s\n", ch.Name, ch.Detail)
+				fmt.Fprintf(c.stdout, "%s  %-14s %s\n", c.ui.green(pad("ok", 4)), ch.Name, ch.Detail)
 			} else {
-				fmt.Fprintf(c.stdout, "FAIL  %-14s %s: %s\n", ch.Name, ch.Code, ch.Detail)
+				fmt.Fprintf(c.stdout, "%s  %-14s %s: %s\n", c.ui.red("FAIL"), ch.Name, ch.Code, ch.Detail)
 			}
 		}
 	}
