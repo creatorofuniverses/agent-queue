@@ -50,8 +50,8 @@ green. Run `just test-integration` when you touch the executor
   `just uninstall`, `just purge`, `systemctl --user … aq.service`, and do not
   edit `~/.config/agent-queue/`, `~/.local/state/agent-queue/`,
   `~/.config/systemd/user/aq.*` or `~/.local/bin/aq`. Other agents on the
-  machine may depend on the running daemon; a restart cuts their `aq wait`
-  waiters. Verify install changes with `just test-install`.
+  machine depend on the running daemon. Verify install changes with
+  `just test-install`.
 - **Do not run `TestE2ERealCodexQueue`** (leave `AQ_E2E_CODEX_THREAD` unset): it
   sends a real message into a Codex thread.
 - **No new dependencies** without an explicit request: the module has three

@@ -24,8 +24,9 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
-// Version is reported by ping.
-const Version = "0.1.0"
+// Version is reported by ping and aq version; release builds set it from git
+// (see the justfile's build recipe).
+var Version = "0.1.0-dev"
 
 // Run starts the daemon and blocks until ctx ends (returning nil) or startup
 // or serving fails. A recovery error is fatal: admission must not open on
@@ -103,6 +104,8 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if err := sched.Recover(ctx); err != nil {
 		return fmt.Errorf("recover: %w", err)
 	}
+	started := time.Now().UTC()
+	startRuntime(ctx, st, sched, router, started)
 	d.recovering.Store(false)
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -152,6 +155,8 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	<-schedDone
 	loops.Wait()
 	if ctx.Err() != nil {
+		// A clean stop (systemctl restart, say): keep what lives only in memory.
+		stopRuntime(st, sched, started, time.Now().UTC())
 		return nil
 	}
 	return err

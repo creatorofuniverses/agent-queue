@@ -97,17 +97,18 @@ func WebhookBody(m Message) ([]byte, error) {
 }
 
 // GongBody is a Gong /notify request: an HTML message for a person reading
-// Telegram, the event kind as the category and a level by severity.
+// Telegram, led by a status mark, the event kind as the category and a level by
+// severity.
 func GongBody(m Message) ([]byte, error) {
 	e := m.Event
-	title := string(e.Kind)
+	title := strings.ReplaceAll(string(e.Kind), "_", " ")
 	var lines []string
 	if it := m.Item; it != nil {
 		name := it.Name
 		if name == "" {
 			name = string(it.Kind)
 		}
-		title += ": " + name
+		title += " · " + name
 		st := string(it.State)
 		if it.Reason != "" && !strings.EqualFold(string(it.Reason), st) {
 			st += "/" + string(it.Reason)
@@ -123,7 +124,7 @@ func GongBody(m Message) ([]byte, error) {
 	if it := m.Item; it != nil {
 		lines = append(lines, "<code>aq result "+html.EscapeString(string(it.ID))+"</code>")
 	}
-	msg := "<b>aq · " + html.EscapeString(title) + "</b>"
+	msg := gongMark(m) + " <b>" + html.EscapeString(title) + "</b>"
 	if len(lines) > 0 {
 		msg += "\n" + strings.Join(lines, "\n")
 	}
@@ -132,6 +133,37 @@ func GongBody(m Message) ([]byte, error) {
 		Level    string `json:"level"`
 		Category string `json:"category"`
 	}{msg, gongLevel(e.Kind), string(e.Kind)})
+}
+
+// gongMark is a plain status mark that tells good from bad at a glance.
+func gongMark(m Message) string {
+	switch m.Event.Kind {
+	case model.EventTaskFinished:
+		if it := m.Item; it != nil {
+			switch it.State {
+			case model.StateSucceeded:
+				return "✅"
+			case model.StateCancelled:
+				return "⏹️"
+			}
+		}
+		return "❌"
+	case model.EventTeardownSucceeded, model.EventReservationGranted:
+		return "✅"
+	case model.EventTaskFailedInfra, model.EventTeardownFailed:
+		return "❌"
+	case model.EventTeardownUnknown:
+		return "❓"
+	case model.EventAdmissionClosed:
+		return "⏸️"
+	case model.EventReservationExpiring, model.EventReservationHeldByTask:
+		return "⏳"
+	case model.EventDaemonRestarted:
+		return "🔄"
+	case model.EventCleaningStuck, model.EventDeliveryFailed, model.EventReservationForceReleased, model.EventStandOverDeclared:
+		return "⚠️"
+	}
+	return "ℹ️"
 }
 
 func gongLevel(k model.EventKind) string {

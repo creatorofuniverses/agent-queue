@@ -138,6 +138,8 @@ func exitCode(err error, stderr io.Writer) int {
 		switch pe.Code {
 		case protocol.CodeBadRequest:
 			return exitUsage
+		case protocol.CodeUnavailable:
+			return exitUnavailable
 		case protocol.CodeRejected:
 			return exitInfra
 		}

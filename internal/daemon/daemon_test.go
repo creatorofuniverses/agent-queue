@@ -62,12 +62,13 @@ func (e *env) start(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	e.stop = cancel
-	e.done = make(chan error, 1)
-	go func() { e.done <- Run(ctx, e.paths, e.cfg, e.ex, e.host, e.meter, e.opts) }()
+	done := make(chan error, 1)
+	e.done = done
+	go func() { done <- Run(ctx, e.paths, e.cfg, e.ex, e.host, e.meter, e.opts) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-e.done:
+		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Error("daemon did not stop")
 		}

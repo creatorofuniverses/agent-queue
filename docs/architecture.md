@@ -206,10 +206,15 @@ succeeds. A recovery error causes the daemon to exit rather than schedule agains
 unreconciled state.
 
 Running tasks, queued work, reservations, and pending notifications survive a
-daemon restart. Client connections do not: restart `aq wait` or log-following
-commands after reconnecting. In-memory samples and host-guard timing are also
-lost, which can affect profile data and the classification of a memory kill
-around a restart.
+daemon restart. Client connections do not, but `aq wait` treats a refused socket,
+a dropped connection or an `UNAVAILABLE` answer (the daemon is shutting down) as
+a restart and reconnects with backoff for up to 10 minutes; `aq logs --follow`
+does not. On a clean stop the daemon saves the run samples of running tasks and
+the host-guard history in `runtime_state` and restores them after recovery; a
+crash loses them, which can affect profile data and the classification of a
+memory kill around it. Every restart is recorded as an operator event
+`daemon_restarted` with the version, whether the stop was clean and what was
+picked up.
 
 `aq top` separates physical memory use from scheduler commitments. These answer
 different questions—what is using RAM now, and what has been promised—and must

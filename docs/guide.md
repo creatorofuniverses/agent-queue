@@ -62,10 +62,9 @@ Directories can be overridden with environment variables: `BINDIR`, `UNITDIR`,
 the files.
 
 If the installed `aq` responds and the queue has tasks or reservations,
-`install`, `uninstall` and `purge` first show them and ask for confirmation
-(without a terminal they abort): tasks survive a daemon restart, but the agents'
-background `aq wait` processes are cut off, and the agents do not learn the
-result. `FORCE=1 just install` skips the question.
+`install`, `uninstall` and `purge` first list them. A restart is safe for them:
+tasks keep running, `aq wait` reconnects, and the daemon saves the in-memory run
+samples and guard history on a clean stop and restores them on start.
 
 Check after installation:
 
@@ -302,7 +301,13 @@ systemctl --user restart aq.service
 ```
 
 Running tasks are not interrupted when the daemon restarts: they are separate
-systemd units, and the new daemon picks up their state and results.
+systemd units, and the new daemon picks up their state and results. A waiting
+`aq wait` reconnects for up to 10 minutes (it prints
+`aq: lost the daemon (restart?); reconnecting` to stderr) and then reports the
+result as usual. On a clean stop the daemon saves the run samples of running
+tasks and the guard history, and restores them on start; after a crash they are
+lost. Each restart is an operator event `daemon_restarted` (version, clean or
+not, what was picked up), sent to the webhook if one is configured.
 
 ## OOM and other failures
 
@@ -549,7 +554,9 @@ webhook.
 To get the alerts in Telegram, run [Gong](https://github.com/creatorofuniverses/gong)
 with its own bot and set `format = "gong"`: aq then sends Gong's `/notify`
 request instead of its own JSON — an HTML message (kind, item, state, detail and
-`aq result ID`), `level` by severity (`error` for failed teardowns and
+`aq result ID`) led by a status mark (✅ done, ❌ failed, ⚠️ needs a look,
+⏸️ admission closed, ⏳ expiring or held, ❓ unknown, 🔄 daemon restarted),
+`level` by severity (`error` for failed teardowns and
 infrastructure failures, `warning` for closed admission, forced releases and
 oversized stands) and the event kind as `category`. Put Gong's `api_token` in
 `token_file`.
@@ -621,6 +628,8 @@ the result and clean up after itself.
   `jobs/<id>/result.json`). A task whose unit disappeared without a result gets
   `LOST`.
 - `systemd` restarts a crashed daemon by itself (`Restart=on-failure`).
+- `aq wait` survives a restart: it reconnects and reports the result. Operator
+  alerts get a `daemon_restarted` event saying whether the stop was clean.
 - While the daemon is recovering, new tasks do not start.
 
 ## Limitations of the current version

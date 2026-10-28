@@ -29,6 +29,9 @@ const (
 	CodeIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
 	CodeBadState            = "BAD_STATE"
 	CodeInternal            = "INTERNAL"
+	// CodeUnavailable: the daemon is shutting down; the request may be retried
+	// once it is back.
+	CodeUnavailable = "UNAVAILABLE"
 )
 
 // ErrDaemonUnavailable is returned by clients when the socket cannot be reached.

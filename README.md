@@ -106,8 +106,7 @@ work outside aq; they do not block commands.
 
 Follow the [notification setup](docs/guide.md#notifications) for completion delivery,
 and the [MCP](docs/guide.md#mcp) and [hook](docs/guide.md#hook) sections if you use them.
-A daemon restart preserves running jobs, but disconnects `aq wait` clients;
-start the wait again after reconnecting.
+A daemon restart preserves running jobs, and `aq wait` reconnects on its own.
 
 ## Results on a real workstation
 

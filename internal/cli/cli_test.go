@@ -51,10 +51,14 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-func (h *harness) startDaemon(t *testing.T) { t.Helper(); h.startDaemonCfg(t, nil) }
+func (h *harness) startDaemon(t *testing.T) (stop func()) {
+	t.Helper()
+	return h.startDaemonCfg(t, nil)
+}
 
 // startDaemonCfg starts the daemon after letting tweak adjust the config.
-func (h *harness) startDaemonCfg(t *testing.T, tweak func(*config.Config)) {
+// The returned stop shuts the daemon down and waits for it; it is also a cleanup.
+func (h *harness) startDaemonCfg(t *testing.T, tweak func(*config.Config)) (stop func()) {
 	t.Helper()
 	host := fake.NewHost()
 	host.Set(platform.MemInfo{Total: 64 * gib, Available: 64 * gib})
@@ -68,14 +72,18 @@ func (h *harness) startDaemonCfg(t *testing.T, tweak func(*config.Config)) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host, nil, daemon.Options{}) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Error("daemon did not stop")
-		}
-	})
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("daemon did not stop")
+			}
+		})
+	}
+	t.Cleanup(stop)
 	deadline := time.Now().Add(5 * time.Second)
 	for protocol.Call(context.Background(), h.paths.Socket(), "ping", nil, nil) != nil {
 		select {
@@ -88,6 +96,7 @@ func (h *harness) startDaemonCfg(t *testing.T, tweak func(*config.Config)) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	return stop
 }
 
 func (h *harness) run(args ...string) (code int, stdout, stderr string) {
@@ -273,6 +282,10 @@ func TestCancel(t *testing.T) {
 }
 
 func TestDaemonUnavailableExit69(t *testing.T) {
+	// wait first tries to reconnect (a restart), then gives up with 69.
+	old := waitReconnect
+	waitReconnect = 200 * time.Millisecond
+	defer func() { waitReconnect = old }()
 	h := newHarness(t)
 	for _, args := range [][]string{
 		{"status", "x"}, {"list"}, {"wait", "x"},

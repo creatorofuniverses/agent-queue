@@ -118,7 +118,10 @@ TTL runs out.
 
 ## When aq itself is in the way
 
-- `aq: daemon is not running` (69): tell the user; do not silently run the heavy
+- A daemon restart does not lose your wait: `aq wait` prints
+  `aq: lost the daemon (restart?); reconnecting` and keeps waiting for up to
+  10 minutes. Do not resubmit the work.
+- `aq: daemon is not running` (69) after that: tell the user; do not silently run the heavy
   command directly.
 - A sandbox cannot reach the socket: ask for approval to run the `aq` command on
   the host.

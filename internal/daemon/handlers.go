@@ -153,6 +153,10 @@ func mapErr(err error) error {
 
 func (d *server) handle(ctx context.Context, op string, args json.RawMessage, w protocol.StreamWriter) (any, error) {
 	res, err := d.dispatch(ctx, op, args, w)
+	if err != nil && ctx.Err() != nil {
+		// Shutdown cut the request short (a wait, say): tell the client to retry.
+		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "daemon is shutting down"}
+	}
 	return res, mapErr(err)
 }
 

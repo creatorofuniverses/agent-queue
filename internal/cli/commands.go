@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -20,6 +22,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/mcp"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform/linux"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
@@ -336,7 +339,7 @@ func cmdWait(c *cmdCtx, args []string) error {
 	ctx, stop := signal.NotifyContext(c.ctx, os.Interrupt)
 	defer stop()
 	var v daemon.ItemView
-	err = c.call(ctx, "wait", map[string]string{"id": id, "until": *until}, &v)
+	err = c.waitCall(ctx, map[string]string{"id": id, "until": *until}, &v)
 	if ctx.Err() != nil {
 		return &exitError{code: exitInterrupted, msg: "interrupted"}
 	}
@@ -374,6 +377,45 @@ func cmdWait(c *cmdCtx, args []string) error {
 		return &exitError{code: code}
 	}
 	return nil
+}
+
+// waitReconnect bounds how long aq wait keeps reconnecting to a restarting daemon.
+var waitReconnect = 10 * time.Minute
+
+// waitCall is the wait request made to survive a daemon restart: a refused
+// socket, a dropped connection or a daemon that is shutting down are retried
+// with backoff for up to waitReconnect, so a background waiter still delivers
+// the result. Any answer from a running daemon is final.
+func (c *cmdCtx) waitCall(ctx context.Context, args, out any) error {
+	var since time.Time
+	delay := 250 * time.Millisecond
+	for {
+		err := c.call(ctx, "wait", args, out)
+		if err == nil || ctx.Err() != nil || !daemonGone(err) {
+			return err
+		}
+		if since.IsZero() {
+			since = time.Now()
+			fmt.Fprintln(c.stderr, "aq: lost the daemon (restart?); reconnecting")
+		} else if time.Since(since) > waitReconnect {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, 5*time.Second)
+	}
+}
+
+func daemonGone(err error) bool {
+	var pe *protocol.Error
+	if errors.As(err, &pe) {
+		return pe.Code == protocol.CodeUnavailable
+	}
+	return errors.Is(err, protocol.ErrDaemonUnavailable) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
 }
 
 func shortID(id model.ItemID) string {

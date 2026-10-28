@@ -300,8 +300,10 @@ func TestE2ENotificationRSS(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer st.Close()
+	// 10 of the 11 wait behind the one in flight, plus the operator's
+	// daemon_restarted event for the killed daemon.
 	n, e := st.CountPending(context.Background())
-	if e != nil || n != 10 {
+	if e != nil || n != 11 {
 		t.Fatal(n, e)
 	}
 	holder := h.submit([]string{"--memory", "64M", "--cpus", "4", "--timeout", "2m"}, "sleep", "90")

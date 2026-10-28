@@ -83,6 +83,10 @@ func (s *Store) DeleteHistory(ctx context.Context, before time.Time) (int, error
 			return e
 		}
 		n = int(count)
+		// Daemon events (a restart, say) belong to no item.
+		if _, e = c.ExecContext(ctx, `DELETE FROM events WHERE item_id='' AND created_at<?`, fmtTime(before)); e != nil {
+			return e
+		}
 		if _, e = c.ExecContext(ctx, `DELETE FROM profile_runs WHERE ended_at<?`, fmtTime(before)); e != nil {
 			return e
 		}

@@ -237,6 +237,7 @@ const (
 	EventTeardownFailed           EventKind = "teardown_failed"
 	EventTeardownUnknown          EventKind = "teardown_unknown"
 	EventStandOverDeclared        EventKind = "stand_over_declared"
+	EventDaemonRestarted          EventKind = "daemon_restarted"
 )
 
 type Audience string

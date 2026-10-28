@@ -228,7 +228,32 @@ func TestWebhookGongFormat(t *testing.T) {
 	// Gong rejects unknown fields: exactly these three.
 	msg, _ := got["message"].(string)
 	if len(got) != 3 || got["level"] != "error" || got["category"] != "teardown_failed" ||
-		!strings.HasPrefix(msg, "<b>aq · teardown_failed: n1</b>") || !strings.Contains(msg, "&lt;stderr&gt; &amp; more") || strings.Contains(msg, "aq ack") {
+		!strings.HasPrefix(msg, "❌ <b>teardown failed · n1</b>") || !strings.Contains(msg, "&lt;stderr&gt; &amp; more") || strings.Contains(msg, "aq ack") {
 		t.Fatal(got)
+	}
+}
+
+func TestGongMarks(t *testing.T) {
+	m := message()
+	for kind, want := range map[model.EventKind]string{model.EventTeardownSucceeded: "✅", model.EventTeardownFailed: "❌", model.EventAdmissionClosed: "⏸️", model.EventDaemonRestarted: "🔄", model.EventStandOverDeclared: "⚠️", model.EventTeardownUnknown: "❓"} {
+		m.Event.Kind = kind
+		if got := gongMark(m); got != want {
+			t.Errorf("%s: %s, want %s", kind, got, want)
+		}
+	}
+	m.Event.Kind = model.EventTaskFinished
+	m.Item.State = model.StateSucceeded
+	if gongMark(m) != "✅" {
+		t.Error("succeeded task")
+	}
+	m.Item.State = model.StateFailed
+	if gongMark(m) != "❌" {
+		t.Error("failed task")
+	}
+	// A daemon event has no item.
+	m.Event.Kind, m.Item = model.EventDaemonRestarted, nil
+	b, _ := GongBody(m)
+	if !strings.Contains(string(b), `🔄 \u003cb\u003edaemon restarted\u003c/b\u003e`) {
+		t.Error(string(b))
 	}
 }

@@ -16,16 +16,15 @@ for dir in "$T/bin" "$T/units" "$T/conf" "$T/state" "$T/s1" "$T/s2"; do
 done
 run() { env "${opts[@]}" "$@" just "$recipe" </dev/null; }
 
-# A daemon with work in its queue stops install/uninstall unless FORCE is set.
+# A daemon with work in its queue is listed before the restart, which proceeds.
 mkdir -p "$T/bin"
 printf '#!/bin/sh\nprintf "ID  NAME  STATE\\nabc  tests  RUNNING\\n"\n' > "$T/bin/aq"
 chmod +x "$T/bin/aq"
 recipe=install
-if run 2>"$T/err"; then echo "install ran with a busy queue" >&2; exit 1; fi
+run 2>"$T/err"
 grep -q "1 queued or running" "$T/err"
-grep -q "FORCE=1" "$T/err"
-test ! -e "$T/units/aq.service"
-run FORCE=1 2>/dev/null
+grep -q "reconnect" "$T/err"
+test -f "$T/units/aq.service"
 
 # The real binary now answers "daemon not running" (69) for $T/run: no warning.
 run 2>"$T/err"

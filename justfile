@@ -15,16 +15,15 @@ loginctl := env("LOGINCTL", "loginctl")
 claude_skills := env("CLAUDE_SKILLS", home_directory() / ".claude/skills")
 codex_skills := env("CODEX_SKILLS", home_directory() / ".codex/skills")
 
-# FORCE=1 restarts or stops the daemon even with a non-empty queue.
-force := env("FORCE", "")
-
-[private]
 default:
     @just --list
 
+# Version from git (tag, commit, -dirty); 0.1.0-dev outside a git checkout.
+version := `git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev`
+
 # bin/aq
 build:
-    {{ go }} build -o bin/aq ./cmd/aq
+    {{ go }} build -ldflags "-X github.com/creatorofuniverses/agent-queue/internal/daemon.Version={{ version }}" -o bin/aq ./cmd/aq
 
 # go test -race ./...
 test:
@@ -38,32 +37,21 @@ test-integration:
 test-install:
     bash test/install_test.sh
 
-# Warns before restarting or stopping a daemon that still has work: tasks
-# survive a restart, but agents' background `aq wait` waiters are cut off.
+# Shows what is in flight before the daemon restarts or stops. A restart is safe:
+# tasks keep running and are picked up again, aq wait reconnects, and the
+# in-memory run samples are saved and restored.
 [private]
 check-idle action:
     #!/usr/bin/env bash
     set -euo pipefail
     aq="{{ bindir }}/aq"
     [ -x "$aq" ] || exit 0
-    out=$("$aq" list 2>/dev/null) || exit 0 # daemon not running: nothing to lose
+    out=$("$aq" list 2>/dev/null) || exit 0 # daemon not running
     n=$(($(printf '%s\n' "$out" | wc -l) - 1))
     [ "$n" -gt 0 ] || exit 0
-    echo "warning: aq still has $n queued or running item(s):" >&2
+    echo "note: {{ action }} aq with $n queued or running item(s):" >&2
     printf '%s\n' "$out" >&2
-    echo "{{ action }} the daemon now: tasks keep running and are picked up again," >&2
-    echo "but agents' background 'aq wait' waiters are cut off and miss the result." >&2
-    if [ -n "{{ force }}" ]; then
-        echo "FORCE is set: continuing." >&2
-        exit 0
-    fi
-    if [ -t 0 ]; then
-        read -r -p "Continue anyway? [y/N] " answer
-        case "$answer" in [yY]*) exit 0 ;; esac
-    else
-        echo "Not a terminal: rerun with FORCE=1 to continue." >&2
-    fi
-    exit 1
+    echo "Tasks keep running and are picked up again; waiting clients reconnect." >&2
 
 # build and install the binary, user units, config, skills; (re)start aq.service
 install: build (check-idle "restarting")

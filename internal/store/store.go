@@ -457,7 +457,6 @@ func (s *Store) AddIncident(ctx context.Context, inc model.Incident) error {
 	return err
 }
 
-// Incidents returns incidents at or after since, oldest first.
 // PSIClosedAt reports whether the latest pressure transition before at closed admission.
 func (s *Store) PSIClosedAt(ctx context.Context, at time.Time) (bool, error) {
 	var kind string
@@ -468,6 +467,7 @@ func (s *Store) PSIClosedAt(ctx context.Context, at time.Time) (bool, error) {
 	return kind == "psi_close", err
 }
 
+// Incidents returns incidents at or after since, oldest first.
 func (s *Store) Incidents(ctx context.Context, since time.Time) ([]model.Incident, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT at, kind, value, detail FROM incidents WHERE at >= ? ORDER BY at ASC, rowid ASC`,
 		fmtTime(since))
