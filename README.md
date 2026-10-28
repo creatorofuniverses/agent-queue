@@ -21,22 +21,22 @@
 
 - Linux с cgroup v2 и делегированными пользователю контроллерами `memory`, `cpu`, `pids`;
 - systemd ≥ 254 (пользовательский менеджер);
-- Go 1.26 для сборки.
+- Go 1.26 и [just](https://github.com/casey/just) для сборки.
 
 ## Установка
 
 ```sh
-make install
+just install
 ```
 
-`make install` собирает `bin/aq` и:
+`just install` собирает `bin/aq` и:
 
 - кладёт бинарник в `~/.local/bin/aq`;
 - кладёт `aq.service` и `aq.slice` в `~/.config/systemd/user/`;
 - копирует `deploy/config.example.toml` в `~/.config/agent-queue/config.toml`,
   только если конфига ещё нет (существующий не трогается);
 - выполняет `systemctl --user daemon-reload`, включает `aq.service` и
-  (пере)запускает его — повторный `make install` обновляет работающий демон;
+  (пере)запускает его — повторный `just install` обновляет работающий демон;
 - копирует скилл `aq` каждому агенту свой: `deploy/skills/claude/aq` в
   `~/.claude/skills/aq`, `deploy/skills/codex/aq` в `~/.codex/skills/aq` (пути
   меняются через `CLAUDE_SKILLS`/`CODEX_SKILLS`, пустое значение — не ставить);
@@ -48,9 +48,15 @@ make install
 умолчанию `16G` должно быть не больше `MemTotal` минус 10 % резерва, иначе демон
 не запустится (`CONFIG_INVALID`).
 
-Каталоги переопределяются переменными make: `BINDIR`, `UNITDIR`, `CONFDIR`,
+Каталоги переопределяются переменными окружения: `BINDIR`, `UNITDIR`, `CONFDIR`,
 `STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
-`make install SYSTEMCTL=true` только раскладывает файлы.
+`SYSTEMCTL=true just install` только раскладывает файлы.
+
+Если установленный `aq` отвечает и в очереди есть задачи или резервы, `install`,
+`uninstall` и `purge` сначала показывают их и спрашивают подтверждение (без
+терминала — прерываются): задачи переживают перезапуск демона, но фоновые
+`aq wait` агентов обрываются, и агенты не узнают результат. `FORCE=1 just install`
+пропускает вопрос.
 
 Проверка после установки:
 
@@ -68,11 +74,11 @@ systemctl --user status aq.service
 Удаление:
 
 ```sh
-make uninstall   # останавливает и выключает сервис, удаляет бинарник и units
-make purge       # то же плюс удаляет ~/.local/state/agent-queue (БД и логи)
+just uninstall   # останавливает и выключает сервис, удаляет бинарник и units
+just purge       # то же плюс удаляет ~/.local/state/agent-queue (БД и логи)
 ```
 
-`make uninstall` сохраняет БД, логи и конфиг. `make purge` удаляет состояние,
+`just uninstall` сохраняет БД, логи и конфиг. `just purge` удаляет состояние,
 но конфиг тоже оставляет.
 
 ## Запуск задач
@@ -555,9 +561,10 @@ compose up/run, docker run. Он не обращается к демону, не
 ## Разработка
 
 ```sh
-make build              # bin/aq
-make test               # go test -race ./...
-make test-integration   # go test -tags integration -p 1 ./... (реальный systemd)
+just build              # bin/aq
+just test               # go test -race ./...
+just test-integration   # go test -tags integration -p 1 ./... (реальный systemd)
+just test-install       # рецепты install/uninstall во временный каталог
 ```
 
 Интеграционные и e2e-тесты (`test/e2e/`) запускают настоящие units в отдельных

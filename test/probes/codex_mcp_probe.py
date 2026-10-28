@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Probe installed Codex MCP identity without model turns or live sessions.
 
-Run after make build. All Codex state is temporary under ignored bin/scratch.
+Run after just build. All Codex state is temporary under ignored bin/scratch.
 """
 import json
 import os
