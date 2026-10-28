@@ -71,7 +71,7 @@ func TestToolsListNames(t *testing.T) {
 			t.Fatal(v)
 		}
 	}
-	want := []string{"queue_submit", "queue_reserve", "queue_extend", "queue_release", "queue_cancel", "queue_status", "queue_result", "queue_list", "queue_ack", "queue_logs"}
+	want := []string{"queue_submit", "queue_reserve", "queue_extend", "queue_release", "queue_cancel", "queue_status", "queue_result", "queue_list", "queue_ack", "queue_logs", "queue_estimate"}
 	if len(names) != len(want) {
 		t.Fatal(names)
 	}
@@ -257,6 +257,24 @@ func TestMCPSubmitWithoutMemory(t *testing.T) {
 		return nil
 	}, nil)
 	if !called || out[0]["result"].(map[string]any)["isError"] == true {
+		t.Fatal(out)
+	}
+}
+
+func TestQueueEstimate(t *testing.T) {
+	out := serveText(t, tool("queue_estimate", map[string]any{"memory": "100M", "timeout": "1m"}), func(_ context.Context, op string, args, out any) error {
+		if op != "estimate" {
+			t.Fatal(op)
+		}
+		b, _ := json.Marshal(map[string]bool{"starts_now": true})
+		return json.Unmarshal(b, out)
+	}, nil)
+	r := out[0]["result"].(map[string]any)
+	if r["isError"] == true || r["structuredContent"].(map[string]any)["starts_now"] != true {
+		t.Fatal(out)
+	}
+	out = serveText(t, tool("queue_estimate", map[string]any{}), nil, nil)
+	if out[0]["result"].(map[string]any)["isError"] != true {
 		t.Fatal(out)
 	}
 }

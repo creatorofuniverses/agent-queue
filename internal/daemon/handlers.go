@@ -157,6 +157,8 @@ func (d *server) handle(ctx context.Context, op string, args json.RawMessage, w 
 
 func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, w protocol.StreamWriter) (any, error) {
 	switch op {
+	case "estimate":
+		return d.estimate(ctx, args)
 	case "profile_show":
 		return d.profileShow(ctx, args)
 	case "profile_list":

@@ -208,3 +208,51 @@ func validEnvName(k string) bool {
 	}
 	return true
 }
+
+type EstimateOptions struct {
+	Cwd, Memory, Expected, Timeout, Priority, Profile, Name, Project string
+	CPUs                                                             int
+}
+
+func BuildEstimate(ctx context.Context, o EstimateOptions) (daemon.EstimateArgs, error) {
+	var a daemon.EstimateArgs
+	var e error
+	a.Profile = o.Profile
+	if a.Profile == "" {
+		a.Profile = DefaultProfile(ctx, o.Cwd, o.Project, o.Name)
+	}
+	if a.Profile != "" {
+		if e = profile.ValidName(a.Profile); e != nil {
+			return a, usagef("estimate: %v", e)
+		}
+	}
+	if o.Memory == "" && a.Profile == "" {
+		return a, usagef("estimate: --memory or --name/--profile is required")
+	}
+	if o.Memory != "" {
+		if a.Limit, e = units.ParseSize(o.Memory); e != nil {
+			return a, usagef("estimate: --memory: %v", e)
+		}
+	}
+	if o.Expected != "" {
+		if a.Expected, e = units.ParseSize(o.Expected); e != nil {
+			return a, usagef("estimate: --expected: %v", e)
+		}
+	}
+	if o.Timeout != "" {
+		d, err := units.ParseDuration(o.Timeout)
+		if err != nil || d < time.Second {
+			return a, usagef("estimate: invalid --timeout")
+		}
+		a.TimeoutSeconds = int64(d / time.Second)
+	}
+	if o.CPUs < 1 {
+		return a, usagef("estimate: --cpus must be at least 1")
+	}
+	a.CPUs = o.CPUs
+	if _, e = model.ParsePriority(o.Priority); e != nil {
+		return a, usagef("estimate: %v", e)
+	}
+	a.Priority = o.Priority
+	return a, nil
+}

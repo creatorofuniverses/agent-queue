@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"resource-dispatcher/internal/client"
 	"resource-dispatcher/internal/config"
@@ -52,7 +53,10 @@ func toolDefinitions() []toolDef {
 	logs := obj([]string{"id", "stream"}, []string{"id"})
 	logs["properties"].(map[string]any)["stream"] = map[string]any{"type": "string", "enum": []string{"stdout", "stderr"}}
 	logs["properties"].(map[string]any)["tail"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 2000, "default": 200}
+	estimate := obj([]string{"memory", "expected", "timeout", "priority", "profile", "name", "cwd", "project"}, []string{})
+	estimate["properties"].(map[string]any)["cpus"] = map[string]any{"type": "integer"}
 	return []toolDef{
+		{"queue_estimate", "Forecast admission without submitting.", estimate},
 		{"queue_submit", "Queue a command with memory and time limits. " + wakeDescription, submit},
 		{"queue_reserve", "Reserve a stand and task budget with a teardown script. " + wakeDescription, reserve},
 		{"queue_extend", "Extend a granted reservation.", obj([]string{"id", "ttl"}, []string{"id", "ttl"})},
@@ -197,6 +201,21 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 	var args any
 	op := ""
 	switch name {
+	case "queue_estimate":
+		cpus := 1
+		if a.CPUs != nil {
+			cpus = *a.CPUs
+		}
+		cwd := a.Cwd
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+		v, e := client.BuildEstimate(ctx, client.EstimateOptions{Cwd: cwd, Memory: a.Memory, Expected: a.Expected, Timeout: a.Timeout, Priority: a.Priority, Profile: a.Profile, Name: a.Name, Project: a.Project, CPUs: cpus})
+		if e != nil {
+			return toolError(e)
+		}
+		args = v
+		op = "estimate"
 	case "queue_submit", "queue_reserve":
 		id, err := client.DetectIdentity(agents, env, a.Client, a.SessionID)
 		if errors.Is(err, client.ErrAmbiguousIdentity) {
