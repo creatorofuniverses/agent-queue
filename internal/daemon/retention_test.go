@@ -220,3 +220,19 @@ func TestRetentionSweepsReadOnlyTmpDir(t *testing.T) {
 	}
 	requirePath(t, p.TmpDir(it.ID), false)
 }
+
+// A temp root replaced by a symlink (to the home dir, the job dirs, anywhere)
+// must not be swept: the entries behind it are not ours to delete.
+func TestRetentionSkipsReplacedTmpRoot(t *testing.T) {
+	s, p, cfg, now := retentionEnv(t)
+	victim := t.TempDir()
+	keep := filepath.Join(victim, "old-entry")
+	os.Mkdir(keep, 0o700)
+	os.Chtimes(keep, now.Add(-2*time.Hour), now.Add(-2*time.Hour))
+	p.TmpRoot = filepath.Join(t.TempDir(), "aq-1000")
+	os.Symlink(victim, p.TmpRoot)
+	if e := retentionStep(t.Context(), s, p, cfg, now); e != nil {
+		t.Fatal(e)
+	}
+	requirePath(t, keep, true)
+}

@@ -86,7 +86,11 @@ Startup locks prevent two daemons from managing the same runtime directory or sl
    the task's temporary directory, so tmpfs pages never outlive the task outside
    any accounting. Removal restores owner write permission on directories a
    task made read-only (never following symlinks); the scheduler and retention
-   use the same routine as fallbacks.
+   use the same routine as fallbacks. Every removal and sweep first opens the
+   temp root as a file descriptor through its parent and checks it is a real
+   directory owned by the user and writable by no one else; a root replaced by
+   a symlink or a foreign directory is left alone, so cleanup can never reach
+   files the link points at.
 6. **Release resources.** The scheduler waits for the cgroup to become empty
    before finalizing the task and returning its resources to the pool.
 

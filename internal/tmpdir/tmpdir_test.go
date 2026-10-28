@@ -63,14 +63,15 @@ func TestEnsureRootTransientErrorIsNotUntrusted(t *testing.T) {
 	}
 }
 
-func TestRemoveAllReadOnlyDirs(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "task")
+func TestRemoveInReadOnlyDirs(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "task")
 	sub := filepath.Join(dir, "ro", "deeper")
 	os.MkdirAll(sub, 0o700)
 	os.WriteFile(filepath.Join(sub, "big"), []byte("x"), 0o400)
 	os.Chmod(sub, 0o500)
 	os.Chmod(filepath.Join(dir, "ro"), 0o000)
-	if err := RemoveAll(dir); err != nil {
+	if err := RemoveIn(root, "task", os.Getuid()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
@@ -78,19 +79,20 @@ func TestRemoveAllReadOnlyDirs(t *testing.T) {
 	}
 }
 
-func TestRemoveAllDoesNotFollowSymlinks(t *testing.T) {
+func TestRemoveInDoesNotFollowSymlinks(t *testing.T) {
 	outside := t.TempDir()
 	os.WriteFile(filepath.Join(outside, "keep"), nil, 0o600)
 	os.Chmod(outside, 0o500)
 	t.Cleanup(func() { os.Chmod(outside, 0o700) })
-	dir := filepath.Join(t.TempDir(), "task")
+	root := t.TempDir()
+	dir := filepath.Join(root, "task")
 	os.Mkdir(dir, 0o700)
 	os.Symlink(outside, filepath.Join(dir, "link"))
 	ro := filepath.Join(dir, "ro")
 	os.Mkdir(ro, 0o700)
 	os.WriteFile(filepath.Join(ro, "f"), nil, 0o600)
 	os.Chmod(ro, 0o500)
-	if err := RemoveAll(dir); err != nil {
+	if err := RemoveIn(root, "task", os.Getuid()); err != nil {
 		t.Fatal(err)
 	}
 	if perm(t, outside) != 0o500 {
@@ -101,9 +103,83 @@ func TestRemoveAllDoesNotFollowSymlinks(t *testing.T) {
 	}
 }
 
-func TestRemoveAllMissing(t *testing.T) {
-	if err := RemoveAll(filepath.Join(t.TempDir(), "gone")); err != nil {
+func TestRemoveInMissing(t *testing.T) {
+	root := t.TempDir()
+	if err := RemoveIn(root, "gone", os.Getuid()); err != nil {
 		t.Fatal(err)
+	}
+	if err := RemoveIn(filepath.Join(root, "no-root"), "gone", os.Getuid()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoveInRejectsPaths(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"", ".", "..", "a/b", "../x"} {
+		if err := RemoveIn(root, name, os.Getuid()); err == nil {
+			t.Fatalf("%q accepted", name)
+		}
+	}
+}
+
+// A root replaced by a symlink, absolute or relative, must not be cleaned: the
+// link could point at the home dir or the job dirs. Nothing behind it goes.
+func TestOpenRefusesReplacedRoot(t *testing.T) {
+	parent := t.TempDir()
+	victim := t.TempDir()
+	sibling := filepath.Join(parent, "sibling")
+	for _, d := range []string{victim, sibling} {
+		os.MkdirAll(filepath.Join(d, "keep"), 0o700)
+	}
+	cases := map[string]string{"absolute": victim, "relative": "sibling"}
+	for name, target := range cases {
+		root := filepath.Join(parent, "aq-"+name)
+		os.Symlink(target, root)
+		if d, err := Open(root, os.Getuid()); err == nil || !errors.Is(err, ErrUntrusted) {
+			if d != nil {
+				d.Close()
+			}
+			t.Fatalf("%s: want ErrUntrusted, got %v", name, err)
+		}
+		if err := RemoveIn(root, "keep", os.Getuid()); err == nil {
+			t.Fatalf("%s: removal through a replaced root reported success", name)
+		}
+	}
+	for _, d := range []string{victim, sibling} {
+		if _, err := os.Stat(filepath.Join(d, "keep")); err != nil {
+			t.Fatal("removed through a replaced root", d, err)
+		}
+	}
+}
+
+// Group- or world-writable roots can be swapped from under us: refuse them.
+func TestOpenRefusesWritableByOthers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "aq")
+	os.Mkdir(root, 0o700)
+	os.Chmod(root, 0o777)
+	if _, err := Open(root, os.Getuid()); !errors.Is(err, ErrUntrusted) {
+		t.Fatalf("want ErrUntrusted, got %v", err)
+	}
+}
+
+func TestDirEntriesAndRemove(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "a", "b"), 0o700)
+	os.WriteFile(filepath.Join(root, "f"), nil, 0o600)
+	d, err := Open(root, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ents, err := d.Entries()
+	if err != nil || len(ents) != 2 {
+		t.Fatal(ents, err)
+	}
+	if err := d.Remove("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "a")); !os.IsNotExist(err) {
+		t.Fatal("entry left behind", err)
 	}
 }
 

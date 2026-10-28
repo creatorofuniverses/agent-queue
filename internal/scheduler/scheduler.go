@@ -359,7 +359,7 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...mo
 		delete(s.lastStop, it.ID)
 		tmp := s.d.Paths.TmpDir(it.ID)
 		s.background(func() {
-			if err := tmpdir.RemoveAll(tmp); err != nil {
+			if err := tmpdir.RemoveIn(filepath.Dir(tmp), filepath.Base(tmp), os.Getuid()); err != nil {
 				slog.Warn("scheduler: remove temp dir", "dir", tmp, "err", err)
 			}
 		})

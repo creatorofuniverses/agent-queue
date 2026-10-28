@@ -156,7 +156,7 @@ func Main(sub string, args []string) int {
 		// After recording, so memory.peak still includes the temp files; on tmpfs
 		// their pages would otherwise outlive the task outside any accounting.
 		if len(args) == 2 {
-			if err := tmpdir.RemoveAll(args[1]); err != nil {
+			if err := tmpdir.RemoveIn(filepath.Dir(args[1]), filepath.Base(args[1]), os.Getuid()); err != nil {
 				os.Stderr.WriteString("aq _record-result: remove temp dir: " + err.Error() + "\n")
 			}
 		}

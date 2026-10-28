@@ -126,3 +126,20 @@ func TestRecordResultRemovesReadOnlyTmpDir(t *testing.T) {
 		t.Fatal("read-only tmp dir left behind", err)
 	}
 }
+
+// A temp root swapped for a symlink after launch must not let the recorder
+// delete what the link points at.
+func TestRecordResultKeepsDirBehindReplacedRoot(t *testing.T) {
+	job, victim := t.TempDir(), t.TempDir()
+	keep := filepath.Join(victim, "x")
+	os.Mkdir(keep, 0o700)
+	root := filepath.Join(t.TempDir(), "aq-1000")
+	os.Symlink(victim, root)
+	Main("_record-result", []string{job, filepath.Join(root, "x")})
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatal("removed through a replaced root", err)
+	}
+	if r, err := ReadResultFile(job); r == nil || err != nil {
+		t.Fatal("result not recorded", r, err)
+	}
+}

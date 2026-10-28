@@ -1007,3 +1007,24 @@ func TestTerminalRemovesReadOnlyTmpDir(t *testing.T) {
 		t.Fatal("read-only temp dir kept")
 	}
 }
+
+// A temp root replaced by a symlink must not let the fallback removal delete
+// what the link points at.
+func TestTerminalKeepsDirBehindReplacedTmpRoot(t *testing.T) {
+	e := newEnv(t, nil)
+	victim := t.TempDir()
+	e.paths.TmpRoot = filepath.Join(t.TempDir(), "aq-1000")
+	os.Symlink(victim, e.paths.TmpRoot)
+	e.host.SetFS(platform.FSUsage{Free: 8 * gib, InodesFree: 1 << 20, Tmpfs: true}, nil)
+	e.rebuild(t, e.ex, true)
+	e.ex.FailLaunch(errors.New("systemd-run exploded"))
+	it := e.submit(t, e.req(gib))
+	keep := filepath.Join(victim, string(it.ID))
+	os.Mkdir(keep, 0o700)
+	e.tick(t)
+	e.wantState(t, it.ID, model.StateFailed, model.ReasonLaunchFailed)
+	e.settle()
+	if !exists(t, keep) {
+		t.Fatal("removed through a replaced temp root")
+	}
+}

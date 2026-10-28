@@ -303,7 +303,7 @@ func (s *Scheduler) settleTeardownLocked(ctx context.Context, it *model.Item, pr
 	delete(s.launchFailed, it.ID)
 	tmp := s.d.Paths.TeardownTmpDir(it.ID, it.TeardownAttempt)
 	s.background(func() {
-		if err := tmpdir.RemoveAll(tmp); err != nil {
+		if err := tmpdir.RemoveIn(filepath.Dir(tmp), filepath.Base(tmp), os.Getuid()); err != nil {
 			slog.Warn("scheduler: remove teardown temp dir", "dir", tmp, "err", err)
 		}
 	})

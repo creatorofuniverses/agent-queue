@@ -68,48 +68,8 @@ func retentionStep(ctx context.Context, st *store.Store, paths config.Paths, cfg
 		sweep = append(sweep, struct{ subdir, dir string }{"tmp", paths.TmpRoot})
 	}
 	for _, sw := range sweep {
-		subdir, dir := sw.subdir, sw.dir
-		entries, e := os.ReadDir(dir)
-		if os.IsNotExist(e) {
-			continue
-		}
-		if e != nil {
+		if e := sweepOrphans(ctx, st, sw.subdir, sw.dir, active, now); e != nil {
 			return e
-		}
-		for _, entry := range entries {
-			if e := ctx.Err(); e != nil {
-				return e
-			}
-			info, e := entry.Info()
-			if e != nil {
-				continue
-			}
-			if !info.ModTime().Before(now.Add(-time.Hour)) {
-				continue
-			}
-			id := entry.Name()
-			if subdir == "tmp" {
-				if rest, ok := strings.CutPrefix(id, "teardown-"); ok {
-					if i := strings.LastIndex(rest, "-"); i >= 0 {
-						id = rest[:i]
-					}
-				}
-				if active[model.ItemID(id)] {
-					continue
-				}
-			} else {
-				has, e := st.HasItem(ctx, model.ItemID(id))
-				if e != nil {
-					return e
-				}
-				if has {
-					continue
-				}
-			}
-			// Temp dirs may hold read-only dirs a task left; job dirs are ours.
-			if e = tmpdir.RemoveAll(filepath.Join(dir, entry.Name())); e != nil {
-				slog.Warn("retention: remove orphan", "path", filepath.Join(dir, entry.Name()), "err", e)
-			}
 		}
 	}
 	candidates, e := st.PruneCandidates(ctx)
@@ -173,4 +133,79 @@ func retentionStep(ctx context.Context, st *store.Store, paths config.Paths, cfg
 		return e
 	}
 	return st.DeleteHostSamples(ctx, now.Add(-cfg.Retention.SamplesMaxAge))
+}
+
+// sweepOrphans removes entries of dir older than an hour that belong to no
+// active item (tmp) or to no item at all (jobs). Temp roots may sit in a shared
+// /tmp, so they are opened through tmpdir: a root replaced by a symlink or a
+// foreign dir is skipped with a warning, and nothing outside it is touched.
+func sweepOrphans(ctx context.Context, st *store.Store, subdir, dir string, active map[model.ItemID]bool, now time.Time) error {
+	if subdir == "jobs" {
+		entries, e := os.ReadDir(dir)
+		if os.IsNotExist(e) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		for _, entry := range entries {
+			if e := ctx.Err(); e != nil {
+				return e
+			}
+			if !old(entry, now) {
+				continue
+			}
+			has, e := st.HasItem(ctx, model.ItemID(entry.Name()))
+			if e != nil {
+				return e
+			}
+			if has {
+				continue
+			}
+			if e = os.RemoveAll(filepath.Join(dir, entry.Name())); e != nil {
+				slog.Warn("retention: remove orphan", "path", filepath.Join(dir, entry.Name()), "err", e)
+			}
+		}
+		return nil
+	}
+	d, e := tmpdir.Open(dir, os.Getuid())
+	if errors.Is(e, fs.ErrNotExist) {
+		return nil
+	}
+	if e != nil {
+		slog.Warn("retention: temp root not swept", "dir", dir, "err", e)
+		return nil
+	}
+	defer d.Close()
+	entries, e := d.Entries()
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if e := ctx.Err(); e != nil {
+			return e
+		}
+		if !old(entry, now) {
+			continue
+		}
+		id := entry.Name()
+		if rest, ok := strings.CutPrefix(id, "teardown-"); ok {
+			if i := strings.LastIndex(rest, "-"); i >= 0 {
+				id = rest[:i]
+			}
+		}
+		if active[model.ItemID(id)] {
+			continue
+		}
+		// Temp dirs may hold read-only dirs a task left.
+		if e = d.Remove(entry.Name()); e != nil {
+			slog.Warn("retention: remove orphan", "path", filepath.Join(dir, entry.Name()), "err", e)
+		}
+	}
+	return nil
+}
+
+func old(entry fs.DirEntry, now time.Time) bool {
+	info, e := entry.Info()
+	return e == nil && info.ModTime().Before(now.Add(-time.Hour))
 }
