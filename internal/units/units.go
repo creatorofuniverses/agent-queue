@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -65,4 +66,38 @@ func FormatSize(b uint64) string {
 		return fmt.Sprintf("%d KiB", b/kib)
 	}
 	return fmt.Sprintf("%d B", b)
+}
+
+// ParseDuration accepts Go durations with an optional leading whole number of days.
+func ParseDuration(s string) (time.Duration, error) {
+	bad := func() (time.Duration, error) { return 0, fmt.Errorf("invalid duration %q", s) }
+	if s == "" || strings.ContainsAny(s, "+-") {
+		return bad()
+	}
+	var days time.Duration
+	rest := s
+	if i := strings.IndexByte(s, 'd'); i >= 0 {
+		if i == 0 {
+			return bad()
+		}
+		for _, c := range s[:i] {
+			if c < '0' || c > '9' {
+				return bad()
+			}
+		}
+		n, e := strconv.ParseUint(s[:i], 10, 64)
+		if e != nil || n > uint64(math.MaxInt64/int64(24*time.Hour)) {
+			return bad()
+		}
+		days = time.Duration(n) * 24 * time.Hour
+		rest = s[i+1:]
+		if rest == "" {
+			return days, nil
+		}
+	}
+	d, e := time.ParseDuration(rest)
+	if e != nil || d < 0 || d > time.Duration(math.MaxInt64)-days {
+		return bad()
+	}
+	return days + d, nil
 }

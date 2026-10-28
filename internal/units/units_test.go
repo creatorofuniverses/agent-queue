@@ -1,6 +1,9 @@
 package units
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseSize(t *testing.T) {
 	cases := map[string]uint64{
@@ -25,6 +28,20 @@ func TestFormatSize(t *testing.T) {
 	for in, want := range cases {
 		if got := FormatSize(in); got != want {
 			t.Errorf("FormatSize(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	for s, want := range map[string]time.Duration{"7d": 168 * time.Hour, "1d12h": 36 * time.Hour, "90m": 90 * time.Minute, "30s": 30 * time.Second, "0s": 0} {
+		got, e := ParseDuration(s)
+		if e != nil || got != want {
+			t.Errorf("%q: %v %v", s, got, e)
+		}
+	}
+	for _, s := range []string{"", "d", "-1d", "1.5d", "1d-1h", "7x", "+1h", "1d+1h", "99999999999999d"} {
+		if _, e := ParseDuration(s); e == nil {
+			t.Errorf("accepted %q", s)
 		}
 	}
 }

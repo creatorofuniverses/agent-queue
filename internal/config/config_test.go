@@ -360,3 +360,35 @@ func TestExampleConfigMatchesDefault(t *testing.T) {
 		t.Fatalf("%+v != %+v", c, Default())
 	}
 }
+
+func TestDefaultPlan4Sections(t *testing.T) {
+	c := Default()
+	if c.Profiles != (ProfilesConfig{10, 90, 90, 1.2}) || !c.Scheduler.Backfill || c.Retention != (RetentionConfig{168 * time.Hour, 5 * gib, 2160 * time.Hour, 720 * time.Hour, 48 * time.Hour}) || c.Stats.SampleInterval != 30*time.Second || !reflect.DeepEqual(c.Stats.AgentProcesses, []string{"claude", "codex"}) {
+		t.Fatal(c)
+	}
+}
+func TestLoadDaysInOldKeys(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte("[reservations]\nmax_ttl=\"1d\"\n"), 0600)
+	c, e := Load(p)
+	if e != nil || c.Reservations.MaxTTL != 24*time.Hour {
+		t.Fatal(c, e)
+	}
+}
+func TestValidatePlan4(t *testing.T) {
+	for _, tc := range []struct{ body, key string }{
+		{"[profiles]\nwindow=0", "window"}, {"[profiles]\nwindow=101", "window"}, {"[profiles]\nmemory_percentile=49", "memory_percentile"}, {"[profiles]\nduration_percentile=101", "duration_percentile"}, {"[profiles]\nlimit_margin=0.9", "limit_margin"}, {"[retention]\nsamples_full_res=\"30d\"", "samples_full_res"}, {"[retention]\nlogs_max_total=\"100M\"", "logs_max_total"}, {"[retention]\nlogs_max_age=\"0s\"", "logs_max_age"}, {"[stats]\nsample_interval=\"1s\"", "sample_interval"}, {"[stats]\nagent_processes=[\"a/b\"]", "agent_processes"}, {"[stats]\nagent_processes=[\"\"]", "agent_processes"},
+	} {
+		t.Run(tc.key+tc.body, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "c.toml")
+			os.WriteFile(p, []byte(tc.body), 0600)
+			c, e := Load(p)
+			if e == nil {
+				e = c.Validate(64*gib, 20)
+			}
+			if e == nil || !strings.Contains(e.Error(), tc.key) {
+				t.Fatal(e)
+			}
+		})
+	}
+}

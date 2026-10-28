@@ -81,3 +81,29 @@ patterns = [
   '(^|[\s;&|(])docker-compose\b.*\s(up|run)\b',
   '(^|[\s;&|(])docker\s+run\b',
 ]
+
+[profiles]
+# Окно пригодных прогонов, процентили памяти/длительности и запас лимита.
+window = 10
+memory_percentile = 90
+duration_percentile = 90
+limit_margin = 1.2
+
+[scheduler]
+# Разрешить обгон заблокированной головы по оценкам освобождения ресурсов.
+backfill = true
+
+[retention]
+# Срок и общий предел логов завершённых элементов; активные не удаляются.
+logs_max_age = "7d"
+logs_max_total = "5G"
+# История элементов/событий/прогонов и повёрнутые файлы хука.
+history_max_age = "90d"
+# Срок ряда хоста и полное разрешение до прореживания в 10-минутные корзины.
+samples_max_age = "30d"
+samples_full_res = "2d"
+
+[stats]
+# Период сбора хоста и имена процессов агентов.
+sample_interval = "30s"
+agent_processes = ["claude", "codex"]

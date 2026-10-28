@@ -58,7 +58,26 @@ func (c Config) Agent(name string) (AgentConfig, bool) {
 	return AgentConfig{}, false
 }
 
+type ProfilesConfig struct {
+	Window, MemoryPercentile, DurationPercentile int
+	LimitMargin                                  float64
+}
+type SchedulerConfig struct{ Backfill bool }
+type RetentionConfig struct {
+	LogsMaxAge                                   time.Duration
+	LogsMaxTotal                                 uint64
+	HistoryMaxAge, SamplesMaxAge, SamplesFullRes time.Duration
+}
+type StatsConfig struct {
+	SampleInterval time.Duration
+	AgentProcesses []string
+}
+
 type Config struct {
+	Profiles            ProfilesConfig
+	Scheduler           SchedulerConfig
+	Retention           RetentionConfig
+	Stats               StatsConfig
 	Agents              []AgentConfig
 	Notify              NotifyConfig
 	Webhook             WebhookConfig
@@ -80,6 +99,10 @@ const gib = uint64(1) << 30
 
 func Default() Config {
 	return Config{
+		Profiles:            ProfilesConfig{10, 90, 90, 1.2},
+		Scheduler:           SchedulerConfig{true},
+		Retention:           RetentionConfig{7 * 24 * time.Hour, 5 * gib, 90 * 24 * time.Hour, 30 * 24 * time.Hour, 2 * 24 * time.Hour},
+		Stats:               StatsConfig{30 * time.Second, []string{"claude", "codex"}},
 		Agents:              []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}},
 		Notify:              NotifyConfig{time.Second, 5 * time.Minute, 30 * time.Second, 24 * time.Hour, 10 * time.Minute, 5 * time.Minute},
 		Webhook:             WebhookConfig{Timeout: 10 * time.Second},
@@ -117,6 +140,26 @@ type rawAgent struct {
 	Command     []string `toml:"command"`
 }
 type rawConfig struct {
+	Profiles struct {
+		Window             *int     `toml:"window"`
+		MemoryPercentile   *int     `toml:"memory_percentile"`
+		DurationPercentile *int     `toml:"duration_percentile"`
+		LimitMargin        *float64 `toml:"limit_margin"`
+	} `toml:"profiles"`
+	Scheduler struct {
+		Backfill *bool `toml:"backfill"`
+	} `toml:"scheduler"`
+	Retention struct {
+		LogsMaxAge     *string `toml:"logs_max_age"`
+		LogsMaxTotal   *string `toml:"logs_max_total"`
+		HistoryMaxAge  *string `toml:"history_max_age"`
+		SamplesMaxAge  *string `toml:"samples_max_age"`
+		SamplesFullRes *string `toml:"samples_full_res"`
+	} `toml:"retention"`
+	Stats struct {
+		SampleInterval *string   `toml:"sample_interval"`
+		AgentProcesses *[]string `toml:"agent_processes"`
+	} `toml:"stats"`
 	Agents []rawAgent `toml:"agents"`
 	Notify struct {
 		RetryMin             *string `toml:"retry_min"`
@@ -195,12 +238,36 @@ func Load(path string) (Config, error) {
 		if src == nil {
 			return
 		}
-		v, err := time.ParseDuration(*src)
+		v, err := units.ParseDuration(*src)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", key, err))
 			return
 		}
 		*dst = v
+	}
+	dur("retention.logs_max_age", raw.Retention.LogsMaxAge, &c.Retention.LogsMaxAge)
+	size("retention.logs_max_total", raw.Retention.LogsMaxTotal, &c.Retention.LogsMaxTotal)
+	dur("retention.history_max_age", raw.Retention.HistoryMaxAge, &c.Retention.HistoryMaxAge)
+	dur("retention.samples_max_age", raw.Retention.SamplesMaxAge, &c.Retention.SamplesMaxAge)
+	dur("retention.samples_full_res", raw.Retention.SamplesFullRes, &c.Retention.SamplesFullRes)
+	dur("stats.sample_interval", raw.Stats.SampleInterval, &c.Stats.SampleInterval)
+	if v := raw.Stats.AgentProcesses; v != nil {
+		c.Stats.AgentProcesses = *v
+	}
+	if v := raw.Profiles.Window; v != nil {
+		c.Profiles.Window = *v
+	}
+	if v := raw.Profiles.MemoryPercentile; v != nil {
+		c.Profiles.MemoryPercentile = *v
+	}
+	if v := raw.Profiles.DurationPercentile; v != nil {
+		c.Profiles.DurationPercentile = *v
+	}
+	if v := raw.Profiles.LimitMargin; v != nil {
+		c.Profiles.LimitMargin = *v
+	}
+	if v := raw.Scheduler.Backfill; v != nil {
+		c.Scheduler.Backfill = *v
 	}
 	size("pool_memory", raw.PoolMemory, &c.PoolMemory)
 	size("min_disk_free", raw.MinDiskFree, &c.MinDiskFree)
@@ -297,6 +364,9 @@ func (c Config) Validate(memTotal uint64, numCPU int) error {
 		return fmt.Errorf("unit_prefix %q must be [A-Za-z0-9_-] ending in \"-\", not starting with \"-\"", c.UnitPrefix)
 	}
 	if err := c.validateReservations(); err != nil {
+		return err
+	}
+	if err := c.validatePlan4(); err != nil {
 		return err
 	}
 	return c.validateNotify()
@@ -411,6 +481,48 @@ func (c Config) validateNotify() error {
 	for _, p := range c.Hook.Patterns {
 		if _, e := regexp.Compile(p); e != nil {
 			return fmt.Errorf("hook.patterns: %w", e)
+		}
+	}
+	return nil
+}
+
+func (c Config) validatePlan4() error {
+	p := c.Profiles
+	if p.Window < 1 || p.Window > 100 {
+		return fmt.Errorf("profiles.window must be within 1..100")
+	}
+	for _, v := range []struct {
+		k string
+		n int
+	}{{"memory_percentile", p.MemoryPercentile}, {"duration_percentile", p.DurationPercentile}} {
+		if v.n < 50 || v.n > 100 {
+			return fmt.Errorf("profiles.%s must be within 50..100", v.k)
+		}
+	}
+	if !(p.LimitMargin >= 1 && p.LimitMargin <= 4) {
+		return fmt.Errorf("profiles.limit_margin must be within 1..4")
+	}
+	r := c.Retention
+	for _, v := range []struct {
+		k string
+		d time.Duration
+	}{{"logs_max_age", r.LogsMaxAge}, {"history_max_age", r.HistoryMaxAge}, {"samples_max_age", r.SamplesMaxAge}, {"samples_full_res", r.SamplesFullRes}} {
+		if v.d <= 0 {
+			return fmt.Errorf("retention.%s must be positive", v.k)
+		}
+	}
+	if r.SamplesFullRes >= r.SamplesMaxAge {
+		return fmt.Errorf("retention.samples_full_res must be less than samples_max_age")
+	}
+	if r.LogsMaxTotal < 256<<20 {
+		return fmt.Errorf("retention.logs_max_total must be at least 256M")
+	}
+	if c.Stats.SampleInterval < 5*time.Second || c.Stats.SampleInterval > 5*time.Minute {
+		return fmt.Errorf("stats.sample_interval must be within 5s..5m")
+	}
+	for _, n := range c.Stats.AgentProcesses {
+		if n == "" || strings.Contains(n, "/") {
+			return fmt.Errorf("stats.agent_processes must contain nonempty names without /")
 		}
 	}
 	return nil
