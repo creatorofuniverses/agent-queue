@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"reflect"
 	"resource-dispatcher/internal/client"
@@ -193,13 +194,22 @@ func TestLogsTailCapped(t *testing.T) {
 	serveText(t, tool("queue_logs", map[string]string{"id": "i"}), func(ctx context.Context, op string, a, out any) error {
 		called = true
 		x := a.(daemon.LogsArgs)
-		if x.Tail != 200 || x.Follow {
+		if x.Tail != 200 || x.Follow || x.MaxBytes != 256<<10 {
 			t.Error(x)
 		}
 		return nil
 	}, nil)
 	if !called {
 		t.Fatal("not forwarded")
+	}
+}
+func TestDaemonUnavailableError(t *testing.T) {
+	out := serveText(t, tool("queue_status", map[string]string{"id": "i"}), func(context.Context, string, any, any) error {
+		return fmt.Errorf("%w: dial unix /x: connect: no such file", protocol.ErrDaemonUnavailable)
+	}, nil)
+	r := out[0]["result"].(map[string]any)
+	if r["isError"] != true || !strings.HasPrefix(r["content"].([]any)[0].(map[string]any)["text"].(string), "DAEMON_UNAVAILABLE: ") {
+		t.Fatal(r)
 	}
 }
 func TestMalformedLine(t *testing.T) {

@@ -372,6 +372,17 @@ func TestLogsTailAndFollow(t *testing.T) {
 	if len(ll.Lines) != 100 || ll.Lines[0] != "line 101" || ll.Lines[99] != "line 200" {
 		t.Fatalf("tail: %d lines, first %q", len(ll.Lines), ll.Lines[0])
 	}
+	// A byte cap keeps the newest output, even inside one huge line.
+	if err := e.call(t, "logs", LogsArgs{ID: v.ID, Stream: "stdout", Tail: 100, MaxBytes: 20}, &ll); err != nil {
+		t.Fatal(err)
+	}
+	if !ll.Truncated || len(ll.Lines) != 3 || ll.Lines[0] != "8" || ll.Lines[2] != "line 200" {
+		t.Fatalf("byte cap: %+v", ll)
+	}
+	var whole LogLines
+	if err := e.call(t, "logs", LogsArgs{ID: v.ID, Stream: "stdout", Tail: 2, MaxBytes: 1 << 20}, &whole); err != nil || whole.Truncated || len(whole.Lines) != 2 {
+		t.Fatalf("cap above size: %v %+v", err, whole)
+	}
 	if err := e.call(t, "logs", LogsArgs{ID: v.ID, Stream: "stderr"}, &ll); err != nil || len(ll.Lines) != 0 {
 		t.Fatalf("missing stderr: %v %v", err, ll)
 	}

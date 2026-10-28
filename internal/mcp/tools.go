@@ -168,11 +168,17 @@ type textContent struct {
 func toolError(err error) toolResult {
 	var pe *protocol.Error
 	s := "BAD_REQUEST: " + err.Error()
-	if errors.As(err, &pe) {
+	switch {
+	case errors.As(err, &pe):
 		s = pe.Code + ": " + pe.Message
+	case errors.Is(err, protocol.ErrDaemonUnavailable):
+		s = "DAEMON_UNAVAILABLE: " + err.Error()
 	}
 	return toolResult{Content: []textContent{{"text", s}}, IsError: true}
 }
+
+// logsMaxBytes bounds queue_logs: one progress-bar "line" can be megabytes of agent context.
+const logsMaxBytes = 256 << 10
 
 const identityUnknown = "session identity unknown: pass client and session_id (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID of your session), or no_notify=true"
 
@@ -272,7 +278,7 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 		if a.Stream != "" && a.Stream != "stdout" && a.Stream != "stderr" {
 			return toolError(errors.New("stream must be stdout or stderr"))
 		}
-		args = daemon.LogsArgs{ID: model.ItemID(a.ID), Stream: a.Stream, Tail: n, Follow: false}
+		args = daemon.LogsArgs{ID: model.ItemID(a.ID), Stream: a.Stream, Tail: n, Follow: false, MaxBytes: logsMaxBytes}
 	}
 	var result any
 	if err := call(ctx, op, args, &result); err != nil {

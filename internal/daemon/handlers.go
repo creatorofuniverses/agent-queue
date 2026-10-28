@@ -91,11 +91,14 @@ type LogsArgs struct {
 	Stream string       `json:"stream"`
 	Tail   int          `json:"tail"`
 	Follow bool         `json:"follow"`
+	// MaxBytes, when positive, bounds a non-follow read to the newest bytes, even mid-line.
+	MaxBytes int64 `json:"max_bytes,omitempty"`
 }
 
 // LogLines is both the logs result and the follow stream message.
 type LogLines struct {
-	Lines []string `json:"lines"`
+	Lines     []string `json:"lines"`
+	Truncated bool     `json:"truncated,omitempty"` // MaxBytes cut older output
 }
 
 type pingResult struct {
@@ -461,11 +464,15 @@ func (d *server) logs(ctx context.Context, raw json.RawMessage, w protocol.Strea
 		if f == nil {
 			return LogLines{Lines: []string{}}, nil
 		}
+		truncated := a.MaxBytes > 0 && size-off > a.MaxBytes
+		if truncated {
+			off = size - a.MaxBytes
+		}
 		buf := make([]byte, size-off)
 		if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
 			return nil, err
 		}
-		return LogLines{Lines: splitLines(string(buf))}, nil
+		return LogLines{Lines: splitLines(string(buf)), Truncated: truncated}, nil
 	}
 	return LogLines{}, d.follow(ctx, a.ID, path, off, followDone(it), w)
 }
