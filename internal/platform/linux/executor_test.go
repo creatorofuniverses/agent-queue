@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
 )
 
 func testSpec() platform.LaunchSpec {

@@ -1,12 +1,12 @@
 package store
 
 import (
+	"agent-queue/internal/hook"
+	"agent-queue/internal/model"
+	"agent-queue/internal/profile"
 	"context"
 	"encoding/json"
 	"fmt"
-	"resource-dispatcher/internal/hook"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/profile"
 	"strings"
 	"time"
 )

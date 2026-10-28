@@ -1,4 +1,4 @@
-module resource-dispatcher
+module agent-queue
 
 go 1.26.0
 

@@ -1,11 +1,11 @@
 package store
 
 import (
+	"agent-queue/internal/model"
+	"agent-queue/internal/profile"
 	"context"
 	"database/sql"
 	"encoding/json"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/profile"
 	"time"
 )
 

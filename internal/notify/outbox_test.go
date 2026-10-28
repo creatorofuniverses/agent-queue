@@ -1,14 +1,14 @@
 package notify
 
 import (
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/store"
 	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/store"
 	"strings"
 	"sync"
 	"testing"

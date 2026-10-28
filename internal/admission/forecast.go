@@ -1,8 +1,8 @@
 package admission
 
 import (
+	"agent-queue/internal/model"
 	"math"
-	"resource-dispatcher/internal/model"
 	"slices"
 	"sort"
 	"time"

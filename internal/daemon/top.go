@@ -1,13 +1,13 @@
 package daemon
 
 import (
+	"agent-queue/internal/admission"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/scheduler"
 	"context"
 	"errors"
 	"fmt"
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/scheduler"
 	"sync/atomic"
 	"time"
 )

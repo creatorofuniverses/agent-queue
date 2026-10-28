@@ -1,13 +1,13 @@
 package store
 
 import (
+	"agent-queue/internal/model"
+	"agent-queue/internal/profile"
 	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
 	"reflect"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/profile"
 	"testing"
 	"time"
 )

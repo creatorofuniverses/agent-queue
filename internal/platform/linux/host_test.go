@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/platform"
 )
 
 var _ platform.HostMetrics = (*Host)(nil)

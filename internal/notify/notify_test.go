@@ -1,6 +1,8 @@
 package notify
 
 import (
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,8 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
 	"strconv"
 	"strings"
 	"syscall"

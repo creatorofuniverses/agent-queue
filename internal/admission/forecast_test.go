@@ -1,8 +1,8 @@
 package admission
 
 import (
+	"agent-queue/internal/model"
 	"reflect"
-	"resource-dispatcher/internal/model"
 	"testing"
 	"time"
 )

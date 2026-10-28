@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/platform/linux"
-	"resource-dispatcher/internal/protocol"
-	"resource-dispatcher/internal/units"
+	"agent-queue/internal/config"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/platform/linux"
+	"agent-queue/internal/protocol"
+	"agent-queue/internal/units"
 )
 
 // Doctor failure codes.

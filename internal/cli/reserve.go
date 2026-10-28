@@ -5,10 +5,10 @@ import (
 	"os"
 	"time"
 
-	"resource-dispatcher/internal/client"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/client"
+	"agent-queue/internal/config"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
 )
 
 func cmdReserve(c *cmdCtx, args []string) error {

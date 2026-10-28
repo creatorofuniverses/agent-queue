@@ -1,7 +1,7 @@
 package profile
 
 import (
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/model"
 	"strings"
 	"testing"
 	"time"

@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/store"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/store"
 )
 
 type incidentSampler struct {

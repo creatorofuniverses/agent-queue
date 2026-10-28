@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
 )
 
 // Process exit codes.

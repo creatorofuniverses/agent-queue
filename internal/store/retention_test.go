@@ -1,8 +1,8 @@
 package store
 
 import (
+	"agent-queue/internal/model"
 	"context"
-	"resource-dispatcher/internal/model"
 	"testing"
 	"time"
 )

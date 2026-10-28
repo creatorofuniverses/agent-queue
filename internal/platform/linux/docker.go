@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/platform"
 )
 
 // DockerMeterConfig configures the compose-project meter.

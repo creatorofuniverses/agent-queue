@@ -1,13 +1,13 @@
 package scheduler
 
 import (
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/store"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/store"
 	"strings"
 	"testing"
 	"time"

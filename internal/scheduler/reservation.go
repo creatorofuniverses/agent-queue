@@ -14,9 +14,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/store"
-	"resource-dispatcher/internal/units"
+	"agent-queue/internal/model"
+	"agent-queue/internal/store"
+	"agent-queue/internal/units"
 )
 
 // maxTeardownScript is the largest teardown script a reservation may carry.

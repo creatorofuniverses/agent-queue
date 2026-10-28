@@ -1,11 +1,11 @@
 package scheduler
 
 import (
+	"agent-queue/internal/admission"
+	"agent-queue/internal/model"
+	"agent-queue/internal/store"
 	"context"
 	"errors"
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/store"
 	"testing"
 	"time"
 )

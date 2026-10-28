@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/store"
+	"agent-queue/internal/config"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/store"
 )
 
 func bigPool(c *config.Config) { c.PoolMemory = 8 * gib }

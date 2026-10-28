@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/model"
 )
 
 const (

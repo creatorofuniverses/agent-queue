@@ -1,14 +1,14 @@
 package notify
 
 import (
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/store"
 	"context"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"path/filepath"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/store"
 	"sync"
 	"time"
 )

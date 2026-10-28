@@ -1,11 +1,11 @@
 package notify
 
 import (
+	"agent-queue/internal/config"
 	"context"
 	"errors"
 	"fmt"
 	"os/exec"
-	"resource-dispatcher/internal/config"
 	"strings"
 	"sync"
 	"syscall"

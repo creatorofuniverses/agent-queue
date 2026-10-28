@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/admission"
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
 )
 
 var (

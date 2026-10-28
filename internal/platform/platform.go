@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/model"
 )
 
 type Capabilities struct {

@@ -1,11 +1,11 @@
 package scheduler
 
 import (
+	"agent-queue/internal/admission"
+	"agent-queue/internal/model"
 	"context"
 	"fmt"
 	"log/slog"
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/model"
 	"time"
 )
 

@@ -2,9 +2,9 @@
 package notify
 
 import (
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
 	"fmt"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
 )
 
 type Router struct{ cfg config.Config }

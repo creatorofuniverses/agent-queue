@@ -1,13 +1,13 @@
 package cli
 
 import (
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/protocol"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/protocol"
 	"strings"
 	"testing"
 	"time"

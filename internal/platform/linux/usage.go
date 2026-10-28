@@ -1,12 +1,12 @@
 package linux
 
 import (
+	"agent-queue/internal/platform"
 	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"resource-dispatcher/internal/platform"
 	"strconv"
 	"strings"
 	"syscall"

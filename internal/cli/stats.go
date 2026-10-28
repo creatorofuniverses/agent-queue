@@ -1,13 +1,13 @@
 package cli
 
 import (
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/stats"
+	"agent-queue/internal/units"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/stats"
-	"resource-dispatcher/internal/units"
 	"time"
 )
 

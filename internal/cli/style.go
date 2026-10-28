@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/units"
+	"agent-queue/internal/model"
+	"agent-queue/internal/units"
 )
 
 // ui is how human output is drawn. Plain output (no TTY, AQ_UI=plain) is the

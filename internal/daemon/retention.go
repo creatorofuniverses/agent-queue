@@ -1,16 +1,16 @@
 package daemon
 
 import (
+	"agent-queue/internal/config"
+	"agent-queue/internal/hook"
+	"agent-queue/internal/model"
+	"agent-queue/internal/store"
 	"context"
 	"errors"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/hook"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/store"
 	"strings"
 	"time"
 )

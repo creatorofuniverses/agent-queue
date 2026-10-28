@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/admission"
+	"agent-queue/internal/config"
+	"agent-queue/internal/platform"
 )
 
 // guardMin is the lowest ceiling the guard sets.

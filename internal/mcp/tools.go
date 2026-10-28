@@ -1,6 +1,11 @@
 package mcp
 
 import (
+	"agent-queue/internal/client"
+	"agent-queue/internal/config"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/protocol"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,11 +13,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"resource-dispatcher/internal/client"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/protocol"
 	"time"
 )
 

@@ -1,13 +1,13 @@
 package notify
 
 import (
+	"agent-queue/internal/config"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"resource-dispatcher/internal/config"
 	"strings"
 )
 

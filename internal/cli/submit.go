@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"resource-dispatcher/internal/client"
-	"resource-dispatcher/internal/daemon"
+	"agent-queue/internal/client"
+	"agent-queue/internal/daemon"
 )
 
 // stringList is a repeatable string flag.

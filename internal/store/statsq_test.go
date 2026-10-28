@@ -1,10 +1,10 @@
 package store
 
 import (
+	"agent-queue/internal/model"
 	"context"
 	"encoding/json"
 	"reflect"
-	"resource-dispatcher/internal/model"
 	"strings"
 	"testing"
 	"time"

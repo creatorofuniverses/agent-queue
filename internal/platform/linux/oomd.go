@@ -1,6 +1,7 @@
 package linux
 
 import (
+	"agent-queue/internal/platform"
 	"bufio"
 	"bytes"
 	"context"
@@ -8,7 +9,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"resource-dispatcher/internal/platform"
 	"strconv"
 	"strings"
 	"time"

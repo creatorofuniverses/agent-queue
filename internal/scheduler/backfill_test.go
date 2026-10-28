@@ -1,13 +1,13 @@
 package scheduler
 
 import (
+	"agent-queue/internal/admission"
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/store"
 	"context"
 	"errors"
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/store"
 	"testing"
 	"time"
 )

@@ -4,9 +4,9 @@ import (
 	"slices"
 	"testing"
 
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/platform/fake"
+	"agent-queue/internal/config"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/platform/fake"
 )
 
 func newGuardTest(avail, sliceCur uint64) (*guard, *fake.Executor, *fake.Host, *[]bool) {

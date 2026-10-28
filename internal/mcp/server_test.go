@@ -1,16 +1,16 @@
 package mcp
 
 import (
+	"agent-queue/internal/client"
+	"agent-queue/internal/config"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/protocol"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"reflect"
-	"resource-dispatcher/internal/client"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/protocol"
 	"strings"
 	"testing"
 	"time"

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/platform"
 )
 
 // RecordResult writes JobDir/result.json from systemd's ExecStopPost env and the unit cgroup.

@@ -1,9 +1,9 @@
 package cli
 
 import (
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/units"
 	"fmt"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/units"
 )
 
 func cmdTop(c *cmdCtx, args []string) error {

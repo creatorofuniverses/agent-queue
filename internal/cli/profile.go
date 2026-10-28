@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"resource-dispatcher/internal/client"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/units"
+	"agent-queue/internal/client"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/units"
 	"text/tabwriter"
 	"time"
 )

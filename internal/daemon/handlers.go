@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/protocol"
-	"resource-dispatcher/internal/scheduler"
-	"resource-dispatcher/internal/store"
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/protocol"
+	"agent-queue/internal/scheduler"
+	"agent-queue/internal/store"
 )
 
 // SubmitArgs is the submit request. Sizes are bytes.

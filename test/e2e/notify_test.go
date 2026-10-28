@@ -3,6 +3,9 @@
 package e2e
 
 import (
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/store"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,9 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/store"
 	"strings"
 	"sync"
 	"testing"

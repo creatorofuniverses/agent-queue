@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/scheduler"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/scheduler"
 )
 
 const testPool = 1 << 30

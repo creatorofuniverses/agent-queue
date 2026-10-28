@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/model"
 )
 
 // grantTTL reserves stand + budget for ttl and grants it with one Tick; t0 is the grant time.

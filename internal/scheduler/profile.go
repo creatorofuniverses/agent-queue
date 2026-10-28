@@ -1,10 +1,10 @@
 package scheduler
 
 import (
+	"agent-queue/internal/model"
+	"agent-queue/internal/profile"
 	"context"
 	"fmt"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/profile"
 	"time"
 )
 

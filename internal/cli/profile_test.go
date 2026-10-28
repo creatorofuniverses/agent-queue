@@ -1,9 +1,9 @@
 package cli
 
 import (
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
 	"bytes"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
 	"strings"
 	"testing"
 )

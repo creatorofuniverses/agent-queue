@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/protocol"
-	"resource-dispatcher/internal/scheduler"
-	"resource-dispatcher/internal/store"
+	"agent-queue/internal/admission"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/protocol"
+	"agent-queue/internal/scheduler"
+	"agent-queue/internal/store"
 )
 
 func (e *env) reserveArgs(mem uint64) ReserveArgs {

@@ -2,14 +2,14 @@
 package client
 
 import (
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/profile"
+	"agent-queue/internal/units"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/profile"
-	"resource-dispatcher/internal/units"
 	"strings"
 	"time"
 	"unicode/utf8"

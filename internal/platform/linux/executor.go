@@ -15,9 +15,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/runner"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/runner"
 )
 
 type ExecutorConfig struct {

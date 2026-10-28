@@ -1,15 +1,15 @@
 package daemon
 
 import (
+	"agent-queue/internal/platform"
 	"context"
 	"errors"
 	"path/filepath"
-	"resource-dispatcher/internal/platform"
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/platform/fake"
-	"resource-dispatcher/internal/store"
+	"agent-queue/internal/platform/fake"
+	"agent-queue/internal/store"
 )
 
 var errTest = errors.New("test error")

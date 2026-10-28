@@ -2,10 +2,10 @@
 package stats
 
 import (
-	"resource-dispatcher/internal/hook"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/profile"
-	"resource-dispatcher/internal/store"
+	"agent-queue/internal/hook"
+	"agent-queue/internal/model"
+	"agent-queue/internal/profile"
+	"agent-queue/internal/store"
 	"sort"
 	"strings"
 	"time"

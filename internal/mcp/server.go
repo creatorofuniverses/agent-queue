@@ -2,12 +2,12 @@
 package mcp
 
 import (
+	"agent-queue/internal/config"
 	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"resource-dispatcher/internal/config"
 	"sync"
 )
 

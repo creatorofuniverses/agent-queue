@@ -10,8 +10,8 @@ import (
 	"slices"
 	"time"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
 )
 
 // claimTeardownsLocked gives the free teardown slots (teardown_concurrency minus the

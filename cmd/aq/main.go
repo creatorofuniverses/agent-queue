@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"resource-dispatcher/internal/cli"
-	"resource-dispatcher/internal/runner"
+	"agent-queue/internal/cli"
+	"agent-queue/internal/runner"
 )
 
 func main() {

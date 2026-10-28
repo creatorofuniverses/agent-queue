@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/scheduler"
+	"agent-queue/internal/config"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/scheduler"
 )
 
 // Lowering the slice ceiling below a task's usage kills the task (attributed to the

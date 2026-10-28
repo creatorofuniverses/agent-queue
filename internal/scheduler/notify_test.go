@@ -1,14 +1,14 @@
 package scheduler
 
 import (
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
 	"strings"
 	"testing"
 	"time"

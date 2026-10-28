@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
 )
 
 // Recover reconciles stored items with units left by a previous daemon. Admission,

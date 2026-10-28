@@ -15,13 +15,13 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/notify"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/protocol"
-	"resource-dispatcher/internal/scheduler"
-	"resource-dispatcher/internal/store"
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/notify"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/protocol"
+	"agent-queue/internal/scheduler"
+	"agent-queue/internal/store"
 )
 
 // Version is reported by ping.

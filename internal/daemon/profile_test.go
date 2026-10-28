@@ -1,11 +1,11 @@
 package daemon
 
 import (
+	"agent-queue/internal/model"
+	"agent-queue/internal/profile"
+	"agent-queue/internal/store"
 	"context"
 	"os"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/profile"
-	"resource-dispatcher/internal/store"
 	"testing"
 	"time"
 )

@@ -1,10 +1,10 @@
 package daemon
 
 import (
+	"agent-queue/internal/platform"
+	"agent-queue/internal/platform/fake"
 	"context"
 	"errors"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/platform/fake"
 	"testing"
 	"time"
 )

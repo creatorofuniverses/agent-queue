@@ -21,13 +21,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/profile"
-	"resource-dispatcher/internal/store"
-	"resource-dispatcher/internal/units"
+	"agent-queue/internal/admission"
+	"agent-queue/internal/config"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/profile"
+	"agent-queue/internal/store"
+	"agent-queue/internal/units"
 )
 
 // ErrRejected: the request failed validation; the item is stored as REJECTED.

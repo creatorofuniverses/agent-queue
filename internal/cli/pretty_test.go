@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/platform"
 )
 
 func TestHelpOverviewAndCommand(t *testing.T) {

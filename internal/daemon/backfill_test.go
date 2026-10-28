@@ -1,7 +1,7 @@
 package daemon
 
 import (
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/model"
 	"testing"
 	"time"
 )

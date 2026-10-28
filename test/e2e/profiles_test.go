@@ -3,13 +3,13 @@
 package e2e
 
 import (
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/stats"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/stats"
 	"strconv"
 	"strings"
 	"testing"

@@ -1,11 +1,11 @@
 package daemon
 
 import (
+	"agent-queue/internal/admission"
+	"agent-queue/internal/model"
+	"agent-queue/internal/scheduler"
 	"context"
 	"encoding/json"
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/scheduler"
 	"time"
 )
 

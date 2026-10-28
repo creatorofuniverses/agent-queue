@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/model"
 )
 
 func openTemp(t *testing.T) *Store {

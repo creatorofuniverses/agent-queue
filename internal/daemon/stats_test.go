@@ -1,10 +1,10 @@
 package daemon
 
 import (
+	"agent-queue/internal/protocol"
+	"agent-queue/internal/stats"
 	"context"
 	"encoding/json"
-	"resource-dispatcher/internal/protocol"
-	"resource-dispatcher/internal/stats"
 	"testing"
 )
 

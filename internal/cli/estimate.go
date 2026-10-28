@@ -1,11 +1,11 @@
 package cli
 
 import (
+	"agent-queue/internal/client"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/units"
 	"fmt"
 	"os"
-	"resource-dispatcher/internal/client"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/units"
 )
 
 func cmdEstimate(c *cmdCtx, args []string) error {

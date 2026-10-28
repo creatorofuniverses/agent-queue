@@ -2,10 +2,10 @@
 package profile
 
 import (
+	"agent-queue/internal/model"
 	"cmp"
 	"fmt"
 	"math"
-	"resource-dispatcher/internal/model"
 	"slices"
 	"time"
 	"unicode"

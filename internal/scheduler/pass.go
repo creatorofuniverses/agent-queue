@@ -1,8 +1,8 @@
 package scheduler
 
 import (
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/admission"
+	"agent-queue/internal/model"
 	"time"
 )
 

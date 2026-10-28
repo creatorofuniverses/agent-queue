@@ -1,8 +1,8 @@
 package client
 
 import (
+	"agent-queue/internal/config"
 	"errors"
-	"resource-dispatcher/internal/config"
 	"testing"
 )
 

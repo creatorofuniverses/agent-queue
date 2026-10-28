@@ -1,13 +1,13 @@
 package store
 
 import (
+	"agent-queue/internal/model"
 	"context"
 	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
-	"resource-dispatcher/internal/model"
 	"strings"
 	"testing"
 	"time"

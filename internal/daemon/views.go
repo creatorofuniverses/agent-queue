@@ -3,8 +3,8 @@ package daemon
 import (
 	"time"
 
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/admission"
+	"agent-queue/internal/model"
 )
 
 // ItemView is the client-facing projection of an item. It deliberately has no

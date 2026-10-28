@@ -1,14 +1,14 @@
 package daemon
 
 import (
+	"agent-queue/internal/admission"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/platform/fake"
+	"agent-queue/internal/scheduler"
+	"agent-queue/internal/store"
 	"context"
 	"errors"
 	"path/filepath"
-	"resource-dispatcher/internal/admission"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/platform/fake"
-	"resource-dispatcher/internal/scheduler"
-	"resource-dispatcher/internal/store"
 	"testing"
 	"time"
 )

@@ -1,10 +1,10 @@
 package store
 
 import (
+	"agent-queue/internal/model"
 	"context"
 	"database/sql"
 	"errors"
-	"resource-dispatcher/internal/model"
 	"strings"
 	"time"
 )

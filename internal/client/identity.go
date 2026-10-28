@@ -1,9 +1,9 @@
 package client
 
 import (
+	"agent-queue/internal/config"
 	"errors"
 	"fmt"
-	"resource-dispatcher/internal/config"
 	"strings"
 )
 

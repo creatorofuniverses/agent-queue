@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
 )
 
 // writeScript writes a teardown script into dir and returns its path.

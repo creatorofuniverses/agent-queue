@@ -1,11 +1,11 @@
 package daemon
 
 import (
+	"agent-queue/internal/platform"
+	"agent-queue/internal/scheduler"
+	"agent-queue/internal/store"
 	"context"
 	"log/slog"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/scheduler"
-	"resource-dispatcher/internal/store"
 	"time"
 )
 

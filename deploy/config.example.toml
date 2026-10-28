@@ -1,61 +1,61 @@
-# Пример конфигурации aq: ~/.config/agent-queue/config.toml
-# Все ключи показаны со значениями по умолчанию.
+# Example aq configuration: ~/.config/agent-queue/config.toml
+# Every key is shown with its default value.
 
-# Память пула задач. Должна быть не больше MemTotal минус резерв.
+# Memory of the task pool. Must not exceed MemTotal minus the reserve floor.
 pool_memory = "16G"
-# Число CPU в пуле (от 1 до числа ядер).
+# CPUs in the pool (1 to the number of cores).
 pool_cpus = 16
-# Процент MemTotal, который всегда остаётся хосту.
+# Percent of MemTotal that is always left to the host.
 reserve_floor_percent = 10
-# Минимум свободного места на диске состояния.
+# Minimum free space on the state disk.
 min_disk_free = "2G"
-# MemoryHigh = лимит задачи * это значение (0 < x <= 1).
-# 1.0: без swap MemoryHigh < MemoryMax бесконечно тормозит задачу вместо OOM.
+# MemoryHigh = task limit * this value (0 < x <= 1).
+# 1.0: without swap, MemoryHigh < MemoryMax throttles a task forever instead of an OOM.
 memory_high_ratio = 1.0
-# Время на корректную остановку задачи при отмене.
+# Time a cancelled task gets to stop cleanly.
 cancel_grace = "10s"
 
-# Для тестов: имя slice и префикс unit.
+# For tests: slice name and unit prefix.
 slice_name = "aq.slice"
 unit_prefix = "aq-"
 
 [pressure]
-# Закрыть приём новых задач, если PSI memory full avg10 >= значения дольше close_after.
+# Close admission when PSI memory full avg10 >= this value for longer than close_after.
 close_full_avg10 = 5.0
 close_after = "10s"
-# Открыть снова, если avg10 <= значения дольше open_after.
+# Reopen when avg10 <= this value for longer than open_after.
 open_full_avg10 = 1.0
 open_after = "30s"
 
 [logs]
-# Максимальный размер сохраняемого stdout/stderr задачи.
+# Maximum kept size of a task's stdout/stderr.
 max_stdout = "64M"
 max_stderr = "64M"
 
 [reservations]
-# Максимальный срок резерва (TTL отсчитывается от выдачи).
+# Maximum reservation lifetime (the TTL counts from the grant).
 max_ttl = "24h"
-# За сколько до истечения резерв переходит в EXPIRING и шлётся предупреждение.
+# How long before expiry a reservation turns EXPIRING and a warning is sent.
 expiry_warning = "15m"
-# Предел времени на выполнение скрипта снятия.
+# Time limit for the teardown script.
 teardown_timeout = "5m"
-# Память одного снятия (от 64M до pool_memory).
+# Memory of one teardown (64M to pool_memory).
 teardown_memory = "512M"
-# Сколько снятий может идти одновременно (не меньше 1).
+# How many teardowns may run at once (at least 1).
 teardown_concurrency = 2
 
 [notify]
-# Повторы доставки: минимальная и максимальная задержка.
+# Delivery retries: minimum and maximum delay.
 retry_min = "1s"
 retry_max = "5m"
-# Таймаут попытки и срок, после которого неудачная доставка сдаётся.
+# Timeout of one attempt, and how long a failing delivery keeps retrying.
 delivery_timeout = "30s"
 give_up_after = "24h"
-# Пороги тревог оператора о закрытом допуске и зависшей очистке.
+# Operator alert thresholds for closed admission and a stuck cleanup.
 admission_closed_alert = "10m"
 cleaning_stuck_alert = "5m"
 
-# Список заменяет адаптеры по умолчанию целиком; порядок определяет сессию.
+# This list replaces the default adapters entirely; the order decides the session.
 [[agents]]
 name = "codex"
 identity_env = "CODEX_THREAD_ID"
@@ -68,13 +68,13 @@ identity_env = "CLAUDE_CODE_SESSION_ID"
 delivery = "client-wait"
 
 [webhook]
-# Пустой URL отключает уведомления оператора. Токен читается при каждой попытке.
+# An empty URL disables operator alerts. The token is read on every attempt.
 url = ""
 token_file = ""
 timeout = "10s"
 
 [hook]
-# Мягкие предупреждения: pytest с параллелизмом, compose и docker run.
+# Soft hints: parallel pytest, compose and docker run.
 patterns = [
   '(^|[\s;&|(])(pytest|py\.test)\b.*\s(-n|--numprocesses)(\s|=)',
   '(^|[\s;&|(])docker\s+compose\b.*\s(up|run)\b',
@@ -83,27 +83,27 @@ patterns = [
 ]
 
 [profiles]
-# Окно пригодных прогонов, процентили памяти/длительности и запас лимита.
+# Window of usable runs, memory/duration percentiles and the limit margin.
 window = 10
 memory_percentile = 90
 duration_percentile = 90
 limit_margin = 1.2
 
 [scheduler]
-# Разрешить обгон заблокированной головы по оценкам освобождения ресурсов.
+# Let later items start ahead of a blocked queue head when they cannot delay it.
 backfill = true
 
 [retention]
-# Срок и общий предел логов завершённых элементов; активные не удаляются.
+# Age and total size limits for logs of finished items; active logs are kept.
 logs_max_age = "7d"
 logs_max_total = "5G"
-# История элементов/событий/прогонов и повёрнутые файлы хука.
+# History of items, events, runs and rotated hook files.
 history_max_age = "90d"
-# Срок ряда хоста и полное разрешение до прореживания в 10-минутные корзины.
+# Host sample lifetime, and full resolution before thinning to 10-minute buckets.
 samples_max_age = "30d"
 samples_full_res = "2d"
 
 [stats]
-# Период сбора хоста и имена процессов агентов.
+# Host sampling period and agent process names.
 sample_interval = "30s"
 agent_processes = ["claude", "codex"]

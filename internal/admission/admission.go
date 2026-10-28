@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/units"
+	"agent-queue/internal/model"
+	"agent-queue/internal/units"
 )
 
 var (

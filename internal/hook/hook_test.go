@@ -1,11 +1,11 @@
 package hook
 
 import (
+	"agent-queue/internal/config"
 	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"resource-dispatcher/internal/config"
 	"strings"
 	"testing"
 	"time"

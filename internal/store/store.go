@@ -19,7 +19,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"resource-dispatcher/internal/model"
+	"agent-queue/internal/model"
 )
 
 var (

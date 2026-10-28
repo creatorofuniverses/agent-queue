@@ -6,8 +6,8 @@ import (
 	"math"
 	"sync"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
 )
 
 type Executor struct {

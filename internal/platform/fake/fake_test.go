@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform"
-	"resource-dispatcher/internal/platform/fake"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform"
+	"agent-queue/internal/platform/fake"
 )
 
 var (

@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"resource-dispatcher/internal/platform"
+	"agent-queue/internal/platform"
 )
 
 // Host reads host metrics from procfs rooted at procRoot.

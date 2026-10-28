@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/stats"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/model"
+	"agent-queue/internal/stats"
 )
 
 // Pretty renderers: used only when c.ui.pretty (a person at a terminal).

@@ -13,14 +13,14 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"resource-dispatcher/internal/client"
-	"resource-dispatcher/internal/config"
-	"resource-dispatcher/internal/daemon"
-	"resource-dispatcher/internal/hook"
-	"resource-dispatcher/internal/mcp"
-	"resource-dispatcher/internal/model"
-	"resource-dispatcher/internal/platform/linux"
-	"resource-dispatcher/internal/units"
+	"agent-queue/internal/client"
+	"agent-queue/internal/config"
+	"agent-queue/internal/daemon"
+	"agent-queue/internal/hook"
+	"agent-queue/internal/mcp"
+	"agent-queue/internal/model"
+	"agent-queue/internal/platform/linux"
+	"agent-queue/internal/units"
 )
 
 func cmdVersion(c *cmdCtx, args []string) error {
