@@ -61,3 +61,39 @@ func TestUsageMeterVanishingProcess(t *testing.T) {
 		t.Fatal(v, e)
 	}
 }
+func TestUsageMeterCountsWhatAgentsRun(t *testing.T) {
+	root := t.TempDir()
+	manager := "user.slice/user-1000.slice/user@1000.service"
+	usageFile(t, root, "proc/self/cgroup", "0::/"+manager+"/app.slice/aq.service\n")
+	proc := func(pid, ppid int, comm, cg string, pssMiB int) {
+		base := fmt.Sprintf("proc/%d/", pid)
+		usageFile(t, root, base+"comm", comm+"\n")
+		usageFile(t, root, base+"cmdline", comm+"\x00")
+		usageFile(t, root, base+"status", fmt.Sprintf("Name:\t%s\nPPid:\t%d\n", comm, ppid))
+		usageFile(t, root, base+"cgroup", "0::/"+cg+"\n")
+		usageFile(t, root, base+"smaps_rollup", fmt.Sprintf("Pss: %d kB\n", pssMiB*1024))
+	}
+	session := "user.slice/user-1000.slice/session-3.scope"
+	proc(2, 1, "herder", session, 50)                             // runs the agents, is not one: other
+	proc(10, 2, "claude", session, 400)                           // an agent
+	proc(11, 10, "bash", session, 10)                             // what it runs directly
+	proc(12, 11, "python", session, 500)                          // and that one's children
+	proc(13, 10, "claude", session, 100)                          // a nested agent counts as an agent
+	proc(14, 13, "node", session, 50)                             // what it runs goes to the nearest agent
+	proc(15, 10, "python", manager+"/aq.slice/aq-x.service", 900) // already in aq: tasks
+	proc(16, 2, "codex", session, 200)
+	proc(17, 16, "cargo", session, 300)
+	proc(18, 1, "sshd", "system.slice/sshd.service", 999)
+	m := NewUsageMeter(UsageMeterConfig{ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg"), Slices: []string{"aq.slice"}})
+	v, e := m.Usage(context.Background(), []string{"claude", "codex"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	const mib = 1 << 20
+	if a := v.Agents[0]; a.Bytes != 500*mib || a.Procs != 2 || a.Spawned != 560*mib || a.SpawnedProcs != 3 {
+		t.Fatalf("claude %+v", a)
+	}
+	if a := v.Agents[1]; a.Bytes != 200*mib || a.Spawned != 300*mib || a.SpawnedProcs != 1 {
+		t.Fatalf("codex %+v", a)
+	}
+}

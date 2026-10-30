@@ -22,14 +22,14 @@ func TestStatsSamplerWritesRow(t *testing.T) {
 	host := fake.NewHost()
 	host.Set(platform.MemInfo{Total: 32 * gib, Available: 12 * gib})
 	u := &fake.UsageMeter{}
-	u.Set(platform.Usage{Agents: []platform.AgentUsage{{Name: "a", Bytes: 5 * gib}}, Docker: 7 * gib, Tasks: 2 * gib})
+	u.Set(platform.Usage{Agents: []platform.AgentUsage{{Name: "a", Bytes: 5 * gib, Spawned: 2 * gib}}, Docker: 7 * gib, Tasks: 2 * gib})
 	ctx := context.Background()
 	d := SamplerDeps{Host: host, Usage: u, Store: st, Pass: func() scheduler.PassSummary {
 		return scheduler.PassSummary{Commitments: scheduler.Commitments{Memory: 9 * gib}, Queued: 3, Head: admission.Decision{Blocker: admission.BlockPoolMemory}}
 	}, Pressure: func() (bool, float64) { return true, 7 }, Now: func() time.Time { return time.Now().UTC() }}
 	sampleStep(ctx, d, 30*time.Second)
 	rs, err := st.HostSamples(context.Background(), time.Time{})
-	if err != nil || len(rs) != 1 || rs[0].Span != 30*time.Second || rs[0].Other != 6*gib || rs[0].CommittedMemory != 9*gib || rs[0].Queued != 3 || rs[0].HeadBlocker != "pool_memory" {
+	if err != nil || len(rs) != 1 || rs[0].Span != 30*time.Second || rs[0].Spawned != 2*gib || rs[0].Other != 4*gib || rs[0].CommittedMemory != 9*gib || rs[0].Queued != 3 || rs[0].HeadBlocker != "pool_memory" {
 		t.Fatal(rs, err)
 	}
 	u.Fail(errors.New("failed"))

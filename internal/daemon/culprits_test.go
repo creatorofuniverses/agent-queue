@@ -14,9 +14,9 @@ func TestCulpritText(t *testing.T) {
 	v := platform.MemorySnapshot{
 		Available: 3 * gib, Uncharged: 9 * gib,
 		Cgroups:   []platform.CgroupMemory{{Path: "user.slice/user-1000.slice/user@1000.service/app.slice/app-big.scope", Bytes: 6 * gib}, {Path: "system.slice/docker-x.scope", Bytes: 2 * gib}},
-		Processes: []platform.ProcessMemory{{PID: 10, Name: "python", Cgroup: "user.slice/user-1000.slice/user@1000.service/app.slice/app-big.scope", RSS: 4 * gib}},
+		Processes: []platform.ProcessMemory{{PID: 10, Name: "python", Cgroup: "user.slice/user-1000.slice/user@1000.service/app.slice/app-big.scope", RSS: 4 * gib, Agent: "claude 5"}},
 	}
-	const want = "available 3.0 GiB; in no cgroup (kernel, drivers, zram) 9.0 GiB; cgroups: app-big.scope 6.0 GiB, docker-x.scope 2.0 GiB; processes: python 4.0 GiB (pid 10, app-big.scope)"
+	const want = "available 3.0 GiB; in no cgroup (kernel, drivers, zram) 9.0 GiB; cgroups: app-big.scope 6.0 GiB, docker-x.scope 2.0 GiB; processes: python 4.0 GiB (pid 10, app-big.scope, run by claude 5)"
 	if got := culpritText(v); got != want {
 		t.Fatalf("%q\nwant %q", got, want)
 	}

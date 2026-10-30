@@ -48,7 +48,7 @@ func sampleStep(ctx context.Context, d SamplerDeps, every time.Duration) {
 	for _, a := range u.Agents {
 		agents += a.Bytes
 	}
-	v := store.HostSample{At: d.Now(), Span: every, MemTotal: mem.Total, MemAvailable: mem.Available, SwapTotal: mem.SwapTotal, SwapFree: mem.SwapFree, PSIFullAvg10: avg, PressureClosed: closed, Agents: agents, Docker: u.Docker, Tasks: u.Tasks, Other: u.Other, TasksExpected: c.TasksExpected, TasksUnconsumed: c.TasksUnconsumed, Stands: c.Stands, StandsUnconsumed: c.StandsUnconsumed, Budgets: c.Budgets, BudgetsUnconsumed: c.BudgetsUnconsumed, CommittedMemory: c.Memory, CommittedCPUs: c.CPUs, Queued: p.Queued, Running: p.Running, HeadBlocker: string(p.Head.Blocker)}
+	v := store.HostSample{At: d.Now(), Span: every, MemTotal: mem.Total, MemAvailable: mem.Available, SwapTotal: mem.SwapTotal, SwapFree: mem.SwapFree, PSIFullAvg10: avg, PressureClosed: closed, Agents: agents, Spawned: u.Spawned, Docker: u.Docker, Tasks: u.Tasks, Other: u.Other, TasksExpected: c.TasksExpected, TasksUnconsumed: c.TasksUnconsumed, Stands: c.Stands, StandsUnconsumed: c.StandsUnconsumed, Budgets: c.Budgets, BudgetsUnconsumed: c.BudgetsUnconsumed, CommittedMemory: c.Memory, CommittedCPUs: c.CPUs, Queued: p.Queued, Running: p.Running, HeadBlocker: string(p.Head.Blocker)}
 	if e = d.Store.AddHostSample(ctx, v); e != nil {
 		slog.Warn("stats: write host sample", "err", e)
 	}

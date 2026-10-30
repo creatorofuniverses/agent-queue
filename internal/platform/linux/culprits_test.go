@@ -29,21 +29,24 @@ func TestMemorySnapshotNamesTheLargest(t *testing.T) {
 	write(filepath.Join(cg, "user.slice/app-big.scope/memory.current"), "6442450944\n")
 	write(filepath.Join(cg, "user.slice/app-small.scope/memory.current"), "104857600\n")
 	write(filepath.Join(cg, "system.slice/docker-x.scope/memory.current"), "2147483648\n")
-	proc1 := func(pid, name, rssKB, cgroup string) {
-		write(filepath.Join(proc, pid, "status"), "Name:\t"+name+"\nVmRSS:\t"+rssKB+" kB\n")
+	proc1 := func(pid, ppid, name, rssKB, cgroup string) {
+		write(filepath.Join(proc, pid, "status"), "Name:\t"+name+"\nPPid:\t"+ppid+"\nVmRSS:\t"+rssKB+" kB\n")
 		write(filepath.Join(proc, pid, "cgroup"), "0::/"+cgroup+"\n")
 	}
-	proc1("10", "python", "4194304", "user.slice/app-big.scope")
-	proc1("20", "dockerd", "300000", "system.slice/docker.service")
-	proc1("30", "kthreadd", "0", "")
-	got, err := MemorySnapshot(proc, cg, 2)
+	proc1("5", "1", "MainThread", "1000", "user.slice/app-big.scope")                // comm is not the agent's name,
+	write(filepath.Join(proc, "5", "cmdline"), "/opt/claude/claude\x00--resume\x00") // argv[0] is
+	proc1("9", "5", "bash", "1000", "user.slice/app-big.scope")
+	proc1("10", "9", "python", "4194304", "user.slice/app-big.scope") // what an agent ran: named after it
+	proc1("20", "1", "dockerd", "300000", "system.slice/docker.service")
+	proc1("30", "2", "kthreadd", "0", "")
+	got, err := MemorySnapshot(proc, cg, 2, []string{"claude", "codex"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := platform.MemorySnapshot{
 		Available: 3 * gib, Uncharged: 14 * gib,
 		Cgroups:   []platform.CgroupMemory{{Path: "user.slice/app-big.scope", Bytes: 6 * gib}, {Path: "system.slice/docker-x.scope", Bytes: 2 * gib}},
-		Processes: []platform.ProcessMemory{{PID: 10, Name: "python", Cgroup: "user.slice/app-big.scope", RSS: 4 * gib}, {PID: 20, Name: "dockerd", Cgroup: "system.slice/docker.service", RSS: 300000 << 10}},
+		Processes: []platform.ProcessMemory{{PID: 10, Name: "python", Cgroup: "user.slice/app-big.scope", RSS: 4 * gib, Agent: "claude 5"}, {PID: 20, Name: "dockerd", Cgroup: "system.slice/docker.service", RSS: 300000 << 10}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)

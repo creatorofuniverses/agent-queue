@@ -304,10 +304,14 @@ limit for the next. Memory taken from a profile gets no feedback: aq corrects
 its own estimate from the history.
 
 `aq top` (or `--json`) shows a single snapshot: memory/PSI/swap, the
-non-overlapping physical categories agents/docker/tasks/other, and separately
-the commitments of tasks/stands/budgets and the reasons the head is delayed.
-These two views do not add up to each other. If "everything is slow", start with
-this snapshot.
+non-overlapping physical categories agents / run by agents / docker / tasks /
+other, and separately the commitments of tasks/stands/budgets and the reasons
+the head is delayed. These two views do not add up to each other. If "everything
+is slow", start with this snapshot. "Agents" are the agent processes themselves
+(`[stats] agent_processes`); "run by agents" is what they started outside aq and
+docker, such as a test suite or a build run directly (`spawned` in `--json`, per
+agent); "other" is the rest: the system, a terminal multiplexer, the kernel.
+`aq stats` keeps the same split over time in "Host memory".
 
 ```sh
 aq stats --since 7d
@@ -454,7 +458,8 @@ guard, which temporarily lowered the slice ceiling because the machine was short
 of memory, usually because of something outside aq: a larger `--memory` does
 not help, run it again once memory is back. Each time the guard starts cutting,
 aq records who held memory then (at most every 5 minutes): the largest cgroups
-and processes and the memory in no cgroup (kernel, drivers, zram). `aq stats`
+and processes (with the agent that started each, if any) and the memory in no
+cgroup (kernel, drivers, zram). `aq stats`
 shows the count and the latest three under Incidents ("host guard cut the aq
 slice N times"), `aq stats export --table incidents` all of them as
 `guard_engaged`.

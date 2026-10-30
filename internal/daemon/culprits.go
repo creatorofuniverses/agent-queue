@@ -70,7 +70,11 @@ func culpritText(v platform.MemorySnapshot) string {
 	}
 	var ps []string
 	for _, p := range v.Processes {
-		ps = append(ps, fmt.Sprintf("%s %s (pid %d, %s)", p.Name, units.FormatSize(p.RSS), p.PID, path.Base(p.Cgroup)))
+		where := fmt.Sprintf("pid %d, %s", p.PID, path.Base(p.Cgroup))
+		if p.Agent != "" {
+			where += ", run by " + p.Agent
+		}
+		ps = append(ps, fmt.Sprintf("%s %s (%s)", p.Name, units.FormatSize(p.RSS), where))
 	}
 	if len(ps) > 0 {
 		parts = append(parts, "processes: "+strings.Join(ps, ", "))

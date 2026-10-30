@@ -112,6 +112,7 @@ type ProcessMemory struct {
 	Name   string `json:"name"`
 	Cgroup string `json:"cgroup"`
 	RSS    uint64 `json:"rss"`
+	Agent  string `json:"agent,omitempty"` // the agent it descends from ("claude 1234"): it ran this outside aq
 }
 
 // ContainerUsage is one container of a stand: its compose service, or its name.
@@ -124,6 +125,10 @@ type AgentUsage struct {
 	Name  string `json:"name"`
 	Bytes uint64 `json:"bytes"`
 	Procs int    `json:"procs"`
+	// Spawned is what the agent's processes run outside aq and docker: their
+	// descendants that are not agents themselves (a test run, a build).
+	Spawned      uint64 `json:"spawned"`
+	SpawnedProcs int    `json:"spawned_procs"`
 }
 type Usage struct {
 	Agents        []AgentUsage

@@ -39,7 +39,7 @@ func printTop(c *cmdCtx, v daemon.TopView) {
 		for _, a := range v.Physical.Agents {
 			agents += a.Bytes
 		}
-		fmt.Fprintf(c.stdout, "physical: agents %s, docker %s, tasks %s, other %s (used %s)\n", units.FormatSize(agents), units.FormatSize(v.Physical.Docker), units.FormatSize(v.Physical.Tasks), units.FormatSize(v.Physical.Other), units.FormatSize(v.Physical.Used))
+		fmt.Fprintf(c.stdout, "physical: agents %s, run by agents %s, docker %s, tasks %s, other %s (used %s)\n", units.FormatSize(agents), units.FormatSize(v.Physical.Spawned), units.FormatSize(v.Physical.Docker), units.FormatSize(v.Physical.Tasks), units.FormatSize(v.Physical.Other), units.FormatSize(v.Physical.Used))
 	}
 	p := v.Commitments
 	fmt.Fprintf(c.stdout, "commitments (pool %s / %d cpus): %s / %d cpus; tasks %s, stands %s, budgets %s; unconsumed %s\n", units.FormatSize(p.PoolMemory), p.PoolCPUs, units.FormatSize(p.Memory), p.CPUs, units.FormatSize(p.TasksExpected), units.FormatSize(p.Stands), units.FormatSize(p.Budgets), units.FormatSize(p.TasksUnconsumed+p.StandsUnconsumed+p.BudgetsUnconsumed+p.TeardownUnconsumed))

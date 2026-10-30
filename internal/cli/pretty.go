@@ -210,19 +210,19 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 			}
 			parts = append(parts, part{label, a.Bytes})
 		}
-		parts = append(parts, part{"docker", p.Docker}, part{"aq tasks", p.Tasks}, part{"other", p.Other})
+		parts = append(parts, part{"run by agents", p.Spawned}, part{"docker", p.Docker}, part{"aq tasks", p.Tasks}, part{"other", p.Other})
 		for _, x := range parts {
-			fmt.Fprintf(w, "  %s %s %s\n", pad(x.name, 12), u.bar(x.bytes, p.Used, 24), size(x.bytes))
+			fmt.Fprintf(w, "  %s %s %s\n", pad(x.name, 14), u.bar(x.bytes, p.Used, 24), size(x.bytes))
 		}
 	}
 
 	fmt.Fprintln(w)
 	cm := v.Commitments
 	u.heading(w, "aq commitments")
-	fmt.Fprintf(w, "  %s %s %s / %s pool\n", pad("memory", 12), u.bar(cm.Memory, cm.PoolMemory, 24), size(cm.Memory), size(cm.PoolMemory))
-	fmt.Fprintf(w, "  %s %s %d / %d cpus\n", pad("cpus", 12), u.bar(uint64(cm.CPUs), uint64(cm.PoolCPUs), 24), cm.CPUs, cm.PoolCPUs)
+	fmt.Fprintf(w, "  %s %s %s / %s pool\n", pad("memory", 14), u.bar(cm.Memory, cm.PoolMemory, 24), size(cm.Memory), size(cm.PoolMemory))
+	fmt.Fprintf(w, "  %s %s %d / %d cpus\n", pad("cpus", 14), u.bar(uint64(cm.CPUs), uint64(cm.PoolCPUs), 24), cm.CPUs, cm.PoolCPUs)
 	if cm.Memory > 0 {
-		fmt.Fprintf(w, "  %s tasks %s · stands %s · budgets %s · not yet used %s\n", u.dim(pad("of which", 12)), size(cm.TasksExpected), size(cm.Stands), size(cm.Budgets),
+		fmt.Fprintf(w, "  %s tasks %s · stands %s · budgets %s · not yet used %s\n", u.dim(pad("of which", 14)), size(cm.TasksExpected), size(cm.Stands), size(cm.Budgets),
 			size(cm.TasksUnconsumed+cm.StandsUnconsumed+cm.BudgetsUnconsumed+cm.TeardownUnconsumed))
 	}
 
@@ -244,7 +244,7 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 			fmt.Fprintf(w, "  %s %s\n", t.Root, u.red(t.Error))
 		default:
 			used := t.Size - min(t.Free, t.Size)
-			fmt.Fprintf(w, "  %s %s %s used of %s · %d inodes free\n", pad("space", 12), u.bar(used, t.Size, 24), size(used), size(t.Size), t.InodesFree)
+			fmt.Fprintf(w, "  %s %s %s used of %s · %d inodes free\n", pad("space", 14), u.bar(used, t.Size, 24), size(used), size(t.Size), t.InodesFree)
 			note := t.Root
 			if t.Tmpfs {
 				note += " · tmpfs: temp files count as task memory"
@@ -382,6 +382,7 @@ func (c *cmdCtx) printStats(v stats.Summary) {
 		section(fmt.Sprintf("Host memory (%d samples)", h.Samples))
 		t := &table{head: []string{"", "AVG", "MAX"}, right: map[int]bool{1: true, 2: true}}
 		t.add("agents", size(h.AgentsAvg), size(h.AgentsMax))
+		t.add("run by agents", size(h.SpawnedAvg), size(h.SpawnedMax))
 		t.add("docker", size(h.DockerAvg), size(h.DockerMax))
 		t.add("aq tasks", size(h.TasksAvg), size(h.TasksMax))
 		t.add("other", size(h.OtherAvg), size(h.OtherMax))

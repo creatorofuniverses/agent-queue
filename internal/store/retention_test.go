@@ -70,3 +70,16 @@ func TestThinHostSamples(t *testing.T) {
 		t.Fatal(rs)
 	}
 }
+
+func TestHostSampleKeepsSpawned(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := s.AddHostSample(ctx, HostSample{At: at, Span: 10 * time.Second, Agents: 1, Spawned: 6 << 30, Other: 2}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.HostSamples(ctx, at.Add(-time.Minute))
+	if err != nil || len(got) != 1 || got[0].Spawned != 6<<30 || got[0].Other != 2 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

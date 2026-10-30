@@ -40,8 +40,8 @@ func TestSummarizeProfiles(t *testing.T) {
 	}
 }
 func TestSummarizeQueueAndHost(t *testing.T) {
-	s := Summarize(Input{Samples: []store.HostSample{{Span: 30 * time.Second, MemAvailable: 100, Agents: 10, Queued: 1, HeadBlocker: "pool_memory", PSIFullAvg10: 1}, {Span: 600 * time.Second, MemAvailable: 200, Agents: 20, Queued: 1, HeadBlocker: "pool_memory", PSIFullAvg10: 4, SwapTotal: 100, SwapFree: 50}}})
-	if s.Queue.SampledSeconds != 630 || s.Queue.NonEmptySeconds != 630 || s.Queue.BlockedSeconds["pool_memory"] != 630 || s.Host.Samples != 2 || s.Host.MemAvailableMin != 100 || s.Host.MemAvailableAvg != 195 || s.Host.AgentsAvg != 19 || s.Host.AgentsMax != 20 || s.Host.SwapUsedMax != 50 || s.Host.PSIMax != 4 {
+	s := Summarize(Input{Samples: []store.HostSample{{Span: 30 * time.Second, MemAvailable: 100, Agents: 10, Spawned: 40, Queued: 1, HeadBlocker: "pool_memory", PSIFullAvg10: 1}, {Span: 600 * time.Second, MemAvailable: 200, Agents: 20, Spawned: 2, Queued: 1, HeadBlocker: "pool_memory", PSIFullAvg10: 4, SwapTotal: 100, SwapFree: 50}}})
+	if s.Queue.SampledSeconds != 630 || s.Queue.NonEmptySeconds != 630 || s.Queue.BlockedSeconds["pool_memory"] != 630 || s.Host.Samples != 2 || s.Host.MemAvailableMin != 100 || s.Host.MemAvailableAvg != 195 || s.Host.AgentsAvg != 19 || s.Host.AgentsMax != 20 || s.Host.SpawnedAvg != 3 || s.Host.SpawnedMax != 40 || s.Host.SwapUsedMax != 50 || s.Host.PSIMax != 4 {
 		t.Fatal(s)
 	}
 }

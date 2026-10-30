@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -89,11 +90,19 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 	if e != nil {
 		return v, e
 	}
+	// One pass reads every process; PSS is read only for agents and what they run.
+	type proc struct {
+		dir          string
+		ppid, agent  int
+		inAQOrDocker bool
+	}
+	procs := map[int]*proc{}
 	for _, ent := range ents {
 		if e := ctx.Err(); e != nil {
 			return v, e
 		}
-		if _, e := strconv.Atoi(ent.Name()); e != nil || !ent.IsDir() {
+		pid, e := strconv.Atoi(ent.Name())
+		if e != nil || !ent.IsDir() {
 			continue
 		}
 		dir := filepath.Join(m.cfg.ProcRoot, ent.Name())
@@ -103,54 +112,81 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		}
 		cmd, _ := os.ReadFile(filepath.Join(dir, "cmdline"))
 		argv, _, _ := strings.Cut(string(cmd), "\x00")
-		idx := -1
+		p := &proc{dir: dir, agent: -1, ppid: parentPID(filepath.Join(dir, "status"))}
 		for i, name := range agents {
 			if strings.TrimSpace(string(comm)) == name || filepath.Base(argv) == name {
-				idx = i
+				p.agent = i
 				break
 			}
-		}
-		if idx < 0 {
-			continue
 		}
 		cg, e := os.ReadFile(filepath.Join(dir, "cgroup"))
 		if e != nil {
 			continue
 		}
-		skip := false
 		for _, line := range strings.Split(string(cg), "\n") {
-			if p, ok := strings.CutPrefix(line, "0::"); ok {
-				p = strings.Trim(p, "/")
-				for _, x := range excluded {
-					if withinCG(p, x) {
-						skip = true
-						break
-					}
-				}
+			if path, ok := strings.CutPrefix(line, "0::"); ok {
+				path = strings.Trim(path, "/")
+				p.inAQOrDocker = slices.ContainsFunc(excluded, func(x string) bool { return withinCG(path, x) })
 			}
 		}
-		if skip {
-			continue
-		}
-		n, e := readPSS(filepath.Join(dir, "smaps_rollup"))
-		if e == nil {
-			n *= 1024
-		} else {
-			b, err := os.ReadFile(filepath.Join(dir, "statm"))
-			fields := strings.Fields(string(b))
-			if err != nil || len(fields) < 2 {
-				continue
+		procs[pid] = p
+	}
+	// nearestAgent is the agent a process descends from, or -1.
+	nearestAgent := func(pid int) int {
+		for depth := 0; depth < 64 && pid > 1; depth++ {
+			p := procs[pid]
+			if p == nil {
+				return -1
 			}
-			pages, err := strconv.ParseUint(fields[1], 10, 64)
-			if err != nil {
-				continue
+			if p.agent >= 0 {
+				return p.agent
 			}
-			n = pages * uint64(os.Getpagesize())
+			pid = p.ppid
 		}
-		v.Agents[idx].Bytes += n
-		v.Agents[idx].Procs++
+		return -1
+	}
+	for _, p := range procs {
+		if p.inAQOrDocker {
+			continue // counted as tasks or docker
+		}
+		if p.agent >= 0 {
+			v.Agents[p.agent].Bytes += processMemory(p.dir)
+			v.Agents[p.agent].Procs++
+		} else if a := nearestAgent(p.ppid); a >= 0 {
+			v.Agents[a].Spawned += processMemory(p.dir)
+			v.Agents[a].SpawnedProcs++
+		}
 	}
 	return v, nil
+}
+
+// processMemory is a process's PSS, or its RSS where smaps_rollup is not readable.
+func processMemory(dir string) uint64 {
+	if n, e := readPSS(filepath.Join(dir, "smaps_rollup")); e == nil {
+		return n * 1024
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "statm"))
+	fields := strings.Fields(string(b))
+	if err != nil || len(fields) < 2 {
+		return 0
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return pages * uint64(os.Getpagesize())
+}
+
+// parentPID reads PPid from /proc/<pid>/status; 0 when unknown.
+func parentPID(status string) int {
+	b, _ := os.ReadFile(status)
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(l, "PPid:"); ok {
+			n, _ := strconv.Atoi(strings.TrimSpace(v))
+			return n
+		}
+	}
+	return 0
 }
 
 func readPSS(path string) (uint64, error) {

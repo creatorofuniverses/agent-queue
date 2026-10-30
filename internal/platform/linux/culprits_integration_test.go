@@ -5,7 +5,7 @@ package linux
 import "testing"
 
 func TestMemorySnapshotOnThisHost(t *testing.T) {
-	v, err := MemorySnapshot("/proc", "/sys/fs/cgroup", 5)
+	v, err := MemorySnapshot("/proc", "/sys/fs/cgroup", 5, []string{"claude", "codex"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -88,6 +88,8 @@ type HostStats struct {
 	PSIMax          float64 `json:"psi_max"`
 	AgentsAvg       uint64  `json:"agents_avg"`
 	AgentsMax       uint64  `json:"agents_max"`
+	SpawnedAvg      uint64  `json:"spawned_avg"` // run by agents outside aq and docker
+	SpawnedMax      uint64  `json:"spawned_max"`
 	DockerAvg       uint64  `json:"docker_avg"`
 	DockerMax       uint64  `json:"docker_max"`
 	TasksAvg        uint64  `json:"tasks_avg"`
@@ -326,7 +328,7 @@ func summarizeHost(s *Summary, in Input) {
 	h := &HostStats{Samples: len(in.Samples)}
 	s.Queue = q
 	s.Host = h
-	var avg [8]float64
+	var avg [9]float64
 	for i, v := range in.Samples {
 		span := v.Span.Seconds()
 		q.SampledSeconds += span
@@ -342,11 +344,12 @@ func summarizeHost(s *Summary, in Input) {
 		h.SwapUsedMax = max(h.SwapUsedMax, satSub(v.SwapTotal, v.SwapFree))
 		h.PSIMax = max(h.PSIMax, v.PSIFullAvg10)
 		unc := v.TasksUnconsumed + v.StandsUnconsumed + v.BudgetsUnconsumed
-		vals := []uint64{v.MemAvailable, v.Agents, v.Docker, v.Tasks, v.Other, v.CommittedMemory, unc}
+		vals := []uint64{v.MemAvailable, v.Agents, v.Docker, v.Tasks, v.Other, v.CommittedMemory, unc, v.Spawned}
 		for i, n := range vals {
 			avg[i] += float64(n) * span
 		}
 		h.AgentsMax = max(h.AgentsMax, v.Agents)
+		h.SpawnedMax = max(h.SpawnedMax, v.Spawned)
 		h.DockerMax = max(h.DockerMax, v.Docker)
 		h.TasksMax = max(h.TasksMax, v.Tasks)
 		h.OtherMax = max(h.OtherMax, v.Other)
@@ -354,7 +357,7 @@ func summarizeHost(s *Summary, in Input) {
 		h.UnconsumedMax = max(h.UnconsumedMax, unc)
 	}
 	if q.SampledSeconds > 0 {
-		dst := []*uint64{&h.MemAvailableAvg, &h.AgentsAvg, &h.DockerAvg, &h.TasksAvg, &h.OtherAvg, &h.CommittedAvg, &h.UnconsumedAvg}
+		dst := []*uint64{&h.MemAvailableAvg, &h.AgentsAvg, &h.DockerAvg, &h.TasksAvg, &h.OtherAvg, &h.CommittedAvg, &h.UnconsumedAvg, &h.SpawnedAvg}
 		for i, p := range dst {
 			*p = uint64(avg[i] / q.SampledSeconds)
 		}

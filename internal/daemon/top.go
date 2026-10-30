@@ -26,10 +26,12 @@ type HostView struct {
 type PhysicalView struct {
 	Used   uint64                `json:"used"`
 	Agents []platform.AgentUsage `json:"agents"`
-	Docker uint64                `json:"docker"`
-	Tasks  uint64                `json:"tasks"`
-	Other  uint64                `json:"other"`
-	Error  string                `json:"error,omitempty"`
+	// Spawned is what agents run outside aq and docker (the sum of their Spawned).
+	Spawned uint64 `json:"spawned"`
+	Docker  uint64 `json:"docker"`
+	Tasks   uint64 `json:"tasks"`
+	Other   uint64 `json:"other"`
+	Error   string `json:"error,omitempty"`
 }
 type QueueView struct {
 	Queued        int               `json:"queued"`
@@ -98,7 +100,8 @@ func physical(ctx context.Context, usage platform.UsageMeter, agents []string, m
 	v := PhysicalView{Used: sub(mem.Total, mem.Available), Agents: u.Agents, Docker: u.Docker, Tasks: u.Tasks}
 	other := sub(sub(v.Used, u.Docker), u.Tasks)
 	for _, a := range u.Agents {
-		other = sub(other, a.Bytes)
+		v.Spawned += a.Spawned
+		other = sub(sub(other, a.Bytes), a.Spawned)
 	}
 	v.Other = other
 	return v
