@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -411,7 +412,46 @@ func (d *server) submit(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.view(it, time.Now()), nil
+	v := d.view(it, time.Now())
+	v.KnownNames = d.knownNames(ctx, it.Profile)
+	return v, nil
+}
+
+// knownNames lists, most recent first, up to five task names of profile's repo
+// that have history, when profile itself has none: a run-specific name (a wave,
+// a ticket, a version) starts an empty history the next run cannot use.
+func (d *server) knownNames(ctx context.Context, profile string) []string {
+	root, _, ok := cutLast(profile, ":")
+	if !ok {
+		return nil
+	}
+	ps, err := d.st.Profiles(ctx)
+	if err != nil {
+		return nil
+	}
+	var same []store.ProfileInfo
+	for _, p := range ps {
+		if p.Name == profile {
+			return nil
+		}
+		if r, _, ok := cutLast(p.Name, ":"); ok && r == root && p.Runs > 0 {
+			same = append(same, p)
+		}
+	}
+	slices.SortFunc(same, func(a, b store.ProfileInfo) int { return b.LastEnded.Compare(a.LastEnded) })
+	var out []string
+	for _, p := range same[:min(len(same), 5)] {
+		out = append(out, p.Name[len(root)+1:])
+	}
+	return out
+}
+
+func cutLast(s, sep string) (before, after string, ok bool) {
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return s, "", false
+	}
+	return s[:i], s[i+len(sep):], true
 }
 
 func (d *server) list(ctx context.Context, raw json.RawMessage) (any, error) {

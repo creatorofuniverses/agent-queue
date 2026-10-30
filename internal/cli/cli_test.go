@@ -703,10 +703,29 @@ func TestWaitReportsMemoryFit(t *testing.T) {
 	h.ex.Finish(spec.ID, platform.ExitInfo{ServiceResult: "success", ExitCode: "exited", ExitStatus: "0", EndedAt: time.Now(), MemoryPeak: 900 << 20})
 	h.ex.SetAlive(spec.ID, false)
 	code, wout, werr := h.run("wait", id)
-	if code != 0 || !strings.HasSuffix(strings.TrimSpace(wout), " memory: peak 900 MiB is 176% of expected 512 MiB (underestimated)") {
+	if code != 0 || !strings.HasSuffix(strings.TrimSpace(wout), " memory: peak 900 MiB is 176% of expected 512 MiB (underestimated: raise --expected)") {
 		t.Fatalf("wait: code=%d out=%q err=%q", code, wout, werr)
 	}
 	if _, o, _ := h.run("wait", id, "--json"); !strings.Contains(o, `"memory_fit": "memory: peak 900 MiB`) {
 		t.Fatalf("wait --json: %q", o)
+	}
+}
+
+func TestSubmitHintsKnownNamesForNewProfile(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	_, out, _ := h.run("submit", "--name", "tests", "--memory", "128M", "--timeout", "1m", "--", "true")
+	spec := h.launched(t, 1)[0]
+	h.ex.Finish(spec.ID, platform.ExitInfo{ServiceResult: "success", ExitCode: "exited", ExitStatus: "0", EndedAt: time.Now(), MemoryPeak: 64 << 20})
+	h.ex.SetAlive(spec.ID, false)
+	if code, _, e := h.run("wait", strings.TrimSpace(out)); code != 0 {
+		t.Fatalf("wait: %d %s", code, e)
+	}
+	_, _, e := h.run("submit", "--name", "tests-wave2", "--memory", "128M", "--timeout", "1m", "--", "true")
+	if !strings.Contains(e, `hint: no history for name "tests-wave2" here; names with history: tests`) {
+		t.Fatalf("new name: %q", e)
+	}
+	if _, _, e = h.run("submit", "--name", "tests", "--timeout", "1m", "--", "true"); strings.Contains(e, "no history") {
+		t.Fatalf("known name: %q", e)
 	}
 }

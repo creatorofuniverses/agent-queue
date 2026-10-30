@@ -380,6 +380,8 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 	return v, m.err
 }
 
+func (e *Executor) OtherOOMKills() (map[string]uint64, error) { return nil, nil }
+
 func (e *Executor) SetTeardownSliceOOMKills(n uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

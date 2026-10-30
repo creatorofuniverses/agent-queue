@@ -39,11 +39,16 @@ workload: the hint can also match quoted text or a light command.
    the name only when the versions are separate workloads kept running side by
    side, e.g. a matrix `tests-pg15` / `tests-pg16`. Leave `--project` (MCP
    `project`) unset in a worktree: a worktree path as the project gives that
-   worktree its own empty history.
+   worktree its own empty history. If submit warns `hint: no history for name
+   …; names with history: …` (MCP: `known_names`) and one of those is the same
+   workload, use that name from the next run on.
 2. **New workload?** Set `--memory` from worker count and observed peaks: roughly
    300–800M per pytest worker, measured container memory for a stand, or 2× a
    previously observed peak. These are starting estimates. Too low risks OOM;
    too high delays admission. OOM never automatically raises the limit.
+   `--memory` is the kill limit; the pool is charged `--expected` (default: the
+   limit). When the usual peak is known to be well below the limit, pass it as
+   `--expected`: the task starts sooner and the limit still catches a spike.
    A task's `$TMPDIR` is on tmpfs and counts against `--memory`: include what it
    writes there (pytest `tmp_path`, unpacked wheels, build output). Never move
    `TMPDIR` or pytest `--basetemp` to a disk directory to save memory; that wears
@@ -133,8 +138,9 @@ Record the outcome and next step, then `aq ack EVENT_ID`. Delivery retries can
 reuse the same event ID.
 
 If the notification (or `aq wait`) ends with `memory: peak …
-(underestimated|overestimated)`, the declared `--expected`/`--memory` missed the
-real peak: size the next run of the same work from that peak, with some margin.
+(underestimated|overestimated: …)`, the estimate missed the real peak. Fix it
+with `--expected` (what the pool is charged) near that peak; keep `--memory` as
+the kill limit with headroom, since one run's peak is no safe limit for the next.
 `aq release` of a stand with `--docker-project` reports the same for the stand
 against `--memory`; after `stand_over_declared`, declare more next time.
 

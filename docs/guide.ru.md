@@ -182,6 +182,13 @@ min_tmp_inodes = 100000
 воркеров, элемент матрицы вроде `tests-pg16`). Внутри worktree не задавайте
 `--project`, иначе у этого worktree будет своя история.
 
+Если у имени ещё нет истории, а у других имён того же репозитория есть,
+`aq submit` предупреждает в stderr (`known_names` в `--json` и MCP):
+
+```
+hint: no history for name "tests-wave2" here; names with history: tests, e2e (reuse one for the same workload)
+```
+
 Первый запуск требует `--memory`. После хотя бы одного пригодного прогона
 память можно опустить:
 
@@ -261,14 +268,16 @@ aq logs "$id" --tail 50
 в уведомлении `task_finished` и в поле `memory_fit` в `--json`:
 
 ```
-… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 4.2 GiB is 124% of expected 3.4 GiB (underestimated)
+… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 0.8 GiB is 19% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)
 ```
 
 Подсказка появляется, когда пик выше 110% или ниже 50% ожидаемой памяти и
 отличается от неё хотя бы на 256 MiB. О переоценке сообщается только для
 прогона, дошедшего до конца (`SUCCEEDED` или `COMMAND_FAILED`): таймаут или
-отмена обрывают пик. Память, взятая из профиля, подсказки не получает: свою
-оценку aq поправляет по истории сам.
+отмена обрывают пик. Переоценку исправляют через `--expected`: именно его
+списывает пул, а `--memory` остаётся лимитом-убийцей, и пик одного прогона —
+не безопасный лимит для следующего. Память, взятая из профиля, подсказки не
+получает: свою оценку aq поправляет по истории сам.
 
 `aq top` (или `--json`) показывает один снимок: память/PSI/swap,
 непересекающиеся физические категории agents/docker/tasks/other, отдельно
@@ -288,6 +297,13 @@ aq stats export --since 7d --format csv --table host
 `items`, `runs`, `host`, `incidents`, `events`, `hook`; CSV требует `--table`.
 Команды, окружение, cwd, идентификаторы сессий и тексты ошибок доставки
 в статистику и выгрузку не входят.
+
+OOM-убийства ядра вне aq разбиты по cgroup, где они случились: слайс
+пользовательского менеджера (`app.slice`, собственный слайс тестового набора)
+или `system.slice` (сервисы и контейнеры docker), например `kernel OOM kills
+outside aq: 134 (aqtest.slice 120, app.slice 2)`. Неназванные убийства случились
+в другом месте или в cgroup, который появился и исчез между двумя замерами
+(раз в 10 с).
 
 ### Запись на диск
 

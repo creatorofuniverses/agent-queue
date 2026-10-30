@@ -181,6 +181,13 @@ aq. A different name is right when the memory shape differs (another suite,
 another worker count, a matrix entry such as `tests-pg16`). Leave `--project`
 unset inside a worktree, or that worktree gets its own history.
 
+When a name has no history yet and other names of the same repository do,
+`aq submit` warns on stderr (`known_names` in `--json` and MCP):
+
+```
+hint: no history for name "tests-wave2" here; names with history: tests, e2e (reuse one for the same workload)
+```
+
 The first run requires `--memory`. After at least one usable run, memory can be
 omitted:
 
@@ -261,14 +268,16 @@ the `aq wait` line ends with feedback for the next estimate, also sent in the
 `task_finished` notification and as `memory_fit` in `--json`:
 
 ```
-… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 4.2 GiB is 124% of expected 3.4 GiB (underestimated)
+… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 0.8 GiB is 19% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)
 ```
 
 It appears when the peak is above 110% or below 50% of the expected memory and
 at least 256 MiB away from it. An overestimate is reported only for a run that
 went to the end (`SUCCEEDED` or `COMMAND_FAILED`): a timeout or cancel cuts the
-peak short. Memory taken from a profile gets no feedback: aq corrects its own
-estimate from the history.
+peak short. An overestimate is fixed with `--expected`, which is what the pool
+is charged: `--memory` stays the kill limit, and one run's peak is no safe
+limit for the next. Memory taken from a profile gets no feedback: aq corrects
+its own estimate from the history.
 
 `aq top` (or `--json`) shows a single snapshot: memory/PSI/swap, the
 non-overlapping physical categories agents/docker/tasks/other, and separately
@@ -289,6 +298,12 @@ returns only the items and runs of that profile. Export tables are `items`,
 `runs`, `host`, `incidents`, `events`, `hook`; CSV requires `--table`. Commands,
 environment, cwd, session identifiers and delivery error texts are not included
 in statistics or exports.
+
+Kernel OOM kills outside aq are split by the cgroup they happened in: a slice of
+the user manager (`app.slice`, a test suite's own slice) or `system.slice`
+(services and docker containers), e.g. `kernel OOM kills outside aq: 134
+(aqtest.slice 120, app.slice 2)`. Kills left unnamed happened elsewhere or in a
+cgroup that came and went between two samples (every 10 s).
 
 ### Disk writes
 

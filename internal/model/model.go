@@ -242,8 +242,12 @@ func (it *Item) MemoryFit() string {
 	if verdict == "" {
 		return ""
 	}
-	return fmt.Sprintf("memory: peak %s is %d%% of expected %s (%s)",
-		units.FormatSize(it.MemoryPeak), pct, units.FormatSize(it.Expected), verdict)
+	advice := "raise --expected"
+	if verdict == "overestimated" {
+		advice = "lower --expected, keep --memory as the limit" // a single peak is no safe limit
+	}
+	return fmt.Sprintf("memory: peak %s is %d%% of expected %s (%s: %s)",
+		units.FormatSize(it.MemoryPeak), pct, units.FormatSize(it.Expected), verdict, advice)
 }
 
 // StandFit tells the agent how a stand's measured peak compared with the

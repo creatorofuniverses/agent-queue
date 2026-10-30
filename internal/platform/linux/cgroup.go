@@ -154,6 +154,42 @@ func (e *Executor) SliceOOMKills() (uint64, error) {
 	return readEvent(filepath.Join(e.sliceDir(), "memory.events"), "oom_kill")
 }
 
+// OtherOOMKills reads oom_kill of each child of the user manager's cgroup and of
+// system.slice. aq's own slices are left out (their kills are subtracted from a
+// parent slice that holds them); children without a memory controller are skipped.
+func (e *Executor) OtherOOMKills() (map[string]uint64, error) {
+	manager := filepath.Join(e.cfg.CgroupRoot, e.manager)
+	entries, err := os.ReadDir(manager)
+	if err != nil {
+		return nil, err
+	}
+	dirs := map[string]string{"system.slice": filepath.Join(e.cfg.CgroupRoot, "system.slice")}
+	for _, en := range entries {
+		if en.IsDir() {
+			dirs[en.Name()] = filepath.Join(manager, en.Name())
+		}
+	}
+	own := []string{e.sliceDir(), e.teardownSliceDir()}
+	out := map[string]uint64{}
+	for name, dir := range dirs {
+		if slices.Contains(own, dir) {
+			continue
+		}
+		n, err := readEvent(filepath.Join(dir, "memory.events"), "oom_kill")
+		if err != nil {
+			continue // gone or no memory controller
+		}
+		for _, o := range own {
+			if strings.HasPrefix(o, dir+string(filepath.Separator)) {
+				k, _ := readEvent(filepath.Join(o, "memory.events"), "oom_kill")
+				n -= min(n, k)
+			}
+		}
+		out[name] = n
+	}
+	return out, nil
+}
+
 // SliceCeiling reads the slice's actual memory.max ("max" means unlimited).
 func (e *Executor) SliceCeiling() (uint64, error) {
 	b, err := os.ReadFile(filepath.Join(e.sliceDir(), "memory.max"))

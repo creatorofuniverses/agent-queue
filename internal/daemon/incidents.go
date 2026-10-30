@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
@@ -14,6 +16,8 @@ type incidentSampler struct {
 	sliceOOMKills func() (uint64, error)
 	slicePrev     uint64
 	sliceSeen     bool
+	groupOOMKills func() (map[string]uint64, error)
+	groupPrev     map[string]uint64 // nil until a baseline is read
 	oomd          platform.OOMKillLog
 	steps         int
 	oomdErrorAt   time.Time
@@ -29,8 +33,8 @@ type incidentSampler struct {
 
 // RunIncidents records kernel OOM kills and pressure-gate transitions until ctx ends.
 // The first sample of each is a baseline, not an incident.
-func RunIncidents(ctx context.Context, host platform.HostMetrics, st *store.Store, pressure func() (closed bool, avg10 float64), sliceOOMKills func() (uint64, error), oomd platform.OOMKillLog, every time.Duration) {
-	s := &incidentSampler{host: host, st: st, pressure: pressure, sliceOOMKills: sliceOOMKills, oomd: oomd}
+func RunIncidents(ctx context.Context, host platform.HostMetrics, st *store.Store, pressure func() (closed bool, avg10 float64), sliceOOMKills func() (uint64, error), groupOOMKills func() (map[string]uint64, error), oomd platform.OOMKillLog, every time.Duration) {
+	s := &incidentSampler{host: host, st: st, pressure: pressure, sliceOOMKills: sliceOOMKills, groupOOMKills: groupOOMKills, oomd: oomd}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -50,6 +54,12 @@ func (s *incidentSampler) step(ctx context.Context) {
 		slice, err = s.sliceOOMKills()
 		valid = err == nil
 	}
+	var groups map[string]uint64
+	if s.groupOOMKills != nil {
+		if g, err := s.groupOOMKills(); err == nil {
+			groups = g
+		}
+	}
 	if n, err := s.host.KernelOOMKills(); err != nil {
 		slog.Warn("incidents: read kernel oom kills", "err", err)
 	} else {
@@ -59,14 +69,16 @@ func (s *incidentSampler) step(ctx context.Context) {
 			if valid && s.sliceSeen {
 				delta = sub(delta, sub(slice, s.slicePrev))
 				detail = ""
+				delta = s.recordGroups(ctx, groups, delta)
 			}
 			if delta > 0 {
 				s.record(ctx, time.Now().UTC(), "kernel_oom", float64(delta), detail)
 			}
 		}
 		s.oomSeen, s.oomPrev = true, n
-		// Advance with the kernel baseline so both deltas span one interval.
+		// Advance with the kernel baseline so all deltas span one interval.
 		s.sliceSeen, s.slicePrev = valid, slice
+		s.groupPrev = groups
 	}
 	if s.oomd != nil && s.steps%6 == 0 {
 		kills, err := s.oomd.Kills(ctx)
@@ -91,6 +103,24 @@ func (s *incidentSampler) step(ctx context.Context) {
 		s.add(ctx, kind, avg)
 	}
 	s.psiSeen, s.psiClosed = true, closed
+}
+
+// recordGroups records the part of delta kernel OOM kills that landed in a
+// known cgroup outside aq, one incident per cgroup, and returns the rest. A
+// cgroup new since the last sample counts from zero.
+func (s *incidentSampler) recordGroups(ctx context.Context, groups map[string]uint64, delta uint64) uint64 {
+	if groups == nil || s.groupPrev == nil {
+		return delta
+	}
+	now := time.Now().UTC()
+	for _, name := range slices.Sorted(maps.Keys(groups)) {
+		d := min(sub(groups[name], s.groupPrev[name]), delta)
+		if d > 0 {
+			s.record(ctx, now, "kernel_oom", float64(d), name)
+			delta -= d
+		}
+	}
+	return delta
 }
 
 func (s *incidentSampler) add(ctx context.Context, kind string, v float64) {

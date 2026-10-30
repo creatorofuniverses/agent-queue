@@ -54,6 +54,9 @@ type Executor interface {
 	SliceCurrent() (uint64, error)
 	SliceOOMKills() (uint64, error)
 	TeardownSliceOOMKills() (uint64, error)
+	// OtherOOMKills: oom_kill of every other slice of the user manager and of
+	// system.slice, by cgroup name, so kills outside aq can be told apart.
+	OtherOOMKills() (map[string]uint64, error)
 	SliceCeiling() (uint64, error) // actual memory.max; math.MaxUint64 when unlimited
 	SetSliceCeiling(max, high uint64) error
 	EnsureSlice(ctx context.Context, poolMemory uint64) error // slice exists, MemorySwapMax=0, MemoryMax=pool

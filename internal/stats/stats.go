@@ -132,11 +132,12 @@ type PatternHits struct {
 	Hits    int    `json:"hits"`
 }
 type IncidentStats struct {
-	KernelOOM        float64 `json:"kernel_oom"`
-	OOMDOutside      int     `json:"oomd_outside"`
-	OOMDTasks        int     `json:"oomd_tasks"`
-	PSIEpisodes      int     `json:"psi_episodes"`
-	PSIClosedSeconds float64 `json:"psi_closed_seconds"`
+	KernelOOM        float64            `json:"kernel_oom"`
+	KernelOOMBy      map[string]float64 `json:"kernel_oom_by,omitempty"` // the part attributed to a cgroup outside aq
+	OOMDOutside      int                `json:"oomd_outside"`
+	OOMDTasks        int                `json:"oomd_tasks"`
+	PSIEpisodes      int                `json:"psi_episodes"`
+	PSIClosedSeconds float64            `json:"psi_closed_seconds"`
 }
 
 func Summarize(in Input) Summary {
@@ -433,6 +434,12 @@ func summarizeIncidents(s *Summary, in Input) {
 		switch v.Kind {
 		case "kernel_oom":
 			g.KernelOOM += v.Value
+			if v.Detail != "" && v.Detail != "unattributed" {
+				if g.KernelOOMBy == nil {
+					g.KernelOOMBy = map[string]float64{}
+				}
+				g.KernelOOMBy[v.Detail] += v.Value
+			}
 		case "oomd_kill":
 			own := false
 			for _, slice := range []string{in.SliceName, in.TeardownSliceName} {

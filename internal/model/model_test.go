@@ -152,15 +152,15 @@ func TestMemoryFit(t *testing.T) {
 		it   *Item
 		want string
 	}{
-		{"under", ok(StateSucceeded, ReasonNone, 2*gib, 3*gib), "memory: peak 3.0 GiB is 150% of expected 2.0 GiB (underestimated)"},
-		{"over", ok(StateSucceeded, ReasonNone, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated)"},
-		{"over after a failed command", ok(StateFailed, ReasonCommandFailed, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated)"},
-		{"under on OOM", ok(StateFailed, ReasonOOM, 2*gib, 8*gib), "memory: peak 8.0 GiB is 400% of expected 2.0 GiB (underestimated)"},
+		{"under", ok(StateSucceeded, ReasonNone, 2*gib, 3*gib), "memory: peak 3.0 GiB is 150% of expected 2.0 GiB (underestimated: raise --expected)"},
+		{"over", ok(StateSucceeded, ReasonNone, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)"},
+		{"over after a failed command", ok(StateFailed, ReasonCommandFailed, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)"},
+		{"under on OOM", ok(StateFailed, ReasonOOM, 2*gib, 8*gib), "memory: peak 8.0 GiB is 400% of expected 2.0 GiB (underestimated: raise --expected)"},
 		{"within tolerance", ok(StateSucceeded, ReasonNone, 2*gib, 2*gib+100*mib), ""},
 		{"small absolute miss", ok(StateSucceeded, ReasonNone, 200*mib, 20*mib), ""},
 		{"timeout cut the run short", ok(StateFailed, ReasonTimeout, 4*gib, gib), ""},
 		{"cancelled run", ok(StateCancelled, ReasonCancelled, 4*gib, gib), ""},
-		{"under on timeout", ok(StateFailed, ReasonTimeout, gib, 2*gib), "memory: peak 2.0 GiB is 200% of expected 1.0 GiB (underestimated)"},
+		{"under on timeout", ok(StateFailed, ReasonTimeout, gib, 2*gib), "memory: peak 2.0 GiB is 200% of expected 1.0 GiB (underestimated: raise --expected)"},
 		{"no peak", ok(StateFailed, ReasonLaunchFailed, 4*gib, 0), ""},
 		{"running", ok(StateRunning, ReasonNone, 4*gib, gib), ""},
 		{"from profile", &Item{Kind: KindTask, State: StateSucceeded, Expected: 4 * gib, MemoryPeak: gib, MemoryFromProfile: true}, ""},

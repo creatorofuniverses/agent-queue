@@ -156,7 +156,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 				return 0, e
 			}
 			return a + b, nil
-		}, opts.OOMKills, 10*time.Second)
+		}, exec.OtherOOMKills, opts.OOMKills, 10*time.Second)
 	}()
 
 	err = protocol.Serve(runCtx, paths.Socket(), d.handle)

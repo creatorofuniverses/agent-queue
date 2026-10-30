@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"maps"
 	"path/filepath"
 	"testing"
 	"time"
@@ -132,5 +133,30 @@ func TestKernelOOMReadFailureKeepsSliceBaseline(t *testing.T) {
 	incs, e := st.Incidents(t.Context(), time.Time{})
 	if e != nil || len(incs) != 0 {
 		t.Fatal(incs, e)
+	}
+}
+
+func TestKernelOOMByGroup(t *testing.T) {
+	s, h, st := newIncTest(t, func() (bool, float64) { return false, 0 })
+	own := uint64(4)
+	groups := map[string]uint64{"aqe2e.slice": 1}
+	s.sliceOOMKills = func() (uint64, error) { return own, nil }
+	s.groupOOMKills = func() (map[string]uint64, error) { return maps.Clone(groups), nil }
+	h.SetOOMKills(10)
+	s.step(t.Context())
+	// 5 kills: 1 in aq's slice, 2 in aqe2e.slice, 1 in a new app.slice, 1 elsewhere.
+	own, groups = 5, map[string]uint64{"aqe2e.slice": 3, "app.slice": 1}
+	h.SetOOMKills(15)
+	s.step(t.Context())
+	incs, e := st.Incidents(t.Context(), time.Time{})
+	if e != nil || len(incs) != 3 {
+		t.Fatal(incs, e)
+	}
+	got := map[string]float64{}
+	for _, v := range incs {
+		got[v.Detail] += v.Value
+	}
+	if want := map[string]float64{"aqe2e.slice": 2, "app.slice": 1, "": 1}; !maps.Equal(got, want) {
+		t.Fatalf("by group %v, want %v", got, want)
 	}
 }

@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -468,5 +469,28 @@ func TestEnsureTeardownSlice(t *testing.T) {
 		if !slices.Equal(f.calls[i], want[i]) {
 			t.Fatalf("call %d %q, want %q", i, f.calls[i], want[i])
 		}
+	}
+}
+
+func TestOtherOOMKills(t *testing.T) {
+	e, slice := fakeCgroup(t)
+	manager := filepath.Dir(slice)
+	write := func(p, s string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(manager, "app.slice/memory.events"), "oom 5\noom_kill 5\n")
+	write(filepath.Join(manager, "aqe2e.slice/memory.events"), "oom_kill 7\n")
+	write(filepath.Join(manager, "aqtesttd.slice/memory.events"), "oom_kill 1\n")
+	write(filepath.Join(manager, "session.slice/cgroup.procs"), "") // no memory controller
+	write(filepath.Join(manager, "cgroup.procs"), "")
+	write(filepath.Join(e.cfg.CgroupRoot, "system.slice/memory.events"), "oom_kill 2\n")
+	got, err := e.OtherOOMKills()
+	if want := map[string]uint64{"app.slice": 5, "aqe2e.slice": 7, "system.slice": 2}; err != nil || !maps.Equal(got, want) {
+		t.Fatalf("OtherOOMKills %v %v, want %v", got, err, want)
 	}
 }

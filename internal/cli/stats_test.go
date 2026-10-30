@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"strings"
 	"testing"
 )
@@ -52,5 +53,18 @@ func TestStatsCSVIntegersAreNotExponents(t *testing.T) {
 	code, out, errout := h.run("stats", "export", "--format", "csv", "--table", "items")
 	if code != 0 || !strings.Contains(out, "536870912") || strings.Contains(out, "e+") {
 		t.Fatal(code, out, errout)
+	}
+}
+
+func TestPrettyStatsOOMGroupsAndMissingEstimate(t *testing.T) {
+	var b strings.Builder
+	c := &cmdCtx{stdout: &b, env: func(string) string { return "" }}
+	c.printStats(stats.Summary{
+		Profiles:  []stats.ProfileStats{{Profile: "/r:tests", Runs: 1, Usable: 1, PeakToExpectedP50: 0.5, PeakToExpectedP90: 0.5}},
+		Incidents: &stats.IncidentStats{KernelOOM: 7, KernelOOMBy: map[string]float64{"aqtest.slice": 4, "app.slice": 1}},
+	})
+	out := b.String()
+	if !strings.Contains(out, "kernel OOM kills outside aq: 7 (aqtest.slice 4, app.slice 1)") || !strings.Contains(out, "0.50 / 0.50            —") {
+		t.Fatal(out)
 	}
 }

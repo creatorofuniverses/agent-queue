@@ -342,7 +342,7 @@ func (c *cmdCtx) printStats(v stats.Summary) {
 		t := &table{head: []string{"PROFILE", "RUNS", "USABLE", "OOM", "TIMEOUT", "FROM HISTORY", "OVER EXPECTED", "PEAK/EXPECTED p50/p90", "TIME/ESTIMATE p50/p90"}, right: map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true, 6: true}}
 		for _, p := range v.Profiles {
 			t.add(shortProfile(p.Profile, c.env("HOME")), fmt.Sprint(p.Runs), fmt.Sprint(p.Usable), fmt.Sprint(p.OOM), fmt.Sprint(p.Timeouts), fmt.Sprint(p.MemoryFromProfile), fmt.Sprint(p.PeakOverExpected),
-				fmt.Sprintf("%.2f / %.2f", p.PeakToExpectedP50, p.PeakToExpectedP90), fmt.Sprintf("%.2f / %.2f", p.DurationToEstimateP50, p.DurationToEstimateP90))
+				ratios(p.PeakToExpectedP50, p.PeakToExpectedP90), ratios(p.DurationToEstimateP50, p.DurationToEstimateP90))
 		}
 		indent(w, t, u)
 	}
@@ -423,10 +423,40 @@ func (c *cmdCtx) printStats(v stats.Summary) {
 			}
 			return s
 		}
-		fmt.Fprintf(w, "  kernel OOM kills outside aq: %s\n", bad(i.KernelOOM, fmt.Sprintf("%.0f", i.KernelOOM)))
+		fmt.Fprintf(w, "  kernel OOM kills outside aq: %s%s\n", bad(i.KernelOOM, fmt.Sprintf("%.0f", i.KernelOOM)), oomGroups(i.KernelOOMBy))
 		fmt.Fprintf(w, "  systemd-oomd kills: %s outside aq, %d of aq tasks\n", bad(float64(i.OOMDOutside), fmt.Sprint(i.OOMDOutside)), i.OOMDTasks)
 		fmt.Fprintf(w, "  memory pressure closed admission %d times, %s in total\n", i.PSIEpisodes, fmtSecs(i.PSIClosedSeconds))
 	}
+}
+
+// ratios is a p50/p90 pair, or "—" when there was nothing to compare (no estimate).
+func ratios(p50, p90 float64) string {
+	if p50 == 0 && p90 == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.2f / %.2f", p50, p90)
+}
+
+// oomGroups names the cgroups the kills were attributed to, most first.
+func oomGroups(by map[string]float64) string {
+	if len(by) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(by))
+	for n := range by {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if by[names[i]] != by[names[j]] {
+			return by[names[i]] > by[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = fmt.Sprintf("%s %.0f", n, by[n])
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 func indent(w io.Writer, t *table, u ui) {

@@ -5,6 +5,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"maps"
 	"testing"
 	"time"
 )
@@ -104,5 +105,18 @@ func TestSummarizeDisk(t *testing.T) {
 	in.Profile = "/r:tests"
 	if s := Summarize(in); len(s.Disk) != 1 || s.Disk[0].Runs != 3 {
 		t.Fatal(s.Disk)
+	}
+}
+
+func TestSummarizeKernelOOMByGroup(t *testing.T) {
+	now := time.Now().UTC()
+	s := Summarize(Input{Until: now, Incidents: []model.Incident{
+		{At: now, Kind: "kernel_oom", Value: 3, Detail: "aqtest.slice"},
+		{At: now, Kind: "kernel_oom", Value: 1, Detail: "aqtest.slice"},
+		{At: now, Kind: "kernel_oom", Value: 2},
+		{At: now, Kind: "kernel_oom", Value: 1, Detail: "unattributed"},
+	}})
+	if g := s.Incidents; g.KernelOOM != 7 || !maps.Equal(g.KernelOOMBy, map[string]float64{"aqtest.slice": 4}) {
+		t.Fatalf("%+v", g)
 	}
 }

@@ -40,10 +40,15 @@ but it is a hint: ignore it for light commands (it also fires on quoted text).
    only when the versions are separate workloads you keep running side by side,
    e.g. a matrix `tests-pg15` / `tests-pg16`. Do not pass `--project` with a
    worktree path: without it, all worktrees of a repository share one history.
+   If submit warns `hint: no history for name …; names with history: …` and
+   one of those is the same workload, use that name from the next run on.
 2. **New workload?** Pick `--memory` from what you know: about 300–800M per
    pytest worker, the sum of `docker stats` for a stand, 2× the last observed
    peak if you have one. Too low → OOM (exit 2) and you rerun with more; too high
    → you wait longer. Never blindly retry an OOM with the same limit.
+   `--memory` is the kill limit; the pool is charged `--expected` (default: the
+   limit). When you know the usual peak is well below the limit, pass it as
+   `--expected`: the task starts sooner and the limit still catches a spike.
    `$TMPDIR` of a task is in RAM (tmpfs) and counts against `--memory`: add what
    the task writes there (pytest `tmp_path`, unpacked wheels, build output). Do
    not point `TMPDIR` or pytest `--basetemp` at a disk directory to "save" memory:
@@ -114,9 +119,10 @@ check whether it hung before raising `--timeout`; on 5 read the diagnostic
 (rejected: the request can never fit the pool). Ack the item's event with
 `aq ack EVENT_ID` once the outcome is recorded.
 
-If the line ends with `memory: peak … (underestimated|overestimated)`, your
-`--expected`/`--memory` missed the real peak: size the next run of the same work
-from that peak (with some margin) instead of the old guess. `aq release` of a
+If the line ends with `memory: peak … (underestimated|overestimated: …)`, your
+estimate missed the real peak. Fix it with `--expected` (what the pool is
+charged) near that peak; keep `--memory` as the kill limit with headroom, since
+one run's peak is no safe limit for the next. `aq release` of a
 stand with `--docker-project` reports the same for the stand against `--memory`.
 On `stand_over_declared`, declare more next time.
 
