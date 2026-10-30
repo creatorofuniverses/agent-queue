@@ -70,7 +70,9 @@ aq submit --name tests --memory 4G --cpus 4 --timeout 30m -- \
 ```
 
 Pass argv after `--`; quote a shell (`bash -lc '…'`) when you need `$AQ_CPUS`,
-pipes or `&&`. The task runs in the submit cwd. If it cannot start at once,
+pipes or `&&`. The task runs in the submit cwd. `--cpus` (default 1) is a real
+CPU quota: size workers with `"$AQ_CPUS"`, never a fixed `-n 8` over fewer
+`--cpus` (submit warns with `hint: the command starts N workers …`). If it cannot start at once,
 `submit` (and `reserve`, `wait`) prints `queued: position N, blocked by …` on
 stderr. A request that waits on `live_memory` or `pool_memory` with numbers far
 above what the work needs starts sooner when you declare less; `queue` means it

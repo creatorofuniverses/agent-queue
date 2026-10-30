@@ -120,7 +120,11 @@ aq submit --memory 4G --cpus 2 --timeout 30m -- \
   of the task: `4G`, `512M`, `1024K`, `2T` (binary units); a bare number is MiB;
   the minimum is `64M`.
 - `--timeout` (required): the maximum run time, for example `30m`.
-- `--cpus`: how many pool CPUs to take (default 1); sets `CPUQuota`.
+- `--cpus`: how many pool CPUs to take (default 1); sets `CPUQuota`, a real
+  limit: 8 workers on 1 CPU share it and run up to 8× slower. When the command
+  starts more workers than that (`pytest -n N`/`auto`, `make -jN`/`-j`),
+  `submit` warns on stderr (`hint: the command starts 8 workers …`, `cpu_hint`
+  in `--json`); give it `-n "$AQ_CPUS"` or raise `--cpus`.
 - `--priority low|normal|high`, `--name`, `--key` (idempotency: a repeated
   `submit` with the same key returns the same task), `--session`, `--env K=V`,
   `--expected` (expected consumption, default = `--memory`), `--json`.

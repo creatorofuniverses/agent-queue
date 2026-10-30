@@ -752,3 +752,15 @@ func TestQueuedSubmitStatusAndWaitSayWhy(t *testing.T) {
 		t.Fatalf("wait: %q", e)
 	}
 }
+
+func TestSubmitWarnsWorkersOverCPUs(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	_, _, e := h.run("submit", "--memory", "128M", "--timeout", "1m", "--", "pytest", "-n", "8")
+	if !strings.Contains(e, "hint: the command starts 8 workers (pytest -n 8) but gets 1 cpu") {
+		t.Fatalf("stderr %q", e)
+	}
+	if _, _, e := h.run("submit", "--memory", "128M", "--cpus", "8", "--timeout", "1m", "--", "pytest", "-n", "8"); strings.Contains(e, "workers") {
+		t.Fatalf("enough cpus: %q", e)
+	}
+}

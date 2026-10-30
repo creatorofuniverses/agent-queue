@@ -78,7 +78,9 @@ aq submit --client codex --session "$CODEX_THREAD_ID" \
 ```
 
 Pass argv after `--`; use a quoted shell for `$AQ_CPUS`, pipes or `&&`. Tasks
-run in the submit cwd. Read your own `CODEX_THREAD_ID` from the session shell;
+run in the submit cwd. `--cpus` (default 1) is a real CPU quota: size workers
+with `"$AQ_CPUS"`, never a fixed `-n 8` over fewer `--cpus` (submit warns with
+`hint: the command starts N workers …`). Read your own `CODEX_THREAD_ID` from the session shell;
 never borrow another session's identity. Explicit client/session also resolves
 ambiguity when an inherited `CLAUDE_CODE_SESSION_ID` is set.
 

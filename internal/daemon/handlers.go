@@ -430,6 +430,7 @@ func (d *server) submit(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	v.KnownNames = d.knownNames(ctx, it.Profile)
+	v.CPUHint = cpuHint(it.Argv, it.CPUs, d.host.NumCPU())
 	return v, nil
 }
 

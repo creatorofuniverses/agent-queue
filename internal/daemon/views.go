@@ -39,6 +39,7 @@ type ItemView struct {
 	MemoryPeak        uint64       `json:"memory_peak"`
 	MemoryFit         string       `json:"memory_fit,omitempty"`     // feedback on the memory estimate of a finished task
 	KnownNames        []string     `json:"known_names,omitempty"`    // submit of a name without history: names in the same repo that have it
+	CPUHint           string       `json:"cpu_hint,omitempty"`       // submit whose command starts more workers than it gets CPUs
 	IOWriteBytes      *uint64      `json:"io_write_bytes,omitempty"` // physical disks; absent when unknown
 	IOReadBytes       *uint64      `json:"io_read_bytes,omitempty"`
 	GitRev            string       `json:"git_rev,omitempty"`

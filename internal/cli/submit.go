@@ -72,6 +72,9 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	}
 	fmt.Fprintln(c.stdout, v.ID)
 	queuedNote(c, v)
+	if v.CPUHint != "" {
+		fmt.Fprintf(c.stderr, "hint: %s\n", v.CPUHint)
+	}
 	if len(v.KnownNames) > 0 {
 		fmt.Fprintf(c.stderr, "hint: no history for name %q here; names with history: %s (reuse one for the same workload)\n", *name, strings.Join(v.KnownNames, ", "))
 	}
