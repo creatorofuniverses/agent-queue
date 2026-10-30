@@ -23,7 +23,13 @@ func TestHookMatches(t *testing.T) {
 		// aq in any segment of a compound command, with quoted separators inside its argv
 		{"cd /r && aq submit --memory 1G --timeout 1m -- pytest -n 4", -1}, {"FOO=1 aq submit --memory 1G --timeout 1m -- docker run x", -1},
 		{`cd /r && aq submit --memory 4G --timeout 30m -- bash -lc 'cd x && pytest -n "$AQ_CPUS" tests'`, -1},
-		{"cd /r && pytest -n 4", 0}, {"pytest -n 4; aq list", 0}, {`echo "a;b" | docker run x`, 3}} {
+		{"cd /r && pytest -n 4", 0}, {"pytest -n 4; aq list", 0}, {`echo "a;b" | docker run x`, 3},
+		// a heredoc body is data written somewhere, not a command
+		{"cat >> notes.md <<'EOF'\nrun pytest -n 8 here\nEOF\ngo vet ./...", -1},
+		{"python3 - <<EOF\nprint('docker run x')\nEOF", -1},
+		{"cat > a.txt <<-\"END\"\n\tpytest -n 4\n\tEND\npytest -n 2", 0}, // the command after the body still counts
+		{"cat > a.txt <<'EOF'\npytest -n 8", -1}} {                       // an unterminated body runs to the end
+
 		var b bytes.Buffer
 		raw, _ := json.Marshal(map[string]any{"tool_input": map[string]string{"command": tc.cmd}})
 		hit := -1

@@ -780,7 +780,9 @@ daemon push.
 
 `aq hook pretooluse` gently reminds about a heavy command run outside aq:
 pytest with `-n`, compose up/run, docker run. It does not contact the daemon,
-does not block, and stays silent on error. Patterns are in `[hook].patterns`.
+does not block, and stays silent on error. Patterns are in `[hook].patterns`;
+segments already run through `aq` and the bodies of here-documents (text a
+command writes, such as a file that mentions `pytest -n 8`) are skipped.
 The hook-hits.jsonl counter records only the time, the pattern index and the
 client, without the command text; it rotates after 1 MiB.
 

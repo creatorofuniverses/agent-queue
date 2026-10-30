@@ -54,7 +54,7 @@ func PreToolUse(in io.Reader, out io.Writer, patterns []*regexp.Regexp, record f
 		cmd = command(v.ToolInput.Cmd)
 	}
 	var rest []string // segments not already run through aq
-	for _, seg := range segments(cmd) {
+	for _, seg := range segments(withoutHeredocs(cmd)) {
 		if !isAQ(seg) {
 			rest = append(rest, seg)
 		}
@@ -69,6 +69,33 @@ func PreToolUse(in io.Reader, out io.Writer, patterns []*regexp.Regexp, record f
 			return
 		}
 	}
+}
+
+// heredoc finds a here-document operator (<<WORD, <<-WORD, <<'WORD'), not a <<< here-string.
+var heredoc = regexp.MustCompile(`(?:^|[^<])<<(-?)\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
+
+// withoutHeredocs drops the bodies of here-documents: text a command writes or
+// reads, such as a file that mentions "pytest -n 8", not commands of their own.
+// A body without its closing line runs to the end.
+func withoutHeredocs(cmd string) string {
+	var out []string
+	end, tabs := "", false
+	for _, l := range strings.Split(cmd, "\n") {
+		if end != "" {
+			if tabs {
+				l = strings.TrimLeft(l, "\t")
+			}
+			if l == end {
+				end = ""
+			}
+			continue
+		}
+		out = append(out, l)
+		if m := heredoc.FindStringSubmatch(l); m != nil {
+			end, tabs = m[2], m[1] == "-"
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // segments splits a shell command on separators (;, &, |, newline) outside quotes.
