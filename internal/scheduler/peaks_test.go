@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -83,8 +84,8 @@ func TestReleaseReportsBudgetPeak(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "stand peak 256 MiB is 25% of declared 1.0 GiB (overestimated); " +
-		"task budget peak 768 MiB is 25% of declared 3.0 GiB (overestimated)"
+	const want = "stand peak 256 MiB is 25% of declared 1.0 GiB (overestimated: next time --memory 308 MiB); " +
+		"task budget peak 768 MiB is 25% of declared 3.0 GiB (overestimated: next time --task-memory 922 MiB)"
 	if got.Diagnostic != want {
 		t.Fatalf("diagnostic %q, want %q", got.Diagnostic, want)
 	}
@@ -103,5 +104,59 @@ func TestExpiryRecordsPeaks(t *testing.T) {
 	it := e.tearDown(t, res)
 	if it.MemoryPeak != 70*mib || it.TaskMemoryPeak == nil || *it.TaskMemoryPeak != 200*mib {
 		t.Fatalf("stand peak %d, budget peak %v; want %d and %d", it.MemoryPeak, it.TaskMemoryPeak, 70*mib, 200*mib)
+	}
+}
+
+func TestReserveChargesByHistory(t *testing.T) {
+	e := newResEnv(t)
+	r := e.rreq(2 * gib)
+	r.Profile, r.DockerProject, r.TaskMemory, r.TaskCPUs = "/r:stand", "p", 3*gib/2, 1
+	first := e.reserve(t, r)
+	if first.Expected != 2*gib || first.TaskExpected != 0 || first.MemoryFromProfile {
+		t.Fatalf("no history yet: %+v", first)
+	}
+	e.meter.Set("p", 300*mib)
+	e.tick(t)
+	n := e.runNested(t, first.ID, 500*mib)
+	e.tick(t)
+	e.finish(n.ID, success)
+	e.tick(t)
+	if _, err := e.s.Release(e.ctx, first.ID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	again := e.reserve(t, r)
+	// The declaration stays the ceiling; the pool is charged the peaks × 1.2.
+	if again.Limit != 2*gib || again.TaskMemory != 3*gib/2 || again.Expected != 360*mib || again.TaskExpected != 600*mib || !again.MemoryFromProfile {
+		t.Fatalf("from history: limit %d expected %d task %d/%d from profile %v", again.Limit, again.Expected, again.TaskMemory, again.TaskExpected, again.MemoryFromProfile)
+	}
+	if c := again.Committed(); c.MemoryBytes != 960*mib {
+		t.Fatalf("committed %d", c.MemoryBytes)
+	}
+	e.tick(t)
+	e.wantState(t, again.ID, model.StateGranted, model.ReasonNone)
+	e.meter.Set("p", gib)
+	e.tick(t)
+	if evs := e.events(t, again.ID, model.EventStandOverDeclared); len(evs) != 0 {
+		t.Fatalf("over what history charged, not over what was declared: %+v", evs)
+	}
+	e.meter.Set("p", 0)
+	e.tick(t)
+	if c := e.s.LastPass().Commitments; c.Stands != 360*mib || c.Budgets != 600*mib || c.BudgetsUnconsumed != 600*mib || c.StandsUnconsumed != 360*mib {
+		t.Fatalf("commitments %+v", c)
+	}
+
+	r.Profile, r.DockerProject = "/r:other", "q" // a docker project is exclusive among held reservations
+	if other := e.reserve(t, r); other.Expected != 2*gib || other.TaskExpected != 0 {
+		t.Fatalf("another profile: %+v", other)
+	}
+}
+
+func TestReserveRejectsInvalidProfile(t *testing.T) {
+	e := newResEnv(t)
+	r := e.rreq(gib)
+	r.Profile = "bad\nname"
+	if _, err := e.s.Reserve(e.ctx, r); !errors.Is(err, ErrRejected) {
+		t.Fatalf("err %v", err)
 	}
 }

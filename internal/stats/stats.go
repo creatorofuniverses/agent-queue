@@ -114,9 +114,10 @@ type ReservationGroup struct {
 
 // ReservationFitStats: reservations of one project:name that stopped being held
 // with recorded peaks. A stand counts when it was measured (it had a docker
-// project), a budget when one was declared. UnusedGiBHours is Σ (declared −
-// peak) × time held over both, the memory admission kept from the queue for
-// nothing; sorted by it, largest first.
+// project), a budget when one was declared. Peaks are compared with what was
+// declared; UnusedGiBHours is Σ (charged − peak) × time held over both, the
+// memory admission kept from the queue for nothing (charged is the declaration,
+// or less when history allowed); sorted by it, largest first.
 type ReservationFitStats struct {
 	Name            string  `json:"name"`
 	Reservations    int     `json:"reservations"`
@@ -425,13 +426,13 @@ func summarizeReservationFit(s *Summary, in Input) {
 			groups[k] = a
 		}
 		a.g.Reservations++
-		if it.DockerProject != "" && it.Expected > 0 {
-			a.stand = append(a.stand, float64(it.MemoryPeak)/float64(it.Expected))
+		if it.DockerProject != "" && it.Limit > 0 {
+			a.stand = append(a.stand, float64(it.MemoryPeak)/float64(it.Limit))
 			a.g.UnusedGiBHours += unused(it.Expected, it.MemoryPeak, held)
 		}
 		if it.TaskMemory > 0 {
 			a.budget = append(a.budget, float64(*it.TaskMemoryPeak)/float64(it.TaskMemory))
-			a.g.UnusedGiBHours += unused(it.TaskMemory, *it.TaskMemoryPeak, held)
+			a.g.UnusedGiBHours += unused(it.TaskCharge(), *it.TaskMemoryPeak, held)
 		}
 	}
 	s.ReservationFit = []ReservationFitStats{}

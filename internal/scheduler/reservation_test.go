@@ -420,7 +420,7 @@ func TestReleaseReportsStandPeak(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "stand peak 600 MiB is 29% of declared 2.0 GiB (overestimated)"
+	const want = "stand peak 600 MiB is 29% of declared 2.0 GiB (overestimated: next time --memory 720 MiB)"
 	if got.Diagnostic != want || e.get(t, a.ID).Diagnostic != want {
 		t.Fatalf("diagnostic %q, want %q", got.Diagnostic, want)
 	}

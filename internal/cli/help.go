@@ -39,7 +39,7 @@ var helps = map[string]cmdHelp{
 		"Without --all only items that are not finished yet. --mine limits to the current agent session and\nalso shows its unacknowledged events.",
 		[]string{"aq list", "aq list --all", "aq list --mine"}},
 	"reserve": {"aq reserve --memory SIZE --ttl DURATION --teardown FILE [flags]", "hold memory for a stand (docker compose) and an optional task budget",
-		"The reservation is granted when its memory fits and is held for --ttl. Nested tasks run inside it\nwith aq submit --within. On expiry or release the teardown script stops the stand.",
+		"The reservation is granted when its memory fits and is held for --ttl. Nested tasks run inside it\nwith aq submit --within. On expiry the teardown script stops the stand; aq release frees the memory\nwithout running it, so shut the stand down first. With a stable --name, the pool is charged what\nearlier reservations of that name used (peaks × 1.2), never more than declared.",
 		[]string{"aq reserve --memory 6G --ttl 2h --docker-project mystand --teardown ./stand-down.sh", "aq reserve --memory 4G --task-memory 4G --task-cpus 4 --ttl 1h --teardown ./down.sh"}},
 	"extend":   {"aq extend --ttl DURATION ID", "extend a reservation's TTL", "", []string{"aq extend RES_ID --ttl 1h"}},
 	"release":  {"aq release [--force] ID", "free a reservation whose stand you have shut down (no teardown script runs)", "With --docker-project, prints the stand's measured peak against --memory when it missed.", []string{"aq release RES_ID"}},

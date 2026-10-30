@@ -130,8 +130,10 @@ estimate missed the real peak. Fix it with `--expected` (what the pool is
 charged) near that peak; keep `--memory` as the kill limit with headroom, since
 one run's peak is no safe limit for the next. `aq release` reports the same for
 the stand against `--memory` (with `--docker-project`) and for the most your
-nested tasks used at once against `--task-memory`: an overestimated reservation
-holds memory other agents wait for, so declare less next time. On
+nested tasks used at once against `--task-memory`, with the amount to declare
+next time: an overestimated reservation holds memory other agents wait for. Keep
+the reservation's `--name` stable: aq then charges it what earlier reservations
+of that name used (never more than declared), as it does for tasks. On
 `stand_over_declared`, declare more next time.
 
 `aq result` also shows `disk:` (bytes written to physical disks) when the host

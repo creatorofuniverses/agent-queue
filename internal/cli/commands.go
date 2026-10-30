@@ -152,6 +152,12 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 		if v.TaskMemoryPeak != nil { // peaks recorded when it stopped being held
 			standPeak, budgetPeak = ", peak "+units.FormatSize(v.MemoryPeak), ", peak "+units.FormatSize(*v.TaskMemoryPeak)
 		}
+		if v.MemoryExpected > 0 && v.MemoryExpected < v.MemoryLimit {
+			standPeak += fmt.Sprintf(" (charged %s by history)", units.FormatSize(v.MemoryExpected))
+		}
+		if v.TaskMemoryExpected > 0 && v.TaskMemoryExpected < v.TaskMemory {
+			budgetPeak += fmt.Sprintf(" (charged %s by history)", units.FormatSize(v.TaskMemoryExpected))
+		}
 		fmt.Fprintf(w, "stand:     %s memory, %d cpus%s\n", units.FormatSize(v.MemoryLimit), v.CPUs, standPeak)
 		fmt.Fprintf(w, "budget:    %s memory, %d cpus%s\n", units.FormatSize(v.TaskMemory), v.TaskCPUs, budgetPeak)
 		if v.ExpiresAt != nil {

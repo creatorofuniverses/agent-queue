@@ -240,7 +240,7 @@ func TestReleaseReportsStandPeak(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	code, out, e := h.run("release", string(res.ID))
-	if want := string(res.ID) + " RELEASED stand peak 512 MiB is 25% of declared 2.0 GiB (overestimated)\n"; code != 0 || out != want {
+	if want := string(res.ID) + " RELEASED stand peak 512 MiB is 25% of declared 2.0 GiB (overestimated: next time --memory 615 MiB)\n"; code != 0 || out != want {
 		t.Fatalf("release: %d %q %s; want %q", code, out, e, want)
 	}
 }

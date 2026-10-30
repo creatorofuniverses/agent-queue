@@ -73,17 +73,56 @@ func Compute(runs []Run, p Params) (Estimate, bool) {
 	if e.Runs == 0 {
 		return e, false
 	}
-	const mib = 1 << 20
-	scaled := math.Ceil(float64(e.MaxPeak)*p.LimitMargin/mib) * mib
-	if scaled >= float64(p.MaxMemory) {
-		e.Limit = p.MaxMemory
-	} else {
-		e.Limit = max(p.MinMemory, uint64(scaled))
-	}
+	e.Limit = p.Margin(e.MaxPeak)
 	e.Expected = min(hist.Quantile(p.MemoryPercentile), e.Limit)
 	e.Duration = Percentile(durations, p.DurationPercentile)
 	return e, true
 }
+
+// Margin is peak × LimitMargin rounded up to MiB, within [MinMemory, MaxMemory].
+func (p Params) Margin(peak uint64) uint64 {
+	const mib = 1 << 20
+	scaled := math.Ceil(float64(peak)*p.LimitMargin/mib) * mib
+	if scaled >= float64(p.MaxMemory) {
+		return p.MaxMemory
+	}
+	return max(p.MinMemory, uint64(scaled))
+}
+
+// Reservation is what the history of a reservation name says it needs: Stand
+// from the measured stand peaks, Budget from the most its nested tasks used at
+// once, each by the limit rule of task profiles over its last Window usable
+// runs; zero with no usable run.
+type Reservation struct {
+	Stand, Budget         uint64
+	StandRuns, BudgetRuns int
+}
+
+// ForReservation computes Reservation from earlier reservations, newest first.
+// A peak of zero teaches nothing: no nested task ran, or the stand's containers
+// were not labeled with its docker project.
+func ForReservation(hist []*model.Item, p Params) Reservation {
+	var r Reservation
+	var stand, budget uint64
+	for _, it := range hist {
+		if it.DockerProject != "" && it.MemoryPeak > 0 && r.StandRuns < p.Window {
+			r.StandRuns++
+			stand = max(stand, it.MemoryPeak)
+		}
+		if it.TaskMemoryPeak != nil && *it.TaskMemoryPeak > 0 && r.BudgetRuns < p.Window {
+			r.BudgetRuns++
+			budget = max(budget, *it.TaskMemoryPeak)
+		}
+	}
+	if r.StandRuns > 0 {
+		r.Stand = p.Margin(stand)
+	}
+	if r.BudgetRuns > 0 {
+		r.Budget = p.Margin(budget)
+	}
+	return r
+}
+
 func ValidName(s string) error {
 	if len(s) < 1 || len(s) > 256 || !utf8.ValidString(s) {
 		return fmt.Errorf("profile must be 1..256 bytes of valid UTF-8 without control characters")

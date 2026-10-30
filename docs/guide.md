@@ -283,7 +283,7 @@ the `aq wait` line ends with feedback for the next estimate, also sent in the
 `task_finished` notification and as `memory_fit` in `--json`:
 
 ```
-… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 0.8 GiB is 19% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)
+… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 0.8 GiB is 19% of expected 4.0 GiB (overestimated: lower --expected to 983 MiB, keep --memory as the limit)
 ```
 
 It appears when the peak is above 110% or below 50% of the expected memory and
@@ -497,10 +497,19 @@ docker compose -p myapp-e2e up -d  # bring the stand up only after the grant
   amount, a notification is recorded, with the measured amount as a percentage
   of the declared one.
 - `--name`, `--key`, `--session`, `--priority`, `--env K=V`, `--json`: as for
-  `submit`.
+  `submit`. `--name` also keys the reservation's history (`<repo root>:<name>`,
+  shared by worktrees), see below.
 
 The stand and the task budget together occupy the pool until the reservation is
-released. A reservation is queued the same way as a task, and `aq reserve`
+released. With a stable `--name`, a reservation is charged what its earlier
+reservations of that name used, as a task is charged from its profile: the
+highest measured stand peak (only with `--docker-project`) and the highest
+memory its nested tasks used at once, each over the last `[profiles] window`
+(10) reservations that recorded it, × `limit_margin` (1.2), never more than
+declared. `--memory` and `--task-memory` stay the ceilings: nested tasks are
+admitted within the declared budget, and `stand_over_declared` compares with
+`--memory`. `aq status` shows `(charged … by history)` on the `stand:` and
+`budget:` lines, `--json` has `memory_expected` and `task_memory_expected`. A reservation is queued the same way as a task, and `aq reserve`
 answers after the nearest admission pass: `GRANTED` right away if it fit,
 otherwise `QUEUED` with the position and the reason for waiting.
 
@@ -558,9 +567,10 @@ a queued reservation (`CANCELLED`). `aq cancel` on a reservation works only
 while it is queued. `release` also prints how the peaks compared with what was
 declared, by the same thresholds as for tasks: the stand's measured peak against
 `--memory` (with `--docker-project`) and the most its nested tasks used at once
-against `--task-memory` (`… RELEASED stand peak 1.1 GiB is 32% of declared 3.4
-GiB (overestimated); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
-(overestimated)`); it stays in the diagnostic of `aq result`, and `aq status`
+against `--task-memory`, with the amount to declare next time (peak × 1.2):
+`… RELEASED stand peak 1.1 GiB is 32% of declared 3.4 GiB (overestimated: next
+time --memory 1.3 GiB); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
+(overestimated: next time --task-memory 1.2 GiB)`. It stays in the diagnostic of `aq result`, and `aq status`
 shows both peaks on the `stand:` and `budget:` lines.
 
 ### Expiry and failed teardown

@@ -103,3 +103,16 @@ func TestPrintViewReservationPeaks(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+
+func TestPrintViewReservationChargedByHistory(t *testing.T) {
+	var b strings.Builder
+	c := &cmdCtx{stdout: &b, env: func(string) string { return "" }}
+	v := daemon.ItemView{Kind: model.KindReservation, State: model.StateGranted, MemoryLimit: 2 << 30, MemoryExpected: 360 << 20, CPUs: 1,
+		TaskMemory: 3 << 29, TaskMemoryExpected: 600 << 20, TaskCPUs: 1, MemoryFromProfile: true}
+	printView(c, v)
+	out := b.String()
+	if !strings.Contains(out, "stand:     2.0 GiB memory, 1 cpus (charged 360 MiB by history)\n") ||
+		!strings.Contains(out, "budget:    1.5 GiB memory, 1 cpus (charged 600 MiB by history)\n") {
+		t.Fatal(out)
+	}
+}

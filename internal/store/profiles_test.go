@@ -242,3 +242,34 @@ func TestMigration0007OnPlan6DB(t *testing.T) {
 		t.Fatal(it, e) // a reservation released before aq kept peaks: unknown, not zero
 	}
 }
+
+func TestReservationHistory(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+	base := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	u := func(v uint64) *uint64 { return &v }
+	put := func(profile string, at time.Duration, stand uint64, budget *uint64) *model.Item {
+		it := &model.Item{ID: model.NewID(), Kind: model.KindReservation, State: model.StateReleased, Profile: profile, NodeID: "local",
+			CreatedAt: base, EndedAt: base.Add(at), Limit: 1 << 30, Expected: 1 << 30, TaskMemory: 2 << 30, TaskExpected: 1 << 30,
+			MemoryPeak: stand, TaskMemoryPeak: budget}
+		if _, _, err := s.InsertItem(ctx, it); err != nil {
+			t.Fatal(err)
+		}
+		return it
+	}
+	old := put("/r:stand", time.Minute, 100, u(200))
+	put("/r:stand", 2*time.Minute, 0, u(0))  // nothing measured: no history
+	put("/r:stand", 3*time.Minute, 300, nil) // ended before peaks were recorded
+	put("/r:other", 4*time.Minute, 400, u(400))
+	recent := put("/r:stand", 5*time.Minute, 0, u(500))
+	got, err := s.ReservationHistory(ctx, "/r:stand", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != recent.ID || got[1].ID != old.ID || got[1].TaskExpected != 1<<30 {
+		t.Fatalf("%+v", got)
+	}
+	if got, _ := s.ReservationHistory(ctx, "/r:stand", 1); len(got) != 1 || got[0].ID != recent.ID {
+		t.Fatalf("limit: %+v", got)
+	}
+}

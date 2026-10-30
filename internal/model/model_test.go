@@ -96,6 +96,10 @@ func TestCommittedByKind(t *testing.T) {
 	if r := res.Committed(); r != (Resources{4 * g, 5}) {
 		t.Errorf("reservation: %+v", r)
 	}
+	res.TaskExpected = g // learned from history: charged instead of the declared budget
+	if r := res.Committed(); r != (Resources{2 * g, 5}) {
+		t.Errorf("reservation with a learned budget: %+v", r)
+	}
 }
 
 func TestTeardownUnitID(t *testing.T) {
@@ -152,15 +156,15 @@ func TestMemoryFit(t *testing.T) {
 		it   *Item
 		want string
 	}{
-		{"under", ok(StateSucceeded, ReasonNone, 2*gib, 3*gib), "memory: peak 3.0 GiB is 150% of expected 2.0 GiB (underestimated: raise --expected)"},
-		{"over", ok(StateSucceeded, ReasonNone, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)"},
-		{"over after a failed command", ok(StateFailed, ReasonCommandFailed, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)"},
-		{"under on OOM", ok(StateFailed, ReasonOOM, 2*gib, 8*gib), "memory: peak 8.0 GiB is 400% of expected 2.0 GiB (underestimated: raise --expected)"},
+		{"under", ok(StateSucceeded, ReasonNone, 2*gib, 3*gib), "memory: peak 3.0 GiB is 150% of expected 2.0 GiB (underestimated: raise --expected to 3.6 GiB)"},
+		{"over", ok(StateSucceeded, ReasonNone, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated: lower --expected to 1.2 GiB, keep --memory as the limit)"},
+		{"over after a failed command", ok(StateFailed, ReasonCommandFailed, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated: lower --expected to 1.2 GiB, keep --memory as the limit)"},
+		{"under on OOM", ok(StateFailed, ReasonOOM, 2*gib, 8*gib), "memory: peak 8.0 GiB is 400% of expected 2.0 GiB (underestimated: raise --expected to 8.0 GiB)"},
 		{"within tolerance", ok(StateSucceeded, ReasonNone, 2*gib, 2*gib+100*mib), ""},
 		{"small absolute miss", ok(StateSucceeded, ReasonNone, 200*mib, 20*mib), ""},
 		{"timeout cut the run short", ok(StateFailed, ReasonTimeout, 4*gib, gib), ""},
 		{"cancelled run", ok(StateCancelled, ReasonCancelled, 4*gib, gib), ""},
-		{"under on timeout", ok(StateFailed, ReasonTimeout, gib, 2*gib), "memory: peak 2.0 GiB is 200% of expected 1.0 GiB (underestimated: raise --expected)"},
+		{"under on timeout", ok(StateFailed, ReasonTimeout, gib, 2*gib), "memory: peak 2.0 GiB is 200% of expected 1.0 GiB (underestimated: raise --expected to 2.4 GiB)"},
 		{"no peak", ok(StateFailed, ReasonLaunchFailed, 4*gib, 0), ""},
 		{"running", ok(StateRunning, ReasonNone, 4*gib, gib), ""},
 		{"from profile", &Item{Kind: KindTask, State: StateSucceeded, Expected: 4 * gib, MemoryPeak: gib, MemoryFromProfile: true}, ""},
@@ -179,8 +183,8 @@ func TestStandFit(t *testing.T) {
 		declared, used uint64
 		want           string
 	}{
-		{4 * gib, gib, "stand peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated)"},
-		{2 * gib, 3 * gib, "stand peak 3.0 GiB is 150% of declared 2.0 GiB (underestimated)"},
+		{4 * gib, gib, "stand peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated: next time --memory 1.2 GiB)"},
+		{2 * gib, 3 * gib, "stand peak 3.0 GiB is 150% of declared 2.0 GiB (underestimated: next time --memory 3.6 GiB)"},
 		{2 * gib, 2*gib + 100*mib, ""},
 		{4 * gib, 0, ""},
 	}
@@ -199,13 +203,16 @@ func TestReservationFit(t *testing.T) {
 		it   Item
 		want string
 	}{
-		{"budget only", Item{Expected: gib, MemoryPeak: gib, TaskMemory: 4 * gib, TaskMemoryPeak: u(gib)},
-			"task budget peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated)"},
-		{"budget peak not recorded", Item{Expected: 4 * gib, MemoryPeak: gib, TaskMemory: 4 * gib},
-			"stand peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated)"},
-		{"no nested task ran", Item{Expected: gib, MemoryPeak: gib, TaskMemory: 4 * gib, TaskMemoryPeak: u(0)}, ""},
+		{"declared, not charged", Item{Limit: 4 * gib, Expected: 1200 << 20, MemoryPeak: gib, TaskMemory: 4 * gib, TaskExpected: 1200 << 20, TaskMemoryPeak: u(gib)},
+			"stand peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated: next time --memory 1.2 GiB); " +
+				"task budget peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated: next time --task-memory 1.2 GiB)"},
+		{"budget only", Item{Limit: gib, Expected: gib, MemoryPeak: gib, TaskMemory: 4 * gib, TaskMemoryPeak: u(gib)},
+			"task budget peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated: next time --task-memory 1.2 GiB)"},
+		{"budget peak not recorded", Item{Limit: 4 * gib, Expected: 4 * gib, MemoryPeak: gib, TaskMemory: 4 * gib},
+			"stand peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated: next time --memory 1.2 GiB)"},
+		{"no nested task ran", Item{Limit: gib, Expected: gib, MemoryPeak: gib, TaskMemory: 4 * gib, TaskMemoryPeak: u(0)}, ""},
 		{"budget overrun", Item{TaskMemory: gib, TaskMemoryPeak: u(2 * gib)},
-			"task budget peak 2.0 GiB is 200% of declared 1.0 GiB (underestimated)"},
+			"task budget peak 2.0 GiB is 200% of declared 1.0 GiB (underestimated: next time --task-memory 2.4 GiB)"},
 	}
 	for _, c := range cases {
 		if got := c.it.ReservationFit(); got != c.want {

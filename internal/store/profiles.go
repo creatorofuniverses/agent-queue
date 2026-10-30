@@ -77,6 +77,13 @@ func (s *Store) queryRuns(ctx context.Context, q string, args ...any) ([]profile
 func (s *Store) UsableRuns(ctx context.Context, name string, limit int) ([]profile.Run, error) {
 	return s.queryRuns(ctx, `SELECT `+runCols+` FROM profile_runs WHERE profile=? AND `+usableRunSQL+` ORDER BY ended_at DESC,rowid DESC LIMIT ?`, name, limit)
 }
+
+// ReservationHistory is up to limit reservations of profile whose peaks were
+// recorded and teach something (a peak above zero), newest first.
+func (s *Store) ReservationHistory(ctx context.Context, profile string, limit int) ([]*model.Item, error) {
+	return s.queryItems(ctx, `SELECT `+itemCols+` FROM items WHERE kind='reservation' AND profile=?
+		AND task_memory_peak IS NOT NULL AND (memory_peak>0 OR task_memory_peak>0) ORDER BY ended_at DESC,rowid DESC LIMIT ?`, profile, limit)
+}
 func (s *Store) ProfileRuns(ctx context.Context, name string, limit int) ([]profile.Run, error) {
 	return s.queryRuns(ctx, `SELECT `+runCols+` FROM profile_runs WHERE profile=? ORDER BY ended_at DESC,rowid DESC LIMIT ?`, name, limit)
 }

@@ -48,6 +48,7 @@ type SubmitArgs struct {
 type ReserveArgs struct {
 	NoNotify      bool              `json:"no_notify"`
 	Name          string            `json:"name"`
+	Profile       string            `json:"profile,omitempty"` // <repo root>:<name>, the key of its history
 	Cwd           string            `json:"cwd"`
 	Env           map[string]string `json:"env"`
 	Memory        uint64            `json:"memory"`
@@ -345,7 +346,7 @@ func (d *server) reserve(ctx context.Context, raw json.RawMessage) (any, error) 
 		return nil, badRequest("%v", err)
 	}
 	it, err := d.sched.Reserve(ctx, scheduler.ReserveRequest{
-		NoNotify: a.NoNotify, Name: a.Name, Cwd: a.Cwd, Env: a.Env, Memory: a.Memory, CPUs: a.CPUs,
+		NoNotify: a.NoNotify, Name: a.Name, Profile: a.Profile, Cwd: a.Cwd, Env: a.Env, Memory: a.Memory, CPUs: a.CPUs,
 		TaskMemory: a.TaskMemory, TaskCPUs: a.TaskCPUs, TTL: time.Duration(a.TTLSeconds) * time.Second,
 		Teardown: []byte(a.Teardown), DockerProject: a.DockerProject, Priority: prio,
 		SessionID: a.SessionID, ClientType: a.ClientType, Project: a.Project, IdemKey: a.IdemKey,

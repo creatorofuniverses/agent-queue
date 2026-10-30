@@ -328,7 +328,7 @@ func TestTaskFinishedCarriesMemoryFit(t *testing.T) {
 	e.ex.SetAlive(it.ID, false)
 	e.tick(t)
 	evs := eventsOf(t, e, it.ID, model.EventTaskFinished)
-	if len(evs) != 1 || evs[0].Detail != "memory: peak 900 MiB is 176% of expected 512 MiB (underestimated: raise --expected)" {
+	if len(evs) != 1 || evs[0].Detail != "memory: peak 900 MiB is 176% of expected 512 MiB (underestimated: raise --expected to 1.0 GiB)" {
 		t.Fatal(evs)
 	}
 }

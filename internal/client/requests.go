@@ -165,7 +165,7 @@ func BuildReserve(ctx context.Context, o ReserveOptions, getenv func(string) str
 	}
 	proj, _, _ := DetectProject(ctx, o.Cwd, o.Project)
 	return daemon.ReserveArgs{
-		NoNotify: o.NoNotify, Name: o.Name, Cwd: o.Cwd, Env: env, Memory: mem, CPUs: o.CPUs, TaskMemory: tmem, TaskCPUs: o.TaskCPUs,
+		NoNotify: o.NoNotify, Name: o.Name, Profile: DefaultProfile(ctx, o.Cwd, o.Project, o.Name), Cwd: o.Cwd, Env: env, Memory: mem, CPUs: o.CPUs, TaskMemory: tmem, TaskCPUs: o.TaskCPUs,
 		TTLSeconds: int64(d / time.Second), Teardown: string(script), DockerProject: o.DockerProject,
 		Priority: o.Priority, SessionID: o.Identity.SessionID, ClientType: o.Identity.ClientType, Project: proj, IdemKey: o.Key,
 	}, nil

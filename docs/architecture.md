@@ -134,6 +134,12 @@ it would fit now, but starting it would delay the head (see backfill below).
 `submit` and `reserve` answer after the nearest pass, so their reply already
 says whether the item started and, if not, why.
 
+A reservation with a name is charged like a task with a profile: its stand
+(`expected`) and task budget (`task_expected`) come from the recorded peaks of
+earlier reservations of that `<repo root>:<name>`, × `limit_margin`, never more
+than declared. The declarations stay the ceilings: nested tasks are admitted
+within `task_memory`, and `stand_over_declared` compares with `--memory`.
+
 The live-memory check also subtracts memory already promised but not yet used.
 Otherwise a newly started job could look cheap before it has allocated its data,
 and a second job could be given the same memory.

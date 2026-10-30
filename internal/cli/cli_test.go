@@ -703,7 +703,7 @@ func TestWaitReportsMemoryFit(t *testing.T) {
 	h.ex.Finish(spec.ID, platform.ExitInfo{ServiceResult: "success", ExitCode: "exited", ExitStatus: "0", EndedAt: time.Now(), MemoryPeak: 900 << 20})
 	h.ex.SetAlive(spec.ID, false)
 	code, wout, werr := h.run("wait", id)
-	if code != 0 || !strings.HasSuffix(strings.TrimSpace(wout), " memory: peak 900 MiB is 176% of expected 512 MiB (underestimated: raise --expected)") {
+	if code != 0 || !strings.HasSuffix(strings.TrimSpace(wout), " memory: peak 900 MiB is 176% of expected 512 MiB (underestimated: raise --expected to 1.0 GiB)") {
 		t.Fatalf("wait: code=%d out=%q err=%q", code, wout, werr)
 	}
 	if _, o, _ := h.run("wait", id, "--json"); !strings.Contains(o, `"memory_fit": "memory: peak 900 MiB`) {

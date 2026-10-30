@@ -144,8 +144,8 @@ func (s *Scheduler) savePassLocked(pol admission.Policy, pass admission.Pass, it
 		if it.IsReservation() {
 			c.Stands += it.Expected
 			c.StandsUnconsumed += it.Expected
-			c.Budgets += it.TaskMemory
-			c.BudgetsUnconsumed += it.TaskMemory
+			c.Budgets += it.TaskCharge()
+			c.BudgetsUnconsumed += it.TaskCharge()
 		} else {
 			c.TasksExpected += it.Expected
 			c.TasksUnconsumed += it.Expected

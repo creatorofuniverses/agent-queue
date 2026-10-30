@@ -563,7 +563,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			if !it.State.Held() {
 				continue // terminal in this pass
 			}
-			budget := satSub(it.TaskMemory, nestedCur[it.ID])
+			budget := satSub(it.TaskCharge(), nestedCur[it.ID])
 			stand := s.standUnconsumedLocked(ctx, it)
 			td, tdCur := uint64(0), uint64(0)
 			if it.State == model.StateTearingDown {
@@ -575,7 +575,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			snap.Unconsumed += budget + stand + td
 			s.commitments.Stands += it.Expected
 			s.commitments.StandsUnconsumed += stand
-			s.commitments.Budgets += it.TaskMemory
+			s.commitments.Budgets += it.TaskCharge()
 			s.commitments.BudgetsUnconsumed += budget
 			s.commitments.TeardownUnconsumed += td
 			s.holderLive[it.ID] = budget + stand + td + nestedCur[it.ID] + s.standUsage[it.ID] + tdCur
@@ -642,10 +642,10 @@ func (s *Scheduler) standUnconsumedLocked(ctx context.Context, it *model.Item) u
 	}
 	s.standUsage[it.ID] = used
 	s.standPeak[it.ID] = max(s.standPeak[it.ID], used)
-	if used > it.Expected && !it.OverDeclaredNotified {
+	if used > it.Limit && !it.OverDeclaredNotified { // the declaration, not what history let aq charge
 		it.OverDeclaredNotified = true
 		detail := fmt.Sprintf("stand of reservation %s (docker project %s) uses %s, declared %s (%.0f%% of declared)",
-			it.ID, it.DockerProject, units.FormatSize(used), units.FormatSize(it.Expected), float64(used)/float64(it.Expected)*100)
+			it.ID, it.DockerProject, units.FormatSize(used), units.FormatSize(it.Limit), float64(used)/float64(it.Limit)*100)
 		evs := s.newEvents(it, model.EventStandOverDeclared, detail, model.AudienceSession, model.AudienceOperator)
 		if err := s.persistLocked(ctx, it, evs...); err != nil {
 			slog.Error("scheduler: record stand over declared", "id", it.ID, "err", err)

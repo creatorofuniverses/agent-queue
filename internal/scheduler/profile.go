@@ -15,13 +15,40 @@ type runSamples struct {
 }
 
 func (s *Scheduler) ProfileEstimate(ctx context.Context, name string) (profile.Estimate, bool, error) {
-	p := s.d.Cfg.Profiles
-	rs, e := s.d.Store.UsableRuns(ctx, name, p.Window)
+	rs, e := s.d.Store.UsableRuns(ctx, name, s.d.Cfg.Profiles.Window)
 	if e != nil {
 		return profile.Estimate{}, false, e
 	}
-	v, ok := profile.Compute(rs, profile.Params{Window: p.Window, MemoryPercentile: p.MemoryPercentile, DurationPercentile: p.DurationPercentile, LimitMargin: p.LimitMargin, MinMemory: minMemory, MaxMemory: s.d.Cfg.PoolMemory})
+	v, ok := profile.Compute(rs, s.profileParams())
 	return v, ok, nil
+}
+
+func (s *Scheduler) profileParams() profile.Params {
+	p := s.d.Cfg.Profiles
+	return profile.Params{Window: p.Window, MemoryPercentile: p.MemoryPercentile, DurationPercentile: p.DurationPercentile, LimitMargin: p.LimitMargin, MinMemory: minMemory, MaxMemory: s.d.Cfg.PoolMemory}
+}
+
+// chargeByHistory charges a new reservation what the history of its profile
+// says it needs, never more than declared: the stand as Expected (Limit stays
+// the declaration) and the task budget as TaskExpected (TaskMemory stays the
+// ceiling its nested tasks are admitted within).
+func (s *Scheduler) chargeByHistory(ctx context.Context, it *model.Item) error {
+	if it.Profile == "" {
+		return nil
+	}
+	p := s.profileParams()
+	hist, err := s.d.Store.ReservationHistory(ctx, it.Profile, 5*p.Window) // stand and budget runs are counted apart
+	if err != nil {
+		return fmt.Errorf("profile %s: %w", it.Profile, err)
+	}
+	v := profile.ForReservation(hist, p)
+	if v.StandRuns > 0 && it.DockerProject != "" && v.Stand < it.Limit {
+		it.Expected, it.MemoryFromProfile = v.Stand, true
+	}
+	if v.BudgetRuns > 0 && v.Budget < it.TaskMemory {
+		it.TaskExpected, it.MemoryFromProfile = v.Budget, true
+	}
+	return nil
 }
 
 // applyProfile returns reject for a request that can never be admitted as given,

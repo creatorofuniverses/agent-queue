@@ -48,16 +48,17 @@ type ItemView struct {
 	NodeID            string       `json:"node_id"`
 
 	// Reservation fields. Neither env nor the teardown script is ever part of a view.
-	Kind            model.Kind   `json:"kind"`
-	Within          model.ItemID `json:"within,omitempty"`
-	TaskMemory      uint64       `json:"task_memory"`
-	TaskCPUs        int          `json:"task_cpus"`
-	ExpiresAt       *time.Time   `json:"expires_at,omitempty"`
-	DockerProject   string       `json:"docker_project,omitempty"`
-	StandMeasured   *uint64      `json:"stand_measured,omitempty"`
-	TaskMemoryPeak  *uint64      `json:"task_memory_peak,omitempty"` // recorded when it stops being held, with memory_peak for the stand
-	TeardownAttempt int          `json:"teardown_attempt,omitempty"`
-	TTLHeld         bool         `json:"ttl_held"`
+	Kind               model.Kind   `json:"kind"`
+	Within             model.ItemID `json:"within,omitempty"`
+	TaskMemory         uint64       `json:"task_memory"`
+	TaskCPUs           int          `json:"task_cpus"`
+	ExpiresAt          *time.Time   `json:"expires_at,omitempty"`
+	DockerProject      string       `json:"docker_project,omitempty"`
+	StandMeasured      *uint64      `json:"stand_measured,omitempty"`
+	TaskMemoryExpected uint64       `json:"task_memory_expected,omitempty"` // the budget charged to the pool when history allowed less than task_memory
+	TaskMemoryPeak     *uint64      `json:"task_memory_peak,omitempty"`     // recorded when it stops being held, with memory_peak for the stand
+	TeardownAttempt    int          `json:"teardown_attempt,omitempty"`
+	TTLHeld            bool         `json:"ttl_held"`
 
 	// Set by list for QUEUED items only.
 	Position      int               `json:"position,omitempty"`
@@ -91,7 +92,7 @@ func viewOf(it *model.Item, now time.Time) ItemView {
 		ExitCode: it.ExitCode, Signal: it.Signal, MemoryPeak: it.MemoryPeak, MemoryFit: it.MemoryFit(),
 		IOWriteBytes: it.IOWriteBytes, IOReadBytes: it.IOReadBytes,
 		GitRev: it.GitRev, GitDirty: it.GitDirty, Diagnostic: it.Diagnostic, NodeID: it.NodeID,
-		Kind: it.Kind, Within: it.ParentID, TaskMemory: it.TaskMemory, TaskCPUs: it.TaskCPUs, TaskMemoryPeak: it.TaskMemoryPeak,
+		Kind: it.Kind, Within: it.ParentID, TaskMemory: it.TaskMemory, TaskCPUs: it.TaskCPUs, TaskMemoryExpected: it.TaskExpected, TaskMemoryPeak: it.TaskMemoryPeak,
 		ExpiresAt: optTime(it.ExpiresAt), DockerProject: it.DockerProject,
 		TeardownAttempt: it.TeardownAttempt, TTLHeld: it.TTLHeld,
 	}

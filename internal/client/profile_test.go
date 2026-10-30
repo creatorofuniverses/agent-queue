@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -52,5 +53,20 @@ func TestBuildSubmitMemoryOptionalWithProfile(t *testing.T) {
 	o.Name = ""
 	if _, e := BuildSubmit(context.Background(), o, func(string) string { return "" }); e == nil {
 		t.Fatal("missing")
+	}
+}
+func TestBuildReserveDerivesProfile(t *testing.T) {
+	dir := t.TempDir()
+	td := filepath.Join(dir, "down.sh")
+	if err := os.WriteFile(td, []byte("true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := ReserveOptions{Cwd: dir, Name: "stand", Memory: "1G", TTL: "1h", TeardownFile: td, Priority: "normal"}
+	for name, want := range map[string]string{"stand": dir + ":stand", "": ""} {
+		o.Name = name
+		r, e := BuildReserve(context.Background(), o, func(string) string { return "" })
+		if e != nil || r.Profile != want {
+			t.Fatalf("name %q: profile %q, err %v", name, r.Profile, e)
+		}
 	}
 }

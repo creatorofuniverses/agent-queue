@@ -192,6 +192,10 @@ type Item struct {
 	// CPUs = stand CPUs, Timeout = TTL, Cwd = original cwd, Argv = nil, and
 	// MemoryPeak = the stand's measured peak, recorded when it stops being held.
 	TaskMemory uint64
+	// TaskExpected is what the task budget is charged against the pool, learned
+	// from the history of the reservation's profile; 0 charges TaskMemory, which
+	// stays the ceiling nested tasks are admitted within.
+	TaskExpected uint64
 	// TaskMemoryPeak is the highest memory its nested tasks used at once,
 	// recorded with MemoryPeak; nil for a reservation that ended before aq
 	// recorded peaks.
@@ -220,9 +224,17 @@ func (it *Item) Committed() Resources {
 	case it.ParentID != "":
 		return Resources{}
 	case it.IsReservation():
-		return Resources{MemoryBytes: it.Expected + it.TaskMemory, CPUs: it.CPUs + it.TaskCPUs}
+		return Resources{MemoryBytes: it.Expected + it.TaskCharge(), CPUs: it.CPUs + it.TaskCPUs}
 	}
 	return Resources{MemoryBytes: it.Expected, CPUs: it.CPUs}
+}
+
+// TaskCharge is what a reservation's task budget is charged against the pool.
+func (it *Item) TaskCharge() uint64 {
+	if it.TaskExpected > 0 {
+		return it.TaskExpected
+	}
+	return it.TaskMemory
 }
 
 // Estimate feedback: a peak above fitOver or below fitUnder of the declared
@@ -233,6 +245,13 @@ const (
 	fitUnder   = 0.50
 	fitMinMiss = 256 << 20
 )
+
+// suggest is the amount the feedback proposes for a peak: peak × 1.2 rounded
+// up to MiB, at least 64 MiB, the margin a profile's limit takes by default.
+func suggest(peak uint64) uint64 {
+	const mib = 1 << 20
+	return max(64*mib, uint64(math.Ceil(float64(peak)*1.2/mib))*mib)
+}
 
 // MemoryFit tells the agent how a finished task's memory peak compared with
 // the expected memory it declared, or "" when the estimate was close enough.
@@ -248,9 +267,10 @@ func (it *Item) MemoryFit() string {
 	if verdict == "" {
 		return ""
 	}
-	advice := "raise --expected"
+	next := units.FormatSize(min(suggest(it.MemoryPeak), it.Limit))
+	advice := "raise --expected to " + next
 	if verdict == "overestimated" {
-		advice = "lower --expected, keep --memory as the limit" // a single peak is no safe limit
+		advice = "lower --expected to " + next + ", keep --memory as the limit" // a single peak is no safe limit
 	}
 	return fmt.Sprintf("memory: peak %s is %d%% of expected %s (%s: %s)",
 		units.FormatSize(it.MemoryPeak), pct, units.FormatSize(it.Expected), verdict, advice)
@@ -263,8 +283,8 @@ func StandFit(declared, peak uint64) string {
 	if verdict == "" {
 		return ""
 	}
-	return fmt.Sprintf("stand peak %s is %d%% of declared %s (%s)",
-		units.FormatSize(peak), pct, units.FormatSize(declared), verdict)
+	return fmt.Sprintf("stand peak %s is %d%% of declared %s (%s: next time --memory %s)",
+		units.FormatSize(peak), pct, units.FormatSize(declared), verdict, units.FormatSize(suggest(peak)))
 }
 
 // BudgetFit is StandFit for a reservation's task budget and the highest
@@ -274,14 +294,15 @@ func BudgetFit(declared, peak uint64) string {
 	if verdict == "" {
 		return ""
 	}
-	return fmt.Sprintf("task budget peak %s is %d%% of declared %s (%s)",
-		units.FormatSize(peak), pct, units.FormatSize(declared), verdict)
+	return fmt.Sprintf("task budget peak %s is %d%% of declared %s (%s: next time --task-memory %s)",
+		units.FormatSize(peak), pct, units.FormatSize(declared), verdict, units.FormatSize(suggest(peak)))
 }
 
 // ReservationFit joins StandFit and BudgetFit of a reservation whose peaks
-// were recorded, or "" when both declarations were close enough.
+// were recorded, or "" when both declarations were close enough. It compares
+// with what the agent declared, not with what history let aq charge.
 func (it *Item) ReservationFit() string {
-	fits := []string{StandFit(it.Expected, it.MemoryPeak)}
+	fits := []string{StandFit(it.Limit, it.MemoryPeak)}
 	if it.TaskMemoryPeak != nil {
 		fits = append(fits, BudgetFit(it.TaskMemory, *it.TaskMemoryPeak))
 	}

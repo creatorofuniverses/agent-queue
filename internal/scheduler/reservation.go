@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
@@ -29,6 +30,7 @@ var dockerProjectRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 type ReserveRequest struct {
 	NoNotify      bool              `json:"no_notify,omitempty"`
 	Name          string            `json:"name"`
+	Profile       string            `json:"profile,omitempty"` // history key, as for tasks: <repo root>:<name>
 	Cwd           string            `json:"cwd"`
 	Env           map[string]string `json:"env"`
 	Memory        uint64            `json:"memory"`
@@ -89,6 +91,8 @@ func (s *Scheduler) validateReserve(r ReserveRequest) error {
 		return errors.New("teardown script must be valid UTF-8")
 	case r.DockerProject != "" && !dockerProjectRe.MatchString(r.DockerProject):
 		return fmt.Errorf("docker project %q does not match %s", r.DockerProject, dockerProjectRe)
+	case r.Profile != "" && profile.ValidName(r.Profile) != nil:
+		return profile.ValidName(r.Profile)
 	}
 	return nil
 }
@@ -105,7 +109,7 @@ func (s *Scheduler) Reserve(ctx context.Context, r ReserveRequest) (*model.Item,
 	}
 	now := s.d.Now()
 	it := &model.Item{
-		ID: model.NewID(), Kind: model.KindReservation, Name: r.Name, State: model.StateQueued, Priority: r.Priority,
+		ID: model.NewID(), Kind: model.KindReservation, Name: r.Name, Profile: r.Profile, State: model.StateQueued, Priority: r.Priority,
 		Cwd: r.Cwd, Env: r.Env, Limit: r.Memory, Expected: r.Memory, CPUs: r.CPUs, Timeout: r.TTL,
 		TaskMemory: r.TaskMemory, TaskCPUs: r.TaskCPUs, DockerProject: r.DockerProject,
 		SessionID: r.SessionID, ClientType: r.ClientType, Project: r.Project, IdemKey: r.IdemKey,
@@ -114,6 +118,9 @@ func (s *Scheduler) Reserve(ctx context.Context, r ReserveRequest) (*model.Item,
 	if vErr := s.validateReserve(r); vErr != nil {
 		s.rejectItem(it, vErr.Error())
 		return s.insertRejected(ctx, it)
+	}
+	if err := s.chargeByHistory(ctx, it); err != nil {
+		return nil, err
 	}
 
 	jobDir := s.d.Paths.JobDir(it.ID)

@@ -284,7 +284,7 @@ aq logs "$id" --tail 50
 в уведомлении `task_finished` и в поле `memory_fit` в `--json`:
 
 ```
-… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 0.8 GiB is 19% of expected 4.0 GiB (overestimated: lower --expected, keep --memory as the limit)
+… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 0.8 GiB is 19% of expected 4.0 GiB (overestimated: lower --expected to 983 MiB, keep --memory as the limit)
 ```
 
 Подсказка появляется, когда пик выше 110% или ниже 50% ожидаемой памяти и
@@ -490,9 +490,19 @@ docker compose -p myapp-e2e up -d  # стенд поднимаем только 
   превысил заявленное, записывается уведомление с замеренным объёмом в процентах
   от заявленного.
 - `--name`, `--key`, `--session`, `--priority`, `--env K=V`, `--json` — как у
-  `submit`.
+  `submit`. `--name` ещё и задаёт ключ истории резерва (`<корень
+  репозитория>:<name>`, общий для worktree), см. ниже.
 
-Стенд и бюджет задач вместе занимают пул, пока резерв не освобождён. Резерв
+Стенд и бюджет задач вместе занимают пул, пока резерв не освобождён. Со
+стабильным `--name` резерв списывает с пула столько, сколько использовали
+прошлые резервы с этим именем, как задача по своему профилю: наибольший
+замеренный пик стенда (только с `--docker-project`) и наибольшую одновременную
+память вложенных задач, каждое по последним `[profiles] window` (10) резервам,
+где это записано, × `limit_margin` (1.2), но не больше заявленного. `--memory` и
+`--task-memory` остаются потолками: вложенные задачи допускаются в пределах
+заявленного бюджета, а `stand_over_declared` сравнивает с `--memory`.
+`aq status` показывает `(charged … by history)` в строках `stand:` и `budget:`,
+в `--json` есть `memory_expected` и `task_memory_expected`. Резерв
 встаёт в очередь так же, как задача, а `aq reserve` отвечает после ближайшего
 прохода допуска: сразу `GRANTED`, если влез, иначе `QUEUED` с позицией и
 причиной ожидания.
@@ -549,9 +559,10 @@ aq release "$id"           # стенд погашен самим агентом
 только в очереди. `release` ещё и печатает, как пики соотносятся с заявленным,
 по тем же порогам, что и у задач: замеренный пик стенда с `--memory` (с
 `--docker-project`) и наибольшая одновременная память вложенных задач с
-`--task-memory` (`… RELEASED stand peak 1.1 GiB is 32% of declared 3.4 GiB
-(overestimated); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
-(overestimated)`); это остаётся в диагностике `aq result`, а `aq status`
+`--task-memory`, с объёмом, который стоит заявить в следующий раз (пик × 1.2):
+`… RELEASED stand peak 1.1 GiB is 32% of declared 3.4 GiB (overestimated: next
+time --memory 1.3 GiB); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
+(overestimated: next time --task-memory 1.2 GiB)`. Это остаётся в диагностике `aq result`, а `aq status`
 показывает оба пика в строках `stand:` и `budget:`.
 
 ### Истечение и неудачное снятие
