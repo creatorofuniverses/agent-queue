@@ -35,9 +35,11 @@ type Summary struct {
 	Queue        *QueueStats        `json:"queue"`
 	Host         *HostStats         `json:"host"`
 	Reservations []ReservationGroup `json:"reservations"`
-	Delivery     []ChannelStats     `json:"delivery"`
-	Hook         *HookStats         `json:"hook"`
-	Incidents    *IncidentStats     `json:"incidents"`
+	// ReservationFit: how the reservations of each name used what they declared.
+	ReservationFit []ReservationFitStats `json:"reservation_fit"`
+	Delivery       []ChannelStats        `json:"delivery"`
+	Hook           *HookStats            `json:"hook"`
+	Incidents      *IncidentStats        `json:"incidents"`
 }
 type ItemGroup struct {
 	Kind       string         `json:"kind"`
@@ -109,6 +111,23 @@ type ReservationGroup struct {
 	TeardownUnknown int    `json:"teardown_unknown"`
 	Extensions      int    `json:"extensions"`
 }
+
+// ReservationFitStats: reservations of one project:name that stopped being held
+// with recorded peaks. A stand counts when it was measured (it had a docker
+// project), a budget when one was declared. UnusedGiBHours is Σ (declared −
+// peak) × time held over both, the memory admission kept from the queue for
+// nothing; sorted by it, largest first.
+type ReservationFitStats struct {
+	Name            string  `json:"name"`
+	Reservations    int     `json:"reservations"`
+	StandsMeasured  int     `json:"stands_measured"`
+	StandPeakP50    float64 `json:"stand_peak_to_declared_p50"`
+	StandPeakP90    float64 `json:"stand_peak_to_declared_p90"`
+	BudgetsMeasured int     `json:"budgets_measured"`
+	BudgetPeakP50   float64 `json:"budget_peak_to_declared_p50"`
+	BudgetPeakP90   float64 `json:"budget_peak_to_declared_p90"`
+	UnusedGiBHours  float64 `json:"unused_gib_hours"`
+}
 type ChannelStats struct {
 	Channel    string  `json:"channel"`
 	Events     int     `json:"events"`
@@ -150,6 +169,7 @@ func Summarize(in Input) Summary {
 	}
 	summarizeHost(&s, in)
 	summarizeReservations(&s, in)
+	summarizeReservationFit(&s, in)
 	summarizeDelivery(&s, in)
 	s.Hook = &HookStats{ByClient: map[string]int{}}
 	for i, p := range in.Patterns {
@@ -379,6 +399,50 @@ func summarizeReservations(s *Summary, in Input) {
 	for _, k := range keys(groups) {
 		s.Reservations = append(s.Reservations, *groups[k])
 	}
+}
+func summarizeReservationFit(s *Summary, in Input) {
+	type acc struct {
+		g             ReservationFitStats
+		stand, budget []float64
+	}
+	unused := func(declared, peak uint64, held time.Duration) float64 {
+		return float64(declared-min(peak, declared)) / (1 << 30) * held.Hours()
+	}
+	groups := map[string]*acc{}
+	for _, it := range in.Items {
+		if !it.IsReservation() || it.TaskMemoryPeak == nil || it.AdmittedAt.IsZero() {
+			continue
+		}
+		end := it.EndedAt
+		if !it.TeardownStartedAt.IsZero() {
+			end = it.TeardownStartedAt
+		}
+		held := max(0, end.Sub(it.AdmittedAt))
+		k := it.Project + ":" + it.Name
+		a := groups[k]
+		if a == nil {
+			a = &acc{g: ReservationFitStats{Name: k}}
+			groups[k] = a
+		}
+		a.g.Reservations++
+		if it.DockerProject != "" && it.Expected > 0 {
+			a.stand = append(a.stand, float64(it.MemoryPeak)/float64(it.Expected))
+			a.g.UnusedGiBHours += unused(it.Expected, it.MemoryPeak, held)
+		}
+		if it.TaskMemory > 0 {
+			a.budget = append(a.budget, float64(*it.TaskMemoryPeak)/float64(it.TaskMemory))
+			a.g.UnusedGiBHours += unused(it.TaskMemory, *it.TaskMemoryPeak, held)
+		}
+	}
+	s.ReservationFit = []ReservationFitStats{}
+	for _, k := range keys(groups) {
+		a := groups[k]
+		a.g.StandsMeasured, a.g.BudgetsMeasured = len(a.stand), len(a.budget)
+		a.g.StandPeakP50, a.g.StandPeakP90 = profile.Percentile(a.stand, 50), profile.Percentile(a.stand, 90)
+		a.g.BudgetPeakP50, a.g.BudgetPeakP90 = profile.Percentile(a.budget, 50), profile.Percentile(a.budget, 90)
+		s.ReservationFit = append(s.ReservationFit, a.g)
+	}
+	sort.SliceStable(s.ReservationFit, func(i, j int) bool { return s.ReservationFit[i].UnusedGiBHours > s.ReservationFit[j].UnusedGiBHours })
 }
 func summarizeDelivery(s *Summary, in Input) {
 	type acc struct {

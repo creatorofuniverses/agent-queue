@@ -54,6 +54,7 @@ type ItemView struct {
 	ExpiresAt       *time.Time   `json:"expires_at,omitempty"`
 	DockerProject   string       `json:"docker_project,omitempty"`
 	StandMeasured   *uint64      `json:"stand_measured,omitempty"`
+	TaskMemoryPeak  *uint64      `json:"task_memory_peak,omitempty"` // recorded when it stops being held, with memory_peak for the stand
 	TeardownAttempt int          `json:"teardown_attempt,omitempty"`
 	TTLHeld         bool         `json:"ttl_held"`
 
@@ -89,7 +90,7 @@ func viewOf(it *model.Item, now time.Time) ItemView {
 		ExitCode: it.ExitCode, Signal: it.Signal, MemoryPeak: it.MemoryPeak, MemoryFit: it.MemoryFit(),
 		IOWriteBytes: it.IOWriteBytes, IOReadBytes: it.IOReadBytes,
 		GitRev: it.GitRev, GitDirty: it.GitDirty, Diagnostic: it.Diagnostic, NodeID: it.NodeID,
-		Kind: it.Kind, Within: it.ParentID, TaskMemory: it.TaskMemory, TaskCPUs: it.TaskCPUs,
+		Kind: it.Kind, Within: it.ParentID, TaskMemory: it.TaskMemory, TaskCPUs: it.TaskCPUs, TaskMemoryPeak: it.TaskMemoryPeak,
 		ExpiresAt: optTime(it.ExpiresAt), DockerProject: it.DockerProject,
 		TeardownAttempt: it.TeardownAttempt, TTLHeld: it.TTLHeld,
 	}

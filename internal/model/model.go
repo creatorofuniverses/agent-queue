@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -188,11 +189,16 @@ type Item struct {
 	// ParentID is the reservation a nested task runs within.
 	ParentID ItemID
 	// Reservation fields. For a reservation Limit = Expected = stand memory,
-	// CPUs = stand CPUs, Timeout = TTL, Cwd = original cwd, Argv = nil.
+	// CPUs = stand CPUs, Timeout = TTL, Cwd = original cwd, Argv = nil, and
+	// MemoryPeak = the stand's measured peak, recorded when it stops being held.
 	TaskMemory uint64
-	TaskCPUs   int
-	ExpiresAt  time.Time
-	WarnAt     time.Time
+	// TaskMemoryPeak is the highest memory its nested tasks used at once,
+	// recorded with MemoryPeak; nil for a reservation that ended before aq
+	// recorded peaks.
+	TaskMemoryPeak *uint64
+	TaskCPUs       int
+	ExpiresAt      time.Time
+	WarnAt         time.Time
 	// DockerProject is the compose project measured for the stand ("" if none).
 	DockerProject string
 	// TeardownAttempt counts launched teardown attempts (first is 1).
@@ -259,6 +265,27 @@ func StandFit(declared, peak uint64) string {
 	}
 	return fmt.Sprintf("stand peak %s is %d%% of declared %s (%s)",
 		units.FormatSize(peak), pct, units.FormatSize(declared), verdict)
+}
+
+// BudgetFit is StandFit for a reservation's task budget and the highest
+// memory its nested tasks used at once.
+func BudgetFit(declared, peak uint64) string {
+	pct, verdict := misfit(declared, peak, true)
+	if verdict == "" {
+		return ""
+	}
+	return fmt.Sprintf("task budget peak %s is %d%% of declared %s (%s)",
+		units.FormatSize(peak), pct, units.FormatSize(declared), verdict)
+}
+
+// ReservationFit joins StandFit and BudgetFit of a reservation whose peaks
+// were recorded, or "" when both declarations were close enough.
+func (it *Item) ReservationFit() string {
+	fits := []string{StandFit(it.Expected, it.MemoryPeak)}
+	if it.TaskMemoryPeak != nil {
+		fits = append(fits, BudgetFit(it.TaskMemory, *it.TaskMemoryPeak))
+	}
+	return strings.Join(slices.DeleteFunc(fits, func(f string) bool { return f == "" }), "; ")
 }
 
 // misfit is peak as a percentage of declared and "underestimated" or

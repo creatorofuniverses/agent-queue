@@ -122,9 +122,11 @@ check whether it hung before raising `--timeout`; on 5 read the diagnostic
 If the line ends with `memory: peak … (underestimated|overestimated: …)`, your
 estimate missed the real peak. Fix it with `--expected` (what the pool is
 charged) near that peak; keep `--memory` as the kill limit with headroom, since
-one run's peak is no safe limit for the next. `aq release` of a
-stand with `--docker-project` reports the same for the stand against `--memory`.
-On `stand_over_declared`, declare more next time.
+one run's peak is no safe limit for the next. `aq release` reports the same for
+the stand against `--memory` (with `--docker-project`) and for the most your
+nested tasks used at once against `--task-memory`: an overestimated reservation
+holds memory other agents wait for, so declare less next time. On
+`stand_over_declared`, declare more next time.
 
 `aq result` also shows `disk:` (bytes written to physical disks) when the host
 records it. Gigabytes per run for a test suite wears the SSD and slows everyone:

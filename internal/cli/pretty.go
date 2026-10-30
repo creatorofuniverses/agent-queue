@@ -398,6 +398,19 @@ func (c *cmdCtx) printStats(v stats.Summary) {
 		}
 		indent(w, t, u)
 	}
+	if len(v.ReservationFit) > 0 {
+		section("Reservation fit (peak / declared)")
+		t := &table{head: []string{"RESERVATION", "COUNT", "STAND p50/p90", "BUDGET p50/p90", "UNUSED GiB·h"}, right: map[int]bool{1: true, 4: true}}
+		for i, r := range v.ReservationFit {
+			if i == 10 {
+				fmt.Fprintf(w, "  %s\n", u.dim(fmt.Sprintf("%d more in aq stats --json", len(v.ReservationFit)-i)))
+				break
+			}
+			t.add(shortProfile(r.Name, c.env("HOME")), fmt.Sprint(r.Reservations), measuredRatios(r.StandsMeasured, r.StandPeakP50, r.StandPeakP90),
+				measuredRatios(r.BudgetsMeasured, r.BudgetPeakP50, r.BudgetPeakP90), fmt.Sprintf("%.1f", r.UnusedGiBHours))
+		}
+		indent(w, t, u)
+	}
 	if len(v.Delivery) > 0 {
 		section("Notifications")
 		t := &table{head: []string{"CHANNEL", "EVENTS", "SENT", "ACKED", "PENDING", "FAILED", "SKIPPED", "UNACKED", "LATENCY p50/p90"}, right: map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true}}
@@ -432,6 +445,14 @@ func (c *cmdCtx) printStats(v stats.Summary) {
 // ratios is a p50/p90 pair, or "—" when there was nothing to compare (no estimate).
 func ratios(p50, p90 float64) string {
 	if p50 == 0 && p90 == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.2f / %.2f", p50, p90)
+}
+
+// measuredRatios is ratios for n measurements, where 0 / 0 is a real peak of zero.
+func measuredRatios(n int, p50, p90 float64) string {
+	if n == 0 {
 		return "—"
 	}
 	return fmt.Sprintf("%.2f / %.2f", p50, p90)

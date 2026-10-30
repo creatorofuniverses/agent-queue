@@ -113,6 +113,7 @@ type Scheduler struct {
 	passDone       chan struct{}                  // closed and replaced at the end of every pass
 	standUsage     map[model.ItemID]uint64        // fresh stand measurements seen by the last pass
 	standPeak      map[model.ItemID]uint64        // highest stand measurement of each held reservation
+	budgetPeak     map[model.ItemID]uint64        // highest memory of each held reservation's nested tasks at once
 	// teardownLaunching holds reservations whose teardown Launch is in flight; the
 	// reaper leaves them alone, as it does tasks in STARTING.
 	teardownLaunching map[model.ItemID]bool
@@ -160,6 +161,7 @@ func New(d Deps) *Scheduler {
 		passDone:     make(chan struct{}),
 		standUsage:   map[model.ItemID]uint64{},
 		standPeak:    map[model.ItemID]uint64{},
+		budgetPeak:   map[model.ItemID]uint64{},
 
 		teardownLaunching: map[model.ItemID]bool{},
 		launchFailed:      map[model.ItemID]launchFailure{},
@@ -543,6 +545,9 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			nestedCur[it.ParentID] += cur
 		}
 	}
+	for id, cur := range nestedCur {
+		s.budgetPeak[id] = max(s.budgetPeak[id], cur)
+	}
 
 	var projects []string
 	s.standUsage = map[model.ItemID]uint64{}
@@ -601,9 +606,11 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		snap.Committed.MemoryBytes += c.MemoryBytes
 		snap.Committed.CPUs += c.CPUs
 	}
-	for id := range s.standPeak {
-		if _, held := s.holderLive[id]; !held {
-			delete(s.standPeak, id) // expired or force-released: nobody asks any more
+	for _, peaks := range []map[model.ItemID]uint64{s.standPeak, s.budgetPeak} {
+		for id := range peaks {
+			if _, held := s.holderLive[id]; !held {
+				delete(peaks, id) // recorded on the item, or force-released: nobody asks any more
+			}
 		}
 	}
 	if s.d.Meter != nil {
@@ -611,6 +618,17 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		s.d.Meter.Watch(slices.Compact(projects))
 	}
 	return snap, queue, nestedQueued
+}
+
+// recordPeaksLocked keeps on the item the peaks of a reservation that stops
+// being held. Peaks seen before a daemon restart are lost.
+func (s *Scheduler) recordPeaksLocked(it *model.Item) {
+	it.MemoryPeak = max(it.MemoryPeak, s.standPeak[it.ID])
+	b := s.budgetPeak[it.ID]
+	if it.TaskMemoryPeak != nil {
+		b = max(b, *it.TaskMemoryPeak)
+	}
+	it.TaskMemoryPeak = &b
 }
 
 // standUnconsumedLocked is the part of a held reservation's stand not yet in use.

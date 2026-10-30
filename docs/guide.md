@@ -299,6 +299,15 @@ returns only the items and runs of that profile. Export tables are `items`,
 environment, cwd, session identifiers and delivery error texts are not included
 in statistics or exports.
 
+"Reservation fit" compares each reservation name's recorded peaks with what it
+declared: the stand against `--memory` (only with `--docker-project`, otherwise
+it is not measured) and the busiest moment of its nested tasks against
+`--task-memory`, as p50/p90 of peak/declared. `UNUSED GiB·h` sums the declared
+memory above the peak times the time it was held: memory the queue was kept
+from while nobody used it. Names with the most come first. Peaks are recorded
+when a reservation is released or its teardown starts; a daemon restart while
+it is held loses the peaks seen before it.
+
 Kernel OOM kills outside aq are split by the cgroup they happened in: a slice of
 the user manager (`app.slice`, a test suite's own slice) or `system.slice`
 (services and docker containers), e.g. `kernel OOM kills outside aq: 134
@@ -531,10 +540,13 @@ aq release "$id"           # the agent shut the stand down itself: release witho
 repeating it is safe; you can extend in `GRANTED` and `EXPIRING`. `release`
 releases a granted reservation if it has no unfinished nested tasks, and cancels
 a queued reservation (`CANCELLED`). `aq cancel` on a reservation works only
-while it is queued. With `--docker-project`, `release` also prints how the
-stand's measured peak compared with `--memory`, by the same thresholds as for
-tasks (`… RELEASED stand peak 1.1 GiB is 32% of declared 3.4 GiB
-(overestimated)`); it stays in the diagnostic of `aq result`.
+while it is queued. `release` also prints how the peaks compared with what was
+declared, by the same thresholds as for tasks: the stand's measured peak against
+`--memory` (with `--docker-project`) and the most its nested tasks used at once
+against `--task-memory` (`… RELEASED stand peak 1.1 GiB is 32% of declared 3.4
+GiB (overestimated); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
+(overestimated)`); it stays in the diagnostic of `aq result`, and `aq status`
+shows both peaks on the `stand:` and `budget:` lines.
 
 ### Expiry and failed teardown
 

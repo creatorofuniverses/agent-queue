@@ -190,3 +190,26 @@ func TestStandFit(t *testing.T) {
 		}
 	}
 }
+
+func TestReservationFit(t *testing.T) {
+	const gib = 1 << 30
+	u := func(v uint64) *uint64 { return &v }
+	cases := []struct {
+		name string
+		it   Item
+		want string
+	}{
+		{"budget only", Item{Expected: gib, MemoryPeak: gib, TaskMemory: 4 * gib, TaskMemoryPeak: u(gib)},
+			"task budget peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated)"},
+		{"budget peak not recorded", Item{Expected: 4 * gib, MemoryPeak: gib, TaskMemory: 4 * gib},
+			"stand peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated)"},
+		{"no nested task ran", Item{Expected: gib, MemoryPeak: gib, TaskMemory: 4 * gib, TaskMemoryPeak: u(0)}, ""},
+		{"budget overrun", Item{TaskMemory: gib, TaskMemoryPeak: u(2 * gib)},
+			"task budget peak 2.0 GiB is 200% of declared 1.0 GiB (underestimated)"},
+	}
+	for _, c := range cases {
+		if got := c.it.ReservationFit(); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}

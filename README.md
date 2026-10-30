@@ -97,6 +97,7 @@ For shell expansion and `$AQ_CPUS`, see [running tasks](docs/guide.md#running-ta
 | See a snapshot of the machine and pool | `aq top` |
 | Summarize the last week | `aq stats --since 7d` |
 | Find the jobs that write the most to disk | `aq stats --since 1d` ("Disk writes") |
+| Find reservations that hold memory they never use | `aq stats` ("Reservation fit") |
 | Learn a command's options | `aq help COMMAND` |
 
 Use `--json` on viewing commands for structured output. If a job fails, start

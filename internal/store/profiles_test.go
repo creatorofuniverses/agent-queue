@@ -208,3 +208,37 @@ func TestRunKeepsDiskWrites(t *testing.T) {
 		t.Fatal(rs, e)
 	}
 }
+
+func TestMigration0007OnPlan6DB(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "old.db")
+	db, e := sql.Open("sqlite", p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	names := []string{"0001_init.sql", "0002_reservations.sql", "0003_notifications.sql", "0004_profiles_stats.sql", "0005_runtime_state.sql", "0006_disk_io.sql"}
+	for i, n := range names {
+		b, e := migrationsFS.ReadFile("migrations/" + n)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec(string(b)); e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec(fmt.Sprintf("PRAGMA user_version=%d", i+1)); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e = db.Exec("INSERT INTO items(id,kind,state,task_memory) VALUES('old','reservation','RELEASED',1073741824)"); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+	s, e := Open(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	it, e := s.Get(context.Background(), "old")
+	if e != nil || it.TaskMemoryPeak != nil {
+		t.Fatal(it, e) // a reservation released before aq kept peaks: unknown, not zero
+	}
+}

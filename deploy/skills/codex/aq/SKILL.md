@@ -141,8 +141,10 @@ If the notification (or `aq wait`) ends with `memory: peak …
 (underestimated|overestimated: …)`, the estimate missed the real peak. Fix it
 with `--expected` (what the pool is charged) near that peak; keep `--memory` as
 the kill limit with headroom, since one run's peak is no safe limit for the next.
-`aq release` of a stand with `--docker-project` reports the same for the stand
-against `--memory`; after `stand_over_declared`, declare more next time.
+`aq release` reports the same for the stand against `--memory` (with
+`--docker-project`) and for the most your nested tasks used at once against
+`--task-memory`: an overestimated reservation holds memory other agents wait
+for, so declare less next time; after `stand_over_declared`, declare more.
 
 `aq result` also shows `disk:` (bytes written to physical disks) when the host
 records it. A suite writing gigabytes per run wears the SSD and slows everyone:

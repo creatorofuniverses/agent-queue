@@ -43,6 +43,7 @@ func (s *Scheduler) claimTeardownsLocked(ctx context.Context, items, due []*mode
 		it.Reason, it.Diagnostic, it.ExitCode, it.Signal, it.LogsTruncated = model.ReasonNone, "", nil, "", false
 		it.UnitName, it.TTLHeld = "", false
 		it.TeardownStartedAt = s.d.Now()
+		s.recordPeaksLocked(it) // the stand is going down: what it used so far is its peak
 		if err := s.persistLocked(ctx, it); err != nil {
 			slog.Error("scheduler: record teardown start", "id", it.ID, "err", err)
 			*it = prev // not persisted: due again next pass

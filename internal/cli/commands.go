@@ -145,8 +145,12 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 	}
 	if v.Kind == model.KindReservation {
 		fmt.Fprintf(w, "kind:      reservation\n")
-		fmt.Fprintf(w, "stand:     %s memory, %d cpus\n", units.FormatSize(v.MemoryLimit), v.CPUs)
-		fmt.Fprintf(w, "budget:    %s memory, %d cpus\n", units.FormatSize(v.TaskMemory), v.TaskCPUs)
+		standPeak, budgetPeak := "", ""
+		if v.TaskMemoryPeak != nil { // peaks recorded when it stopped being held
+			standPeak, budgetPeak = ", peak "+units.FormatSize(v.MemoryPeak), ", peak "+units.FormatSize(*v.TaskMemoryPeak)
+		}
+		fmt.Fprintf(w, "stand:     %s memory, %d cpus%s\n", units.FormatSize(v.MemoryLimit), v.CPUs, standPeak)
+		fmt.Fprintf(w, "budget:    %s memory, %d cpus%s\n", units.FormatSize(v.TaskMemory), v.TaskCPUs, budgetPeak)
 		if v.ExpiresAt != nil {
 			fmt.Fprintf(w, "expires:   %s\n", v.ExpiresAt.Format(time.RFC3339))
 		}

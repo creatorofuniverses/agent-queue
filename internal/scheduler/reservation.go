@@ -361,9 +361,11 @@ func (s *Scheduler) Release(ctx context.Context, id model.ItemID, force bool) (*
 			evs = s.newEvents(it, model.EventReservationForceReleased, fmt.Sprintf("stand %s released by operator after %s", standLabel(it), it.State), model.AudienceOperator)
 			diag = "released by operator (--force)"
 		} else {
-			diag = model.StandFit(it.Expected, s.standPeak[id])
+			s.recordPeaksLocked(it)
+			diag = it.ReservationFit()
 		}
 		delete(s.standPeak, id)
+		delete(s.budgetPeak, id)
 		s.endLocked(it, model.StateReleased, model.ReasonNone, diag)
 	case it.State == model.StateTeardownFailed || it.State == model.StateTeardownUnknown:
 		return it, fmt.Errorf("%w: reservation %s is %s; use aq teardown --retry or aq release --force",

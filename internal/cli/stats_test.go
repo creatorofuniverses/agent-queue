@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"strings"
 	"testing"
@@ -65,6 +67,39 @@ func TestPrettyStatsOOMGroupsAndMissingEstimate(t *testing.T) {
 	})
 	out := b.String()
 	if !strings.Contains(out, "kernel OOM kills outside aq: 7 (aqtest.slice 4, app.slice 1)") || !strings.Contains(out, "0.50 / 0.50            —") {
+		t.Fatal(out)
+	}
+}
+
+func TestPrettyStatsReservationFit(t *testing.T) {
+	var b strings.Builder
+	c := &cmdCtx{stdout: &b, env: func(string) string { return "/home/u" }}
+	c.printStats(stats.Summary{ReservationFit: []stats.ReservationFitStats{
+		{Name: "/home/u/r:lab-stand", Reservations: 3, StandsMeasured: 3, StandPeakP50: 0, StandPeakP90: 0, BudgetsMeasured: 3, BudgetPeakP50: 0.25, BudgetPeakP90: 0.5, UnusedGiBHours: 13},
+		{Name: "/home/u/r:db", Reservations: 1, UnusedGiBHours: 0},
+	}})
+	out := b.String()
+	for _, want := range []string{"Reservation fit", "~/r:lab-stand", "0.00 / 0.00", "0.25 / 0.50", "13.0", "~/r:db"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("no %q in\n%s", want, out)
+		}
+	}
+}
+
+func TestPrintViewReservationPeaks(t *testing.T) {
+	var b strings.Builder
+	c := &cmdCtx{stdout: &b, env: func(string) string { return "" }}
+	peak := uint64(768 << 20)
+	v := daemon.ItemView{Kind: model.KindReservation, State: model.StateReleased, MemoryLimit: 1 << 30, MemoryPeak: 256 << 20, TaskMemory: 3 << 30, TaskCPUs: 2, TaskMemoryPeak: &peak}
+	printView(c, v)
+	out := b.String()
+	if !strings.Contains(out, "stand:     1.0 GiB memory, 0 cpus, peak 256 MiB\n") || !strings.Contains(out, "budget:    3.0 GiB memory, 2 cpus, peak 768 MiB\n") {
+		t.Fatal(out)
+	}
+	b.Reset()
+	v.TaskMemoryPeak = nil // still held, or ended before aq recorded peaks
+	printView(c, v)
+	if out := b.String(); strings.Contains(out, ", peak") {
 		t.Fatal(out)
 	}
 }

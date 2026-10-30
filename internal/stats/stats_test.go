@@ -120,3 +120,34 @@ func TestSummarizeKernelOOMByGroup(t *testing.T) {
 		t.Fatalf("%+v", g)
 	}
 }
+
+func TestSummarizeReservationFit(t *testing.T) {
+	const gib = 1 << 30
+	u := func(n uint64) *uint64 { return &n }
+	t0 := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	res := func(name, docker string, stand, standPeak, budget uint64, budgetPeak *uint64, held time.Duration) *model.Item {
+		return &model.Item{Kind: model.KindReservation, Project: "/r", Name: name, State: model.StateReleased, DockerProject: docker,
+			Expected: stand, MemoryPeak: standPeak, TaskMemory: budget, TaskMemoryPeak: budgetPeak,
+			AdmittedAt: t0, EndedAt: t0.Add(held)}
+	}
+	torn := res("db", "p", 2*gib, gib/2, 0, u(0), 3*time.Hour)
+	torn.State, torn.TeardownStartedAt = model.StateTornDown, t0.Add(time.Hour) // held until the teardown began
+	s := Summarize(Input{Items: []*model.Item{
+		res("lab", "p", gib, gib/4, 4*gib, u(gib), 2*time.Hour),
+		res("lab", "p", gib, gib/2, 4*gib, u(2*gib), time.Hour),
+		res("lab", "", gib, 0, 4*gib, u(gib), time.Hour), // no docker project: the stand was not measured
+		torn,
+		res("old", "p", gib, 0, gib, nil, time.Hour),                                                          // ended before peaks were recorded
+		{Kind: model.KindReservation, Project: "/r", Name: "held", State: model.StateGranted, AdmittedAt: t0}, // still held
+	}})
+	if len(s.ReservationFit) != 2 {
+		t.Fatalf("%+v", s.ReservationFit)
+	}
+	// lab: stands 0.75·2+0.5·1 GiB·h unused, budgets 3·2+2·1+3·1 GiB·h unused.
+	lab := ReservationFitStats{Name: "/r:lab", Reservations: 3, StandsMeasured: 2, StandPeakP50: 0.25, StandPeakP90: 0.5,
+		BudgetsMeasured: 3, BudgetPeakP50: 0.25, BudgetPeakP90: 0.5, UnusedGiBHours: 2 + 11}
+	db := ReservationFitStats{Name: "/r:db", Reservations: 1, StandsMeasured: 1, StandPeakP50: 0.25, StandPeakP90: 0.25, UnusedGiBHours: 1.5}
+	if s.ReservationFit[0] != lab || s.ReservationFit[1] != db {
+		t.Fatalf("%+v\nwant %+v\n     %+v", s.ReservationFit, lab, db)
+	}
+}

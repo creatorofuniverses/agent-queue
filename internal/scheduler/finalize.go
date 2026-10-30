@@ -160,6 +160,9 @@ func (s *Scheduler) finalizeLocked(ctx context.Context, it *model.Item, ei *plat
 	}
 	it.ExitCode, it.Signal = exitDetails(*ei)
 	it.MemoryPeak, it.LogsTruncated = ei.MemoryPeak, ei.LogsTruncated
+	if it.ParentID != "" { // the unit's own peak is exact where the pass samples miss a spike
+		s.budgetPeak[it.ParentID] = max(s.budgetPeak[it.ParentID], ei.MemoryPeak)
+	}
 	it.IOWriteBytes, it.IOReadBytes = ei.IOWriteBytes, ei.IOReadBytes
 	return s.persistLocked(ctx, it)
 }
