@@ -127,6 +127,13 @@ The scheduler checks these blockers in order:
 | `pool_cpu` | Existing commitments plus this request exceed the CPU pool. |
 | `live_memory` | The host cannot cover the request and its reserved headroom. |
 
+Every item a pass leaves queued gets a reason, not only the head: the head's
+blocker while a gate (`recovering`, `pressure`, `disk`, `tmp`) is closed,
+otherwise the item's own blocker against what the pass left, otherwise `queue`:
+it would fit now, but starting it would delay the head (see backfill below).
+`submit` and `reserve` answer after the nearest pass, so their reply already
+says whether the item started and, if not, why.
+
 The live-memory check also subtracts memory already promised but not yet used.
 Otherwise a newly started job could look cheap before it has allocated its data,
 and a second job could be given the same memory.

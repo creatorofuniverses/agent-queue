@@ -8,6 +8,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"strings"
 	"testing"
 	"time"
 )
@@ -268,5 +269,24 @@ func TestReservationHolderWaitsForNestedTasks(t *testing.T) {
 		if h.ID == res.ID && !h.End.Equal(want) {
 			t.Fatal(h.End, want)
 		}
+	}
+}
+
+func TestEveryQueuedItemHasABlocker(t *testing.T) {
+	e := newResEnv(t)
+	a := e.reserve(t, e.rreq(3*gib))
+	e.tick(t)
+	e.wantState(t, a.ID, model.StateGranted, model.ReasonNone)
+	head := e.reserve(t, e.rreq(7*gib/2))
+	behind := e.reserve(t, e.rreq(900*mib)) // fits now, but not in what the head leaves at its start
+	e.tick(t)
+	if d, ok := e.s.Blocked(head.ID); !ok || d.Blocker != admission.BlockPoolMemory {
+		t.Fatalf("head: %+v %v", d, ok)
+	}
+	if d, ok := e.s.Blocked(behind.ID); !ok || d.Blocker != admission.BlockQueue || !strings.Contains(d.Detail, string(head.ID)) {
+		t.Fatalf("behind the head: %+v %v", d, ok)
+	}
+	if _, ok := e.s.Blocked(a.ID); ok {
+		t.Fatal("a granted reservation has a blocker")
 	}
 }

@@ -152,8 +152,12 @@ report it to the user and look for the cause (a test database without
 `fsync=off`, an uncached dependency install, a fresh build directory every run).
 `aq stats` lists the heaviest writers by name.
 
-Submission success means queued, not that the command passed. Read the item's
-state, reason and command exit code from `aq result`:
+Submission success means queued, not that the command passed. If it cannot
+start at once, `submit` (and `reserve`, `wait`) prints `queued: position N,
+blocked by …` on stderr; `live_memory` or `pool_memory` with numbers far above
+what the work needs means a smaller declaration starts sooner, `queue` means it
+waits its turn behind the head. Read the item's state, reason and command exit
+code from `aq result`:
 
 - **GRANTED:** the reservation is ready; only now start the stand or nested work.
 - **OOM:** inspect the peak and worker count, then increase memory (e.g. 1.5×)

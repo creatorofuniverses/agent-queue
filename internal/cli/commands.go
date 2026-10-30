@@ -136,6 +136,9 @@ func printView(c *cmdCtx, v daemon.ItemView) {
 	fmt.Fprintf(w, "priority:  %s\n", v.Priority)
 	if v.State == model.StateQueued {
 		fmt.Fprintf(w, "expected start: %s\n", startText(v.ExpectedStart))
+		if v.BlockedBy != "" {
+			fmt.Fprintf(w, "blocked by: %s\n", blockedText(v.BlockedBy, v.BlockedDetail))
+		}
 	}
 	fmt.Fprintf(w, "memory:    %s limit, %s expected, %s peak\n",
 		units.FormatSize(v.MemoryLimit), units.FormatSize(v.MemoryExpected), units.FormatSize(v.MemoryPeak))
@@ -358,6 +361,9 @@ func cmdWait(c *cmdCtx, args []string) error {
 	ctx, stop := signal.NotifyContext(c.ctx, os.Interrupt)
 	defer stop()
 	var v daemon.ItemView
+	if c.call(ctx, "status", map[string]string{"id": id}, &v) == nil {
+		queuedNote(c, v) // waiting may take long: say why up front
+	}
 	err = c.waitCall(ctx, map[string]string{"id": id, "until": *until}, &v)
 	if ctx.Err() != nil {
 		return &exitError{code: exitInterrupted, msg: "interrupted"}

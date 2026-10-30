@@ -278,6 +278,15 @@ func (c *cmdCtx) clientConfig() config.Config {
 	}
 	return cfg
 }
+
+// queuedNote tells on stderr where a queued item stands and why it waits.
+func queuedNote(c *cmdCtx, v daemon.ItemView) {
+	if v.State != model.StateQueued || v.BlockedBy == "" {
+		return
+	}
+	fmt.Fprintf(c.stderr, "queued: position %d, blocked by %s\n", v.Position, blockedText(v.BlockedBy, v.BlockedDetail))
+}
+
 func waitHint(c *cmdCtx, cfg config.Config, id client.Identity, item model.ItemID) {
 	if a, ok := cfg.Agent(id.ClientType); ok && a.Delivery == config.DeliveryClientWait {
 		fmt.Fprintf(c.stderr, "hint: to be woken, run in background: aq wait %s\n", item)

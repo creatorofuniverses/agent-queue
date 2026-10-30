@@ -44,7 +44,8 @@ func restartEvents(t *testing.T, e *env) []model.Event {
 func TestRestartEvent(t *testing.T) {
 	e := newEnv(t)
 	e.start(t)
-	e.mustSubmit(t, e.submitArgs(64<<20))
+	e.mustSubmit(t, e.submitArgs(768<<20)) // submit answers after a pass: this one starts
+	e.mustSubmit(t, e.submitArgs(512<<20)) // and this one stays queued next to it
 	e.stopNow(t)
 	if evs := restartEvents(t, e); len(evs) != 0 {
 		t.Fatal("first start is not a restart", evs)

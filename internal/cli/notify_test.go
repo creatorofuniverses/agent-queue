@@ -119,7 +119,7 @@ func TestWaitUntilExpiringAndEventIDs(t *testing.T) {
 	h := socketHarness(t, func(ctx context.Context, op string, raw json.RawMessage, w protocol.StreamWriter) (any, error) {
 		var a map[string]any
 		json.Unmarshal(raw, &a)
-		if a["until"] != "expiring" {
+		if op == "wait" && a["until"] != "expiring" {
 			t.Error(a)
 		}
 		return daemon.ItemView{ID: "r", Kind: model.KindReservation, State: model.StateExpiring, Events: []daemon.EventView{{ID: "e", Kind: model.EventReservationExpiring}}}, nil

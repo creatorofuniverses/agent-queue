@@ -35,6 +35,7 @@ type passState struct {
 	at      time.Time
 	summary PassSummary
 	starts  map[model.ItemID]time.Time
+	blocked map[model.ItemID]admission.Decision // why each item left queued waits
 	// aborted: the latest pass failed before saving, so this state is stale.
 	aborted bool
 }
@@ -45,6 +46,14 @@ func (s *Scheduler) ExpectedStart(id model.ItemID) (time.Time, bool) {
 	defer s.mu.Unlock()
 	at, ok := s.last.starts[id]
 	return at, ok
+}
+
+// Blocked is why the last pass left id queued; false when it did not.
+func (s *Scheduler) Blocked(id model.ItemID) (admission.Decision, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.last.blocked[id]
+	return d, ok
 }
 func (s *Scheduler) waitingOf(it *model.Item) admission.Waiting {
 	d := it.EstDuration
@@ -116,12 +125,15 @@ func maxTime(a, b time.Time) time.Time {
 	return a
 }
 func (s *Scheduler) savePassLocked(pol admission.Policy, pass admission.Pass, items, queue []*model.Item, waiting []admission.Waiting, now time.Time) {
-	last := passState{policy: pol, after: pass.After, holders: pass.Holders, at: now, starts: map[model.ItemID]time.Time{}}
+	last := passState{policy: pol, after: pass.After, holders: pass.Holders, at: now, starts: map[model.ItemID]time.Time{}, blocked: map[model.ItemID]admission.Decision{}}
 	for i, it := range queue {
 		if it.State == model.StateQueued {
 			v := *it
 			last.items = append(last.items, &v)
 			last.waiting = append(last.waiting, waiting[i])
+			if i < len(pass.Blocked) {
+				last.blocked[it.ID] = pass.Blocked[i]
+			}
 		}
 	}
 	c := s.commitments

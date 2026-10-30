@@ -125,12 +125,8 @@ func (s *Scheduler) Estimate(ctx context.Context, r EstimateRequest) (Estimate, 
 		}
 	}
 	v.Position = index + 1
-	v.Blocked = admission.Decide(last.policy, last.after, q.Res)
-	if v.Blocked.Admit {
-		v.Blocked = admission.Decision{Blocker: admission.BlockQueue, Detail: "earlier items in queue"}
-	}
+	v.Blocked = pass.Blocked[index]
 	if pass.HeadDecision.Blocker.Gate() {
-		v.Blocked = pass.HeadDecision
 		return v, nil
 	}
 	forecast := admission.Schedule(last.at, admission.FreeCapacity(last.policy, last.after), last.holders, queue)

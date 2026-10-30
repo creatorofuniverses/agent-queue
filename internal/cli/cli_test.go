@@ -729,3 +729,26 @@ func TestSubmitHintsKnownNamesForNewProfile(t *testing.T) {
 		t.Fatalf("known name: %q", e)
 	}
 }
+
+func TestQueuedSubmitStatusAndWaitSayWhy(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	h.run("submit", "--memory", "768M", "--timeout", "1m", "--", "true")
+	h.launched(t, 1)
+	code, out, e := h.run("submit", "--memory", "512M", "--timeout", "1m", "--", "true") // does not fit next to it
+	id := strings.TrimSpace(out)
+	const note = "queued: position 1, blocked by pool_memory: pool memory: committed"
+	if code != 0 || strings.Contains(id, " ") || !strings.Contains(e, note) {
+		t.Fatalf("submit: code=%d out=%q err=%q", code, out, e)
+	}
+	if _, out, _ := h.run("status", id); !strings.Contains(out, "\nblocked by: pool_memory: pool memory: committed") {
+		t.Fatalf("status: %q", out)
+	}
+	done := make(chan string)
+	go func() { _, _, e := h.run("wait", id); done <- e }()
+	time.Sleep(300 * time.Millisecond) // let wait print the note before the cancel ends it
+	h.run("cancel", id)
+	if e := <-done; !strings.Contains(e, note) {
+		t.Fatalf("wait: %q", e)
+	}
+}

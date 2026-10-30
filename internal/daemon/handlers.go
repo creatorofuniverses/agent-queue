@@ -228,7 +228,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 		if err != nil {
 			return nil, err
 		}
-		return d.itemResult(op == "result", it), nil
+		return d.itemResult(ctx, op == "result", it)
 	case "list":
 		return d.list(ctx, args)
 	case "cancel":
@@ -287,16 +287,23 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 	return nil, badRequest("unknown op %q", op)
 }
 
-func (d *server) itemResult(full bool, it *model.Item) any {
+func (d *server) itemResult(ctx context.Context, full bool, it *model.Item) (any, error) {
 	v := d.view(it, time.Now())
+	if it.State == model.StateQueued && it.ParentID == "" {
+		pos, err := d.queuePositions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d.markQueued(&v, it, pos)
+	}
 	if !full {
-		return v
+		return v, nil
 	}
 	rv := ResultView{ItemView: v, LogsTruncated: it.LogsTruncated}
 	if dir := d.logDir(it); dir != "" {
 		rv.StdoutPath, rv.StderrPath = filepath.Join(dir, "stdout.log"), filepath.Join(dir, "stderr.log")
 	}
-	return rv
+	return rv, nil
 }
 
 // logDir is where the item's logs live: the job directory of a task, the latest
@@ -346,19 +353,25 @@ func (d *server) reserve(ctx context.Context, raw json.RawMessage) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	// Answer after the nearest finished admission pass: granted, or queued with its blocker.
-	// The reservation is stored either way, so if ctx ends first it is still the answer.
+	return d.afterPassView(ctx, it)
+}
+
+// afterPassView answers a submit or reserve after the nearest finished admission
+// pass: started or granted, or queued with its position and blocker. The item is
+// stored either way, so if ctx ends first it is still the answer.
+func (d *server) afterPassView(ctx context.Context, it *model.Item) (ItemView, error) {
 	if err := d.sched.AfterNextPass(ctx); err != nil {
 		ctx = context.WithoutCancel(ctx)
 	}
-	if it, err = d.st.Get(ctx, it.ID); err != nil {
-		return nil, err
+	it, err := d.st.Get(ctx, it.ID)
+	if err != nil {
+		return ItemView{}, err
 	}
 	v := d.view(it, time.Now())
 	if it.State == model.StateQueued {
 		pos, err := d.queuePositions(ctx)
 		if err != nil {
-			return nil, err
+			return ItemView{}, err
 		}
 		d.markQueued(&v, it, pos)
 	}
@@ -386,7 +399,7 @@ func (d *server) markQueued(v *ItemView, it *model.Item, pos map[model.ItemID]in
 	if at, ok := d.sched.ExpectedStart(it.ID); ok {
 		v.ExpectedStart = optTime(at)
 	}
-	if headID, dec := d.sched.HeadDecision(); it.ID == headID && !dec.Admit {
+	if dec, ok := d.sched.Blocked(it.ID); ok {
 		v.BlockedBy, v.BlockedDetail = dec.Blocker, dec.Detail
 	}
 }
@@ -412,7 +425,10 @@ func (d *server) submit(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := d.view(it, time.Now())
+	v, err := d.afterPassView(ctx, it)
+	if err != nil {
+		return nil, err
+	}
 	v.KnownNames = d.knownNames(ctx, it.Profile)
 	return v, nil
 }

@@ -1,6 +1,7 @@
 package admission
 
 import (
+	"fmt"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"math"
 	"slices"
@@ -137,8 +138,11 @@ type Pass struct {
 	Backfilled   []bool
 	Head         int
 	HeadDecision Decision
-	After        Snapshot
-	Holders      []Holder
+	// Blocked says why each queue item the pass did not admit waits; zero for
+	// the admitted ones and the prefix before the head.
+	Blocked []Decision
+	After   Snapshot
+	Holders []Holder
 }
 
 // teardownSlotFree reports whether one more reservation can be backfilled without
@@ -159,8 +163,33 @@ func teardownSlotFree(p Policy, holders []Holder, shadow time.Time) bool {
 	return !needed || pending+1 <= max(p.TeardownSlots, 1)
 }
 
-func PlanPass(p Policy, s Snapshot, holders []Holder, queue []Waiting, now time.Time, backfill bool) Pass {
-	out := Pass{Backfilled: make([]bool, len(queue)), Head: -1, HeadDecision: Decision{Admit: true}, After: s, Holders: slices.Clone(holders)}
+// explain fills Blocked after the pass: the head's decision for the head and
+// while a gate is closed, otherwise an item's own blocker against what is left,
+// otherwise the head it would delay by starting now.
+func (out *Pass) explain(p Policy, queue []Waiting) {
+	out.Blocked = make([]Decision, len(queue))
+	admitted := make([]bool, len(queue))
+	for _, i := range out.Admitted {
+		admitted[i] = true
+	}
+	for i := out.Head; i < len(queue); i++ {
+		switch {
+		case admitted[i]:
+		case i == out.Head || out.HeadDecision.Blocker.Gate():
+			out.Blocked[i] = out.HeadDecision
+		default:
+			if d := Decide(p, out.After, queue[i].Res); !d.Admit {
+				out.Blocked[i] = d
+			} else {
+				out.Blocked[i] = Decision{Blocker: BlockQueue, Detail: fmt.Sprintf("behind queue head %s (blocked by %s): starting it now would delay the head",
+					queue[out.Head].ID, out.HeadDecision.Blocker)}
+			}
+		}
+	}
+}
+
+func PlanPass(p Policy, s Snapshot, holders []Holder, queue []Waiting, now time.Time, backfill bool) (out Pass) {
+	out = Pass{Backfilled: make([]bool, len(queue)), Head: -1, HeadDecision: Decision{Admit: true}, After: s, Holders: slices.Clone(holders)}
 	admit := func(i int, bf bool) {
 		q := queue[i]
 		out.Admitted = append(out.Admitted, i)
@@ -179,7 +208,11 @@ func PlanPass(p Policy, s Snapshot, holders []Holder, queue []Waiting, now time.
 		}
 		admit(i, false)
 	}
-	if out.Head < 0 || !backfill || out.HeadDecision.Blocker.Gate() {
+	if out.Head < 0 {
+		return out
+	}
+	defer out.explain(p, queue)
+	if !backfill || out.HeadDecision.Blocker.Gate() {
 		return out
 	}
 	shadow, extra, ok := Shadow(now, FreeCapacity(p, out.After), out.Holders, queue[out.Head].Res)

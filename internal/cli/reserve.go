@@ -64,6 +64,7 @@ func cmdReserve(c *cmdCtx, args []string) error {
 		line += fmt.Sprintf(" position=%d blocked_by=%s", v.Position, v.BlockedBy)
 	}
 	fmt.Fprintln(c.stdout, line)
+	queuedNote(c, v)
 	waitHint(c, cfg, identity, v.ID)
 	return nil
 }

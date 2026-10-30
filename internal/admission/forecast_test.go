@@ -174,3 +174,35 @@ func TestPlanPassReservationWaitsForTeardownSlot(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+func TestPlanPassExplainsEveryWaitingItem(t *testing.T) {
+	now := time.Now()
+	q := []Waiting{wait(10*fg, time.Hour), wait(7*fg, 2*time.Hour), wait(12*fg, time.Minute), wait(fg, 10*time.Minute)}
+	q[0].ID = "head"
+	p := PlanPass(fp(), fsnap(), []Holder{holder(8*fg, now.Add(time.Hour))}, q, now, true)
+	if !reflect.DeepEqual(p.Admitted, []int{3}) || len(p.Blocked) != len(q) {
+		t.Fatal(p)
+	}
+	if p.Blocked[0] != p.HeadDecision || p.HeadDecision.Blocker != BlockPoolMemory {
+		t.Fatalf("head: %+v", p.Blocked[0])
+	}
+	// Fits on its own, but starting it would delay the head.
+	if b := p.Blocked[1]; b.Blocker != BlockQueue || b.Detail != "behind queue head head (blocked by pool_memory): starting it now would delay the head" {
+		t.Fatalf("behind the head: %+v", b)
+	}
+	// Does not fit on its own: its own blocker with its own numbers.
+	if b := p.Blocked[2]; b.Blocker != BlockPoolMemory || b.Detail == p.HeadDecision.Detail {
+		t.Fatalf("own blocker: %+v", b)
+	}
+	if b := p.Blocked[3]; b != (Decision{}) {
+		t.Fatalf("admitted: %+v", b)
+	}
+
+	s := fsnap()
+	s.PressureClosed = true
+	p = PlanPass(fp(), s, nil, q, now, true)
+	for i, b := range p.Blocked {
+		if b.Blocker != BlockPressure {
+			t.Fatalf("item %d under closed pressure: %+v", i, b)
+		}
+	}
+}

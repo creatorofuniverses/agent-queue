@@ -241,6 +241,17 @@ aq logs <id> [--stream stderr] [--tail 100] [--follow]
 aq wait <id>         # waits for completion, prints the outcome and exits with a code:
 ```
 
+Every queued item says why it waits: `aq list`, `aq status` (`blocked by:`)
+and `--json` (`blocked_by`, `blocked_detail`). The reason is its own blocker
+with numbers (for example `live_memory: … need 8.1 GiB (floor 3.1 GiB +
+requested 5.0 GiB)`), the head's while pressure, disk, temp space or recovery
+holds the whole queue, or `queue`: it would fit now, but starting it would
+delay the item at the head. `aq submit` and `aq reserve` answer after the
+nearest admission pass, so they already know whether the item started; when it
+did not, they print `queued: position N, blocked by …` on stderr (the stdout
+line stays the same), and so does `aq wait` when it starts waiting on a queued
+item.
+
 | `aq wait` code | Meaning |
 |---|---|
 | 0 | `SUCCEEDED` |

@@ -290,7 +290,8 @@ func TestListShowsBlocker(t *testing.T) {
 	e.start(t)
 	first := e.mustSubmit(t, e.submitArgs(768*mib))
 	e.waitState(t, first.ID, model.StateRunning)
-	head := e.mustSubmit(t, e.submitArgs(512*mib)) // does not fit next to first
+	head := e.mustSubmit(t, e.submitArgs(512*mib))   // does not fit next to first
+	behind := e.mustSubmit(t, e.submitArgs(512*mib)) // nor does the next one: not only the head says why
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -298,10 +299,14 @@ func TestListShowsBlocker(t *testing.T) {
 		if err := e.call(t, "list", listArgs{}, &vs); err != nil {
 			t.Fatal(err)
 		}
+		found := 0
 		for _, v := range vs {
-			if v.ID == head.ID && v.BlockedBy == "pool_memory" && v.Position == 1 && v.BlockedDetail != "" {
-				return
+			if (v.ID == head.ID && v.Position == 1 || v.ID == behind.ID && v.Position == 2) && v.BlockedBy == "pool_memory" && v.BlockedDetail != "" {
+				found++
 			}
+		}
+		if found == 2 {
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("no blocker in list: %+v", vs)
@@ -465,6 +470,35 @@ func TestTailStart(t *testing.T) {
 		f.Close()
 		if err != nil || c.content[off:] != c.want {
 			t.Errorf("%q n=%d: got %q err %v", c.content, c.n, c.content[off:], err)
+		}
+	}
+}
+
+func TestSubmitAnswersAfterAPass(t *testing.T) {
+	e := newEnv(t)
+	e.start(t)
+	first := e.mustSubmit(t, e.submitArgs(768*mib))
+	if first.State == model.StateQueued {
+		t.Fatalf("a task that fits answered %s", first.State)
+	}
+	queued := e.mustSubmit(t, e.submitArgs(512*mib))
+	if queued.State != model.StateQueued || queued.Position != 1 || queued.BlockedBy != "pool_memory" || queued.BlockedDetail == "" {
+		t.Fatalf("queued view %+v", queued)
+	}
+}
+
+func TestStatusOfQueuedItemSaysWhy(t *testing.T) {
+	e := newEnv(t)
+	e.start(t)
+	e.mustSubmit(t, e.submitArgs(768*mib))
+	queued := e.mustSubmit(t, e.submitArgs(512*mib))
+	for _, op := range []string{"status", "result"} {
+		var v ItemView
+		if err := e.call(t, op, idArgs{ID: queued.ID}, &v); err != nil {
+			t.Fatal(err)
+		}
+		if v.State != model.StateQueued || v.Position != 1 || v.BlockedBy != "pool_memory" || v.BlockedDetail == "" {
+			t.Fatalf("%s: %+v", op, v)
 		}
 	}
 }
