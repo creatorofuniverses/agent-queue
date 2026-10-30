@@ -134,7 +134,9 @@ batch), `aq ack EVENT_ID`, and **start the expiry waiter again**. After every
 4 cancelled · 5 infrastructure or rejected · 6 reservation no longer held ·
 64 usage · 69 daemon down · 130 interrupted.
 
-Then `aq result ID` and `aq logs ID --tail 100` (`--stream stderr` for errors).
+Then `aq result ID` (a failed task ends with `stderr tail:`, which `aq wait`
+also prints) and, if that is not enough, `aq logs ID --tail 100` (`--stream
+stderr` for errors).
 On exit 2 resubmit with a higher `--memory` (say 1.5×) and tell the user; on 3
 check whether it hung before raising `--timeout`; on 5 read the diagnostic
 (rejected: the request can never fit the pool). Ack the item's event with

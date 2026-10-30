@@ -40,6 +40,7 @@ type ItemView struct {
 	MemoryFit         string       `json:"memory_fit,omitempty"`     // feedback on the memory estimate of a finished task
 	KnownNames        []string     `json:"known_names,omitempty"`    // submit of a name without history: names in the same repo that have it
 	CPUHint           string       `json:"cpu_hint,omitempty"`       // submit whose command starts more workers than it gets CPUs
+	StderrTail        []string     `json:"stderr_tail,omitempty"`    // wait and result of a failed task: the last lines of stderr.log
 	IOWriteBytes      *uint64      `json:"io_write_bytes,omitempty"` // physical disks; absent when unknown
 	IOReadBytes       *uint64      `json:"io_read_bytes,omitempty"`
 	GitRev            string       `json:"git_rev,omitempty"`

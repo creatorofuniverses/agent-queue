@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -762,5 +763,35 @@ func TestSubmitWarnsWorkersOverCPUs(t *testing.T) {
 	}
 	if _, _, e := h.run("submit", "--memory", "128M", "--cpus", "8", "--timeout", "1m", "--", "pytest", "-n", "8"); strings.Contains(e, "workers") {
 		t.Fatalf("enough cpus: %q", e)
+	}
+}
+
+func TestFailedTaskShowsStderrTail(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	_, out, _ := h.run("submit", "--memory", "128M", "--timeout", "1m", "--", "false")
+	id := strings.TrimSpace(out)
+	spec := h.launched(t, 1)[0]
+	var log strings.Builder
+	for i := 1; i <= 8; i++ {
+		fmt.Fprintf(&log, "line %d\n", i)
+	}
+	if err := os.MkdirAll(spec.JobDir, 0o700); err != nil { // the fake executor writes no logs
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spec.JobDir, "stderr.log"), []byte(log.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.ex.Finish(spec.ID, platform.ExitInfo{ServiceResult: "exit-code", ExitCode: "exited", ExitStatus: "1", EndedAt: time.Now()})
+	h.ex.SetAlive(spec.ID, false)
+	code, wout, werr := h.run("wait", id)
+	if code != 1 || strings.Contains(wout, "line") || !strings.Contains(werr, "stderr (last 5 lines):\n  line 4\n  line 5\n  line 6\n  line 7\n  line 8\n") {
+		t.Fatalf("wait: code=%d out=%q err=%q", code, wout, werr)
+	}
+	if _, rout, _ := h.run("result", id); !strings.HasSuffix(rout, "stderr tail:\n  line 4\n  line 5\n  line 6\n  line 7\n  line 8\n") {
+		t.Fatalf("result: %q", rout)
+	}
+	if _, js, _ := h.run("result", id, "--json"); !strings.Contains(js, `"stderr_tail": [`) {
+		t.Fatalf("result --json: %s", js)
 	}
 }

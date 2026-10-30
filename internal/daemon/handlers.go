@@ -278,6 +278,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 			return nil, err
 		}
 		v := d.view(it, time.Now())
+		v.StderrTail = d.stderrTail(it)
 		for _, e := range evs {
 			v.Events = append(v.Events, eventView(e))
 		}
@@ -300,6 +301,7 @@ func (d *server) itemResult(ctx context.Context, full bool, it *model.Item) (any
 	if !full {
 		return v, nil
 	}
+	v.StderrTail = d.stderrTail(it)
 	rv := ResultView{ItemView: v, LogsTruncated: it.LogsTruncated}
 	if dir := d.logDir(it); dir != "" {
 		rv.StdoutPath, rv.StderrPath = filepath.Join(dir, "stdout.log"), filepath.Join(dir, "stderr.log")
@@ -664,6 +666,41 @@ func splitLines(s string) []string {
 		return []string{}
 	}
 	return strings.Split(s, "\n")
+}
+
+// stderrTailLines is how much of a failed task's stderr wait and result show:
+// enough for the error, so the agent needs no aq logs call for it.
+const stderrTailLines = 5
+
+// stderrTail is the last lines of a failed task's stderr.log, each cut to 300
+// bytes; nil for anything else or when the log cannot be read.
+func (d *server) stderrTail(it *model.Item) []string {
+	dir := d.logDir(it)
+	if it.IsReservation() || it.State != model.StateFailed || dir == "" {
+		return nil
+	}
+	f, err := os.Open(filepath.Join(dir, "stderr.log"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	off, err := tailStart(f, fi.Size(), stderrTailLines)
+	if err != nil {
+		return nil
+	}
+	buf := make([]byte, min(fi.Size()-off, 64<<10))
+	n, _ := f.ReadAt(buf, off)
+	lines := splitLines(string(buf[:n]))
+	for i, l := range lines {
+		if len(l) > 300 {
+			lines[i] = l[:300] + "…"
+		}
+	}
+	return lines
 }
 
 // tailStart returns the offset where the last n lines of f (size bytes) begin.

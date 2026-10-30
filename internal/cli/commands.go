@@ -99,6 +99,7 @@ func cmdResult(c *cmdCtx, args []string) error {
 	}
 	if c.ui.pretty {
 		c.prettyView(v.ItemView, &v)
+		printStderrTail(c, v.StderrTail)
 		return nil
 	}
 	printView(c, v.ItemView)
@@ -110,7 +111,19 @@ func cmdResult(c *cmdCtx, args []string) error {
 	if v.LogsTruncated {
 		fmt.Fprintln(c.stdout, "logs:      truncated")
 	}
+	printStderrTail(c, v.StderrTail)
 	return nil
+}
+
+// printStderrTail ends aq result of a failed task with the last lines of its stderr.
+func printStderrTail(c *cmdCtx, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(c.stdout, "stderr tail:")
+	for _, l := range lines {
+		fmt.Fprintf(c.stdout, "  %s\n", l)
+	}
 }
 
 func printView(c *cmdCtx, v daemon.ItemView) {
@@ -401,6 +414,12 @@ func cmdWait(c *cmdCtx, args []string) error {
 		line += fmt.Sprintf(" event=%s:%s", e.ID, e.Kind)
 	}
 	fmt.Fprintln(c.stdout, line)
+	if len(v.StderrTail) > 0 { // stderr: the stdout line stays one line
+		fmt.Fprintf(c.stderr, "stderr (last %d lines):\n", len(v.StderrTail))
+		for _, l := range v.StderrTail {
+			fmt.Fprintf(c.stderr, "  %s\n", l)
+		}
+	}
 	switch {
 	case *until == "expiring" && v.State == model.StateGranted:
 		fmt.Fprintf(c.stderr, "hint: reservation still held; re-run in background: aq wait %s --until expiring\n", v.ID)
