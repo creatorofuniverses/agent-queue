@@ -172,7 +172,9 @@ code from `aq result`:
   pool. A command failure needs its own diagnosis.
 - **Expiry:** extend an actively needed stand or shut it down and release it.
   For `stand_over_declared`, inspect measured usage and reduce the stand's use
-  or stop/release it. Record and ack the warning; Codex needs no new waiter.
+  or stop/release it. For `reservation_idle` (no nested task and no container
+  for a while), release it unless you will use it soon and reserve again for
+  the next batch. Record and ack the warning; Codex needs no new waiter.
 
 ## 6. Clean up before you finish
 

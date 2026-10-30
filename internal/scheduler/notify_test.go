@@ -332,3 +332,19 @@ func TestTaskFinishedCarriesMemoryFit(t *testing.T) {
 		t.Fatal(evs)
 	}
 }
+func TestWaitUntilExpiringOnIdle(t *testing.T) {
+	e := notifyEnv(t)
+	r := e.rreq(64 * mib)
+	r.ClientType, r.SessionID, r.DockerProject = "claude", "c", "p"
+	it := e.reserve(t, r)
+	e.meter.Set("p", 0)
+	e.tick(t)
+	e.clk.Advance(e.cfg.Reservations.IdleAfter)
+	e.tick(t)
+	ctx, cancel := context.WithTimeout(e.ctx, time.Second)
+	defer cancel()
+	v, err := e.s.Wait(ctx, it.ID, WaitExpiring)
+	if err != nil || v.State != model.StateGranted {
+		t.Fatal(v, err)
+	}
+}

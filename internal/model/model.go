@@ -351,6 +351,7 @@ const (
 	EventTeardownFailed           EventKind = "teardown_failed"
 	EventTeardownUnknown          EventKind = "teardown_unknown"
 	EventStandOverDeclared        EventKind = "stand_over_declared"
+	EventReservationIdle          EventKind = "reservation_idle"
 	EventDaemonRestarted          EventKind = "daemon_restarted"
 )
 

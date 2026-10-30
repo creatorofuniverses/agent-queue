@@ -49,6 +49,9 @@ teardown_timeout = "5m"
 teardown_memory = "512M"
 # How many teardowns may run at once (at least 1).
 teardown_concurrency = 2
+# Tell the holder when a reservation with --docker-project has had no nested
+# task running and no container for this long ("0s" turns it off).
+idle_after = "10m"
 
 [notify]
 # Delivery retries: minimum and maximum delay.

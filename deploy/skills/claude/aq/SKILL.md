@@ -109,8 +109,10 @@ nothing else is left, end the turn — do not sleep or poll `aq status`.
 
 For reservations also start `aq wait RES_ID --until expiring` in background. It
 returns before the TTL runs out (extend or release then) or early with a
-`stand_over_declared` warning: handle it, `aq ack EVENT_ID`, and **start the
-expiry waiter again**. After every `aq extend`, start it again too.
+`stand_over_declared` or `reservation_idle` warning: handle it (for idle: release
+the reservation unless you will use it soon, and reserve again for the next
+batch), `aq ack EVENT_ID`, and **start the expiry waiter again**. After every
+`aq extend`, start it again too.
 
 ## 5. Read the result
 

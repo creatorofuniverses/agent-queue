@@ -222,7 +222,7 @@ func TestValidateSliceAndPrefix(t *testing.T) {
 func TestReservationsConfigDefaults(t *testing.T) {
 	r := Default().Reservations
 	want := ReservationsConfig{MaxTTL: 24 * time.Hour, ExpiryWarning: 15 * time.Minute,
-		TeardownTimeout: 5 * time.Minute, TeardownMemory: 512 << 20, TeardownConcurrency: 2}
+		TeardownTimeout: 5 * time.Minute, TeardownMemory: 512 << 20, TeardownConcurrency: 2, IdleAfter: 10 * time.Minute}
 	if r != want {
 		t.Fatalf("got %+v want %+v", r, want)
 	}
@@ -240,16 +240,20 @@ func TestTeardownSliceName(t *testing.T) {
 
 func TestLoadReservations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.toml")
-	body := "[reservations]\nmax_ttl = \"2h\"\nexpiry_warning = \"1m\"\nteardown_timeout = \"30s\"\nteardown_memory = \"1G\"\nteardown_concurrency = 3\n"
+	body := "[reservations]\nmax_ttl = \"2h\"\nexpiry_warning = \"1m\"\nteardown_timeout = \"30s\"\nteardown_memory = \"1G\"\nteardown_concurrency = 3\nidle_after = \"5m\"\n"
 	os.WriteFile(path, []byte(body), 0o600)
 	c, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := ReservationsConfig{MaxTTL: 2 * time.Hour, ExpiryWarning: time.Minute,
-		TeardownTimeout: 30 * time.Second, TeardownMemory: 1 << 30, TeardownConcurrency: 3}
+		TeardownTimeout: 30 * time.Second, TeardownMemory: 1 << 30, TeardownConcurrency: 3, IdleAfter: 5 * time.Minute}
 	if c.Reservations != want {
 		t.Fatalf("got %+v", c.Reservations)
+	}
+	os.WriteFile(path, []byte("[reservations]\nidle_after = \"0s\"\n"), 0o600) // off
+	if c, err := Load(path); err != nil || c.Reservations.IdleAfter != 0 {
+		t.Fatal(c.Reservations, err)
 	}
 }
 

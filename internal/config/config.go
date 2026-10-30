@@ -31,6 +31,9 @@ type ReservationsConfig struct {
 	MaxTTL, ExpiryWarning, TeardownTimeout time.Duration
 	TeardownMemory                         uint64
 	TeardownConcurrency                    int
+	// IdleAfter: a held reservation with no nested task running and no container
+	// of its docker project for this long is reported idle; 0 turns it off.
+	IdleAfter time.Duration
 }
 
 const (
@@ -140,6 +143,7 @@ func Default() Config {
 			MaxTTL:              24 * time.Hour,
 			ExpiryWarning:       15 * time.Minute,
 			TeardownTimeout:     5 * time.Minute,
+			IdleAfter:           10 * time.Minute,
 			TeardownMemory:      512 << 20,
 			TeardownConcurrency: 2,
 		},
@@ -221,6 +225,7 @@ type rawConfig struct {
 		TeardownTimeout     *string `toml:"teardown_timeout"`
 		TeardownMemory      *string `toml:"teardown_memory"`
 		TeardownConcurrency *int    `toml:"teardown_concurrency"`
+		IdleAfter           *string `toml:"idle_after"`
 	} `toml:"reservations"`
 }
 
@@ -298,6 +303,7 @@ func Load(path string) (Config, error) {
 	dur("reservations.max_ttl", raw.Reservations.MaxTTL, &c.Reservations.MaxTTL)
 	dur("reservations.expiry_warning", raw.Reservations.ExpiryWarning, &c.Reservations.ExpiryWarning)
 	dur("reservations.teardown_timeout", raw.Reservations.TeardownTimeout, &c.Reservations.TeardownTimeout)
+	dur("reservations.idle_after", raw.Reservations.IdleAfter, &c.Reservations.IdleAfter)
 	dur("cancel_grace", raw.CancelGrace, &c.CancelGrace)
 	dur("pressure.close_after", raw.Pressure.CloseAfter, &c.Pressure.CloseAfter)
 	dur("pressure.open_after", raw.Pressure.OpenAfter, &c.Pressure.OpenAfter)

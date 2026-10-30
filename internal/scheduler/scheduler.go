@@ -114,6 +114,8 @@ type Scheduler struct {
 	standUsage     map[model.ItemID]uint64        // fresh stand measurements seen by the last pass
 	standPeak      map[model.ItemID]uint64        // highest stand measurement of each held reservation
 	budgetPeak     map[model.ItemID]uint64        // highest memory of each held reservation's nested tasks at once
+	idleSince      map[model.ItemID]time.Time     // when each held reservation was last seen busy
+	idleReported   map[model.ItemID]bool          // its current idle stretch was reported
 	// teardownLaunching holds reservations whose teardown Launch is in flight; the
 	// reaper leaves them alone, as it does tasks in STARTING.
 	teardownLaunching map[model.ItemID]bool
@@ -162,6 +164,8 @@ func New(d Deps) *Scheduler {
 		standUsage:   map[model.ItemID]uint64{},
 		standPeak:    map[model.ItemID]uint64{},
 		budgetPeak:   map[model.ItemID]uint64{},
+		idleSince:    map[model.ItemID]time.Time{},
+		idleReported: map[model.ItemID]bool{},
 
 		teardownLaunching: map[model.ItemID]bool{},
 		launchFailed:      map[model.ItemID]launchFailure{},
@@ -531,6 +535,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 	s.holderLive = map[model.ItemID]uint64{}
 	s.commitments = Commitments{PoolMemory: s.d.Cfg.PoolMemory, PoolCPUs: s.d.Cfg.PoolCPUs}
 	nestedCur := map[model.ItemID]uint64{}
+	nestedRunning := map[model.ItemID]int{}
 	var queue, nestedQueued []*model.Item
 	for _, it := range items {
 		if it.ParentID == "" {
@@ -543,6 +548,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			cur, _ := s.d.Exec.MemoryCurrent(it.ID)
 			s.sampleLocked(it, cur)
 			nestedCur[it.ParentID] += cur
+			nestedRunning[it.ParentID]++
 		}
 	}
 	for id, cur := range nestedCur {
@@ -565,6 +571,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			}
 			budget := satSub(it.TaskCharge(), nestedCur[it.ID])
 			stand := s.standUnconsumedLocked(ctx, it)
+			s.watchIdleLocked(ctx, it, nestedRunning[it.ID])
 			td, tdCur := uint64(0), uint64(0)
 			if it.State == model.StateTearingDown {
 				if !s.teardownLaunching[it.ID] {
@@ -606,6 +613,12 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		snap.Committed.MemoryBytes += c.MemoryBytes
 		snap.Committed.CPUs += c.CPUs
 	}
+	for id := range s.idleSince {
+		if _, held := s.holderLive[id]; !held {
+			delete(s.idleSince, id)
+			delete(s.idleReported, id)
+		}
+	}
 	for _, peaks := range []map[model.ItemID]uint64{s.standPeak, s.budgetPeak} {
 		for id := range peaks {
 			if _, held := s.holderLive[id]; !held {
@@ -618,6 +631,37 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		s.d.Meter.Watch(slices.Compact(projects))
 	}
 	return snap, queue, nestedQueued
+}
+
+// watchIdleLocked reports, once per idle stretch, a granted reservation that for
+// idle_after has run no nested task while its docker project had no container:
+// memory others wait for, held for nothing. A stand without a docker project, or
+// without a fresh measurement, cannot be told idle and is left as it is.
+func (s *Scheduler) watchIdleLocked(ctx context.Context, it *model.Item, nested int) {
+	after := s.d.Cfg.Reservations.IdleAfter
+	used, measured := s.standUsage[it.ID]
+	if after <= 0 || it.DockerProject == "" || !measured {
+		return
+	}
+	now := s.d.Now()
+	if nested > 0 || used > 0 || it.State != model.StateGranted && it.State != model.StateExpiring {
+		s.idleSince[it.ID], s.idleReported[it.ID] = now, false
+		return
+	}
+	since, ok := s.idleSince[it.ID]
+	if !ok {
+		since = it.AdmittedAt // idle since the grant
+	}
+	if s.idleReported[it.ID] || now.Sub(since) < after {
+		return
+	}
+	s.idleReported[it.ID] = true
+	detail := fmt.Sprintf("reservation %s holds %s stand + %s task budget and %d cpus, but for %s no nested task ran and docker project %s had no container; aq release %s if you no longer need it",
+		it.ID, units.FormatSize(it.Expected), units.FormatSize(it.TaskCharge()), it.CPUs+it.TaskCPUs, now.Sub(since).Round(time.Second), it.DockerProject, it.ID)
+	evs := s.newEvents(it, model.EventReservationIdle, detail, model.AudienceSession, model.AudienceOperator)
+	if err := s.persistLocked(ctx, it, evs...); err != nil {
+		slog.Error("scheduler: record idle reservation", "id", it.ID, "err", err)
+	}
 }
 
 // recordPeaksLocked keeps on the item the peaks of a reservation that stops
@@ -846,9 +890,11 @@ func (s *Scheduler) Wait(ctx context.Context, id model.ItemID, until WaitUntil) 
 				return nil, fmt.Errorf("%w: --until expiring requires a reservation", ErrBadRequest)
 			}
 			done = it.State != model.StateQueued && it.State != model.StateGranted
-			if !done {
-				done, err = s.d.Store.HasPendingClientWait(ctx, id, model.EventStandOverDeclared)
-				if err != nil {
+			for _, kind := range []model.EventKind{model.EventStandOverDeclared, model.EventReservationIdle} {
+				if done {
+					break
+				}
+				if done, err = s.d.Store.HasPendingClientWait(ctx, id, kind); err != nil {
 					s.mu.Unlock()
 					return nil, err
 				}

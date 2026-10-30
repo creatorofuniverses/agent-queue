@@ -271,7 +271,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 			kinds = []model.EventKind{model.EventReservationGranted}
 		}
 		if a.Until == scheduler.WaitExpiring {
-			kinds = []model.EventKind{model.EventReservationExpiring, model.EventStandOverDeclared}
+			kinds = []model.EventKind{model.EventReservationExpiring, model.EventStandOverDeclared, model.EventReservationIdle}
 		}
 		evs, err := d.st.MarkClientWaitSent(ctx, it.ID, kinds, time.Now())
 		if err != nil {

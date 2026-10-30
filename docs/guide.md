@@ -573,6 +573,19 @@ time --memory 1.3 GiB); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
 (overestimated: next time --task-memory 1.2 GiB)`. It stays in the diagnostic of `aq result`, and `aq status`
 shows both peaks on the `stand:` and `budget:` lines.
 
+### Idle reservations
+
+A granted reservation with `--docker-project` that for `[reservations]
+idle_after` (10 minutes; `"0s"` turns it off) has run no nested task while its
+docker project had no running container gets a `reservation_idle` event, for
+the session and the operator: `reservation … holds 1.5 GiB stand + 256 MiB task
+budget and 2 cpus, but for 10m0s no nested task ran and docker project … had no
+container; aq release … if you no longer need it`. It comes once per idle
+stretch and again after the next one; it also wakes `aq wait --until expiring`.
+Release a reservation between batches of work and reserve again for the next
+one: the history keeps the next reservation cheap. A reservation without a
+docker project is not watched, since aq cannot tell whether its stand is up.
+
 ### Expiry and failed teardown
 
 - `expiry_warning` (15 min) before the end of the lifetime, the reservation
@@ -646,10 +659,10 @@ are also supported. `delivery = "client-wait"` requires an empty command.
 
 After submit/reserve, Claude starts `aq wait ID` with `run_in_background` and
 ends its turn; Codex gets a ping automatically. `aq wait RES_ID --until
-expiring` waits for the warning about expiry or about the stand exceeding its
-declared amount. If it returned with `GRANTED`/`stand_over_declared`, handle and
-acknowledge the event, then start this waiter again in the background for the
-future expiry.
+expiring` waits for the warning about expiry, about the stand exceeding its
+declared amount, or about the reservation sitting idle. If it returned with
+`GRANTED`/`stand_over_declared`/`reservation_idle`, handle and acknowledge the
+event, then start this waiter again in the background for the future expiry.
 
 ```sh
 aq list --mine             # own active items + finished ones with unacknowledged events

@@ -140,6 +140,10 @@ earlier reservations of that `<repo root>:<name>`, × `limit_margin`, never more
 than declared. The declarations stay the ceilings: nested tasks are admitted
 within `task_memory`, and `stand_over_declared` compares with `--memory`.
 
+A granted reservation with a docker project that runs no nested task and has
+no container for `idle_after` gets one `reservation_idle` event per idle
+stretch (in memory: a daemon restart starts the stretch again).
+
 The live-memory check also subtracts memory already promised but not yet used.
 Otherwise a newly started job could look cheap before it has allocated its data,
 and a second job could be given the same memory.

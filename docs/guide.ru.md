@@ -565,6 +565,20 @@ time --memory 1.3 GiB); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
 (overestimated: next time --task-memory 1.2 GiB)`. Это остаётся в диагностике `aq result`, а `aq status`
 показывает оба пика в строках `stand:` и `budget:`.
 
+### Простаивающие резервы
+
+Выданный резерв с `--docker-project`, у которого за `[reservations] idle_after`
+(10 минут; `"0s"` отключает) не работала ни одна вложенная задача и не было ни
+одного запущенного контейнера его docker-проекта, получает событие
+`reservation_idle` для сессии и оператора: `reservation … holds 1.5 GiB stand +
+256 MiB task budget and 2 cpus, but for 10m0s no nested task ran and docker
+project … had no container; aq release … if you no longer need it`. Оно
+приходит один раз на каждый период простоя и снова после следующего; оно же
+будит `aq wait --until expiring`. Освобождайте резерв между пакетами работы и
+резервируйте заново под следующий: история сделает следующий резерв дешёвым.
+Резерв без docker-проекта не отслеживается: aq не может понять, поднят ли его
+стенд.
+
 ### Истечение и неудачное снятие
 
 - За `expiry_warning` (15 мин) до конца срока резерв переходит в `EXPIRING`, и
@@ -632,9 +646,10 @@ command = ["pi", "send", "{session}", "{text}"]
 
 После submit/reserve Claude запускает `aq wait ID` с `run_in_background` и
 заканчивает ход; Codex получает пинг автоматически. `aq wait RES_ID --until
-expiring` ждёт предупреждения об истечении или превышении заявки стенда.
-Если он вернулся с `GRANTED`/`stand_over_declared`, обработайте и подтвердите
-событие, затем запустите этот waiter снова фоном для будущего истечения.
+expiring` ждёт предупреждения об истечении, о превышении заявки стенда или о
+простое резерва. Если он вернулся с `GRANTED`/`stand_over_declared`/
+`reservation_idle`, обработайте и подтвердите событие, затем запустите этот
+waiter снова фоном для будущего истечения.
 
 ```sh
 aq list --mine             # свои активные + завершённые с неподтверждёнными событиями
