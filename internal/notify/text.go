@@ -15,6 +15,9 @@ type Message struct {
 	Event      model.Event
 	Item       *model.Item
 	StdoutPath string
+	// At is when the outbox delivers it; a delivery a minute or more after the
+	// event says so, so an agent does not act twice on an old outcome.
+	At time.Time
 }
 type Deliverer interface {
 	Deliver(context.Context, Message) error
@@ -40,6 +43,10 @@ func Text(m Message) string {
 			st += " project: " + it.Project
 		}
 		lines = append(lines, st)
+	}
+	if late := m.At.Sub(e.CreatedAt); !m.At.IsZero() && late >= time.Minute {
+		lines = append(lines[:1], append([]string{fmt.Sprintf("delayed %s (delivery was retried): the event is from %s; check aq result before acting on it",
+			late.Round(time.Second), e.CreatedAt.UTC().Format(time.RFC3339))}, lines[1:]...)...)
 	}
 	if e.Detail != "" {
 		lines = append(lines, e.Detail)

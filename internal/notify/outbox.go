@@ -123,7 +123,7 @@ func (o *Outbox) deliverOne(ctx context.Context, ch model.Channel) bool {
 			err = fmt.Errorf("cannot read item: %w", err) // an ordinary failed attempt: backoff, then give up
 		}
 	}
-	msg := Message{Event: *e, Item: it}
+	msg := Message{Event: *e, Item: it, At: claimAt}
 	if it != nil && !it.IsReservation() {
 		msg.StdoutPath = filepath.Join(o.paths.JobDir(it.ID), "stdout.log")
 	}

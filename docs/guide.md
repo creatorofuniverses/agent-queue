@@ -701,7 +701,9 @@ retried with backoff and jitter until delivery succeeds (sent); sent without an
 ack does not wake the session again. A daemon crash can produce a duplicate with
 the same event_id: check the receipt and skip events that were already handled.
 An ack before the event is picked up cancels the delivery; after pickup, a ping
-may still arrive. `aq wait` shows the delivered event IDs; an interrupted waiter
+may still arrive. A message delivered a minute or more after its event says so
+on its second line (`delayed 6m0s (delivery was retried): the event is from …;
+check aq result before acting on it`). `aq wait` shows the delivered event IDs; an interrupted waiter
 can be started again.
 
 Operator alerts are enabled through the config:

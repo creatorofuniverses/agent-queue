@@ -358,3 +358,15 @@ func TestOutboxRedeliversAfterRestart(t *testing.T) {
 	runBox(t, o)
 	await(t, func() bool { return eventStatus(s, "e").Status == model.EventSent })
 }
+func TestOutboxStampsDeliveryTime(t *testing.T) {
+	s := outboxStore(t)
+	at := time.Now().UTC()
+	ch := model.ExecChannel("codex")
+	put(t, s, "e", ch, at.Add(-10*time.Minute), model.AudienceSession)
+	var got time.Time
+	d := deliverFunc(func(_ context.Context, m Message) error { got = m.At; return nil })
+	o := NewOutbox(s, config.Default(), config.Paths{}, NewRouter(config.Default()), map[model.Channel]Deliverer{ch: d}, func() time.Time { return at })
+	if !o.deliverOne(context.Background(), ch) || !got.Equal(at) {
+		t.Fatalf("delivered at %v, want %v", got, at)
+	}
+}

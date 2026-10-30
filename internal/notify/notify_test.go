@@ -261,3 +261,15 @@ func TestGongMarks(t *testing.T) {
 		t.Error(string(b))
 	}
 }
+func TestTextSaysWhenDelayed(t *testing.T) {
+	m := message()
+	m.At = m.Event.CreatedAt.Add(59 * time.Second)
+	if s := Text(m); strings.Contains(s, "delayed") {
+		t.Fatalf("on time: %q", s)
+	}
+	m.At = m.Event.CreatedAt.Add(6*time.Minute + 400*time.Millisecond)
+	want := "aq: task_finished task n1 (i)\ndelayed 6m0s (delivery was retried): the event is from 2026-01-01T00:00:00Z; check aq result before acting on it\n"
+	if s := Text(m); !strings.HasPrefix(s, want) {
+		t.Fatalf("%q", s)
+	}
+}
