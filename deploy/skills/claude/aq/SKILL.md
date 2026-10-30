@@ -91,10 +91,23 @@ aq submit --within RES_ID --name e2e --memory 4G --cpus 4 --timeout 30m -- \
   bash -lc 'pytest -n "$AQ_CPUS" tests/e2e'
 ```
 
+**Containers the tests start themselves** (testcontainers): a nested task gets
+`AQ_DOCKER_PROJECT` (and `AQ_RESERVATION_ID`). Label every container it starts
+`com.docker.compose.project=$AQ_DOCKER_PROJECT` (testcontainers: the container
+request's labels) so aq counts them in the stand; an unlabeled container is
+memory nobody accounts for. If you cannot label them, size `--memory` of the
+reservation for them anyway and do not pass `--docker-project`.
+
+**`docker build`:** the build runs in dockerd/buildkit, not in your task, so a
+task's peak shows next to nothing. Reserve its memory as a stand without
+`--docker-project` (`aq reserve --name image-build --memory 4G --task-memory
+256M --task-cpus 1 …`) and run `docker build` with `aq submit --within RES_ID`.
+
 **An experimental stand you keep up** (manual checks, a demo, a long debugging
-session): `aq reserve` with a realistic `--ttl`, no task budget unless you will
-run tests in it. `aq extend RES_ID --ttl 1h` while you still need it;
-`aq release RES_ID` after you shut it down.
+session, an app the user clicks through for hours): `aq reserve` with a
+realistic `--ttl`, no task budget unless you will run tests in it. Expiry runs
+the teardown script, which stops the stand: `aq extend RES_ID --ttl 1h` while
+you still need it (no restart); `aq release RES_ID` after you shut it down.
 
 The teardown script must be idempotent and self-contained (it may run after the
 worktree is gone): embed the compose definition instead of relying on cwd. Use

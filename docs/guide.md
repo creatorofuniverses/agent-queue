@@ -136,7 +136,11 @@ shell, and `bash` inside the unit expands it, where the service has set
 `AQ_CPUS=<--cpus>`. Without `bash -lc`, your shell would expand the variable
 before `aq` starts (and get an empty string). Besides `AQ_CPUS`, the task gets
 `AQ_JOB_ID`, its own `TMPDIR`/`TMP`/`TEMP`, and from the calling environment
-`PATH`, `HOME`, `LANG`, `LC_*`, `VIRTUAL_ENV`.
+`PATH`, `HOME`, `LANG`, `LC_*`, `VIRTUAL_ENV`. A task run with `--within` also
+gets `AQ_RESERVATION_ID` and, when the reservation has one, `AQ_DOCKER_PROJECT`:
+label the containers the task starts itself (testcontainers)
+`com.docker.compose.project=$AQ_DOCKER_PROJECT` and aq counts them in the
+stand.
 
 ### Temp files live in RAM and count as task memory
 
@@ -572,6 +576,22 @@ against `--task-memory`, with the amount to declare next time (peak × 1.2):
 time --memory 1.3 GiB); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
 (overestimated: next time --task-memory 1.2 GiB)`. It stays in the diagnostic of `aq result`, and `aq status`
 shows both peaks on the `stand:` and `budget:` lines.
+
+### Containers outside a compose project
+
+aq measures a stand by the label `com.docker.compose.project`, which compose
+sets and other tools do not:
+
+- **testcontainers** and other test code that starts containers: run it with
+  `aq submit --within RES_ID` of a reservation with `--docker-project`, and give
+  each container the label `com.docker.compose.project=$AQ_DOCKER_PROJECT` (the
+  container request's labels). If the containers cannot be labeled, size the
+  reservation's `--memory` for them and leave `--docker-project` out: the whole
+  stand then counts as in use.
+- **`docker build`** runs in dockerd/buildkit, not in the task's cgroup, so the
+  task's peak shows a few MiB whatever the build uses. Reserve the build's memory
+  as a stand without `--docker-project` and run the build with
+  `aq submit --within RES_ID`.
 
 ### Idle reservations
 

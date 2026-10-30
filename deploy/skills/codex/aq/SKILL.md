@@ -102,10 +102,21 @@ Use `--docker-project` so aq measures the stand. Its teardown script must be
 idempotent and self-contained even after the worktree disappears; embed the
 compose definition instead of relying on cwd.
 
-**An experimental stand kept up** (manual checks, a demo, debugging): reserve
-with a realistic `--ttl`; omit the task budget if no nested tests are needed.
-Extend while actively needed with `aq extend RES_ID --ttl 1h`, then shut it down
-and release it when done.
+**Containers the tests start themselves** (testcontainers): a nested task gets
+`AQ_DOCKER_PROJECT` (and `AQ_RESERVATION_ID`). Label every container it starts
+`com.docker.compose.project=$AQ_DOCKER_PROJECT` (testcontainers: the container
+request's labels) so aq counts them in the stand. If they cannot be labeled,
+size the reservation's `--memory` for them and omit `--docker-project`.
+
+**`docker build`:** the build runs in dockerd/buildkit, not in the task, so the
+task's peak shows next to nothing. Reserve its memory as a stand without
+`--docker-project` and run `docker build` with `aq submit --within RES_ID`.
+
+**An experimental stand kept up** (manual checks, a demo, debugging, an app the
+user clicks through for hours): reserve with a realistic `--ttl`; omit the task
+budget if no nested tests are needed. Expiry runs the teardown script, which
+stops the stand: extend while actively needed with `aq extend RES_ID --ttl 1h`
+(no restart), then shut it down and release it when done.
 
 **MCP:** use `queue_submit` / `queue_reserve` with **both** `client: "codex"`
 and `session_id` equal to your shell's `CODEX_THREAD_ID`. The MCP process may

@@ -738,9 +738,15 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 		s.mu.Unlock()
 		return
 	}
+	var parent *model.Item
+	if cur.ParentID != "" {
+		if parent, err = s.d.Store.Get(pctx, cur.ParentID); err != nil {
+			slog.Warn("scheduler: load the reservation of a nested task", "id", cur.ID, "err", err)
+		}
+	}
 	s.mu.Unlock()
 
-	unit, lerr := s.d.Exec.Launch(ctx, s.launchSpec(cur))
+	unit, lerr := s.d.Exec.Launch(ctx, s.launchSpec(cur, parent))
 	unitAlive := false
 	if lerr != nil {
 		// Launch stops the unit on failure, but that Stop may itself have failed.
@@ -787,13 +793,22 @@ func (s *Scheduler) start(ctx context.Context, it *model.Item) {
 	s.mu.Unlock()
 }
 
-func (s *Scheduler) launchSpec(it *model.Item) platform.LaunchSpec {
-	env := make(map[string]string, len(it.Env)+2)
+// launchSpec is the unit of it; parent is the reservation of a nested task (nil
+// otherwise), whose ID and docker project the task gets so a test harness can
+// label the containers it starts and have them counted in the stand.
+func (s *Scheduler) launchSpec(it, parent *model.Item) platform.LaunchSpec {
+	env := make(map[string]string, len(it.Env)+4)
 	for k, v := range it.Env {
 		env[k] = v
 	}
 	env["AQ_JOB_ID"] = string(it.ID)
 	env["AQ_CPUS"] = strconv.Itoa(it.CPUs)
+	if parent != nil {
+		env["AQ_RESERVATION_ID"] = string(parent.ID)
+		if parent.DockerProject != "" {
+			env["AQ_DOCKER_PROJECT"] = parent.DockerProject
+		}
+	}
 	return platform.LaunchSpec{
 		ID: it.ID, Argv: it.Argv, Cwd: it.Cwd, Env: env,
 		Limit:      it.Limit,

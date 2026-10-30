@@ -135,7 +135,10 @@ shell, и раскрывает его уже `bash` внутри unit, где с
 `AQ_CPUS=<--cpus>`. Без `bash -lc` переменную раскрыл бы ваш shell до запуска
 `aq` (и получил бы пустую строку). Кроме `AQ_CPUS` задача получает `AQ_JOB_ID`,
 собственные `TMPDIR`/`TMP`/`TEMP`, а из вызывающего окружения — `PATH`, `HOME`,
-`LANG`, `LC_*`, `VIRTUAL_ENV`.
+`LANG`, `LC_*`, `VIRTUAL_ENV`. Задача с `--within` получает ещё
+`AQ_RESERVATION_ID` и, если он есть у резерва, `AQ_DOCKER_PROJECT`: пометьте
+контейнеры, которые задача запускает сама (testcontainers), меткой
+`com.docker.compose.project=$AQ_DOCKER_PROJECT`, и aq посчитает их в стенде.
 
 ### Временные файлы живут в RAM и считаются памятью задачи
 
@@ -564,6 +567,22 @@ aq release "$id"           # стенд погашен самим агентом
 time --memory 1.3 GiB); task budget peak 1.0 GiB is 25% of declared 4.0 GiB
 (overestimated: next time --task-memory 1.2 GiB)`. Это остаётся в диагностике `aq result`, а `aq status`
 показывает оба пика в строках `stand:` и `budget:`.
+
+### Контейнеры вне compose-проекта
+
+aq замеряет стенд по метке `com.docker.compose.project`, которую ставит compose,
+а другие инструменты нет:
+
+- **testcontainers** и другой тестовый код, который сам запускает контейнеры:
+  запускайте его через `aq submit --within RES_ID` резерва с `--docker-project`
+  и давайте каждому контейнеру метку
+  `com.docker.compose.project=$AQ_DOCKER_PROJECT` (labels запроса контейнера).
+  Если пометить контейнеры нельзя, заложите их память в `--memory` резерва и не
+  указывайте `--docker-project`: тогда весь стенд считается занятым.
+- **`docker build`** выполняется в dockerd/buildkit, а не в cgroup задачи, так
+  что пик задачи — несколько MiB, сколько бы ни потребляла сборка. Резервируйте
+  память сборки как стенд без `--docker-project` и запускайте сборку через
+  `aq submit --within RES_ID`.
 
 ### Простаивающие резервы
 

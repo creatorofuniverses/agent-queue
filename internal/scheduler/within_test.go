@@ -441,3 +441,28 @@ func TestTmpGateHoldsQueue(t *testing.T) {
 	e.tick(t)
 	e.wantState(t, held.ID, model.StateRunning, model.ReasonNone)
 }
+
+func TestNestedTaskKnowsItsReservation(t *testing.T) {
+	e := newEnv(t, nil)
+	r := e.rreq(100 * mib)
+	r.TaskMemory, r.TaskCPUs, r.DockerProject = 500*mib, 1, "stand-1"
+	res := e.reserve(t, r)
+	e.tick(t)
+	nested := e.submit(t, e.within(res.ID, 200*mib))
+	e.tick(t)
+	plain := e.submit(t, e.req(100*mib))
+	e.tick(t)
+	for _, sp := range e.ex.Launched() {
+		switch sp.ID {
+		case nested.ID:
+			// A test harness labels its own containers with this to count them in the stand.
+			if sp.Env["AQ_RESERVATION_ID"] != string(res.ID) || sp.Env["AQ_DOCKER_PROJECT"] != "stand-1" {
+				t.Fatalf("nested env %v", sp.Env)
+			}
+		case plain.ID:
+			if _, ok := sp.Env["AQ_RESERVATION_ID"]; ok {
+				t.Fatalf("plain env %v", sp.Env)
+			}
+		}
+	}
+}
