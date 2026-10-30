@@ -177,3 +177,27 @@ func TestDockerMeterBreakdown(t *testing.T) {
 		t.Fatal("a stale breakdown")
 	}
 }
+
+// After a restart the first pass watches the held stands; until they are
+// measured each counts as wholly unused, so waiting for the next tick skews
+// admission and forecasts for seconds.
+func TestDockerMeterMeasuresNewProjectAtOnce(t *testing.T) {
+	f := newDockerFixture(t)
+	f.body["p"] = `[]`
+	m := NewDockerMeter(DockerMeterConfig{Socket: f.sock, CgroupRoot: f.root, Refresh: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+	time.Sleep(50 * time.Millisecond) // Run's first refresh finds nothing to measure
+	m.Watch([]string{"p"})
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, ok := m.Usage("p"); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a newly watched project waited for the next refresh")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

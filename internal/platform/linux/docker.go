@@ -47,6 +47,9 @@ type DockerMeter struct {
 	mu      sync.Mutex
 	watched []string
 	samples map[string]standSample
+	// added wakes Run when Watch adds a project: until it is measured its stand
+	// counts as wholly unused, so it should not wait for the next tick.
+	added chan struct{}
 }
 
 func NewDockerMeter(cfg DockerMeterConfig) *DockerMeter {
@@ -82,6 +85,7 @@ func NewDockerMeter(cfg DockerMeterConfig) *DockerMeter {
 			},
 		},
 		samples: map[string]standSample{},
+		added:   make(chan struct{}, 1),
 	}
 }
 
@@ -89,6 +93,7 @@ func NewDockerMeter(cfg DockerMeterConfig) *DockerMeter {
 func (m *DockerMeter) Watch(projects []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	added := slices.ContainsFunc(projects, func(p string) bool { return !slices.Contains(m.watched, p) })
 	m.watched = append([]string(nil), projects...)
 	keep := make(map[string]standSample, len(projects))
 	for _, p := range projects {
@@ -97,6 +102,12 @@ func (m *DockerMeter) Watch(projects []string) {
 		}
 	}
 	m.samples = keep
+	if added {
+		select {
+		case m.added <- struct{}{}:
+		default: // a refresh is already due
+		}
+	}
 }
 
 // Usage returns the last measurement if it is not older than Stale.
@@ -130,6 +141,8 @@ func (m *DockerMeter) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			m.refresh(ctx)
+		case <-m.added:
 			m.refresh(ctx)
 		}
 	}
