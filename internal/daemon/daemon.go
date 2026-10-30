@@ -35,6 +35,8 @@ var Version = "0.1.0-dev"
 type Options struct {
 	Usage    platform.UsageMeter
 	OOMKills platform.OOMKillLog
+	// Snapshot names who holds memory when the host guard engages; nil: not recorded.
+	Snapshot func() (platform.MemorySnapshot, error)
 }
 
 func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platform.Executor, host platform.HostMetrics, meter platform.StandMeter, opts Options) error {
@@ -140,9 +142,14 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		defer loops.Done()
 		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses}, cfg.Stats.SampleInterval)
 	}()
+	var engaged func()
+	if opts.Snapshot != nil {
+		r := &culpritRecorder{st: st, snapshot: opts.Snapshot}
+		engaged = func() { r.engaged(runCtx) }
+	}
 	go func() {
 		defer loops.Done()
-		RunGuard(runCtx, exec, host, cfg, sched.SetGuardActive, time.Second)
+		RunGuard(runCtx, exec, host, cfg, sched.SetGuardActive, engaged, time.Second)
 	}()
 	go func() {
 		defer loops.Done()

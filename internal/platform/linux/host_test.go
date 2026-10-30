@@ -24,7 +24,7 @@ func TestParseMeminfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := platform.MemInfo{Total: 33348911104, Available: 12000000 * 1024, SwapTotal: 8388604 * 1024, SwapFree: 248196 * 1024}
+	want := platform.MemInfo{Total: 33348911104, Available: 12000000 * 1024, SwapTotal: 8388604 * 1024, SwapFree: 248196 * 1024, Free: 1000000 * 1024}
 	if m != want {
 		t.Fatalf("got %+v want %+v", m, want)
 	}

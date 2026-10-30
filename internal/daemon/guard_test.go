@@ -125,3 +125,16 @@ func TestGuardSetCeilingFailureRetries(t *testing.T) {
 		t.Fatalf("%v", c)
 	}
 }
+
+func TestGuardReportsEachEngagementOnce(t *testing.T) {
+	g, _, host, _ := newGuardTest(20*gib, 2*gib)
+	n := 0
+	g.engaged = func() { n++ }
+	for _, avail := range []uint64{20 * gib, 4 * gib, 4 * gib, 3 * gib, 20 * gib, 4 * gib} {
+		host.Set(platform.MemInfo{Total: 30 * gib, Available: avail})
+		g.step()
+	}
+	if n != 2 { // cut twice: at the first 4 GiB and again after it let go
+		t.Fatalf("engaged %d times", n)
+	}
+}

@@ -1,11 +1,13 @@
 package stats
 
 import (
+	"fmt"
 	"github.com/creatorofuniverses/agent-queue/internal/hook"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"maps"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -151,5 +153,19 @@ func TestSummarizeReservationFit(t *testing.T) {
 	db := ReservationFitStats{Name: "/r:db", Reservations: 1, StandsMeasured: 1, StandPeakP50: 0.25, StandPeakP90: 0.25, UnusedGiBHours: 0.5}
 	if s.ReservationFit[0] != lab || s.ReservationFit[1] != db {
 		t.Fatalf("%+v\nwant %+v\n     %+v", s.ReservationFit, lab, db)
+	}
+}
+
+func TestSummarizeGuardEngagements(t *testing.T) {
+	t0 := time.Date(2026, 10, 30, 22, 0, 0, 0, time.UTC)
+	var incs []model.Incident
+	for i := range 5 {
+		incs = append(incs, model.Incident{At: t0.Add(time.Duration(i) * time.Hour), Kind: "guard_engaged", Value: float64(i), Detail: fmt.Sprintf("snapshot %d", i)})
+	}
+	s := Summarize(Input{Until: t0.Add(6 * time.Hour), Incidents: incs})
+	g := s.Incidents
+	want := []GuardSnapshot{{At: t0.Add(4 * time.Hour), Detail: "snapshot 4"}, {At: t0.Add(3 * time.Hour), Detail: "snapshot 3"}, {At: t0.Add(2 * time.Hour), Detail: "snapshot 2"}}
+	if g.GuardEngaged != 5 || !reflect.DeepEqual(g.GuardSnapshots, want) {
+		t.Fatalf("%+v", g)
 	}
 }

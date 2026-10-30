@@ -180,7 +180,9 @@ code from `aq result`:
 - **GRANTED:** the reservation is ready; only now start the stand or nested work.
 - **OOM:** inspect the peak and worker count, then increase memory (e.g. 1.5×)
   or reduce concurrency before an authorized rerun. Tell the user; never blindly
-  repeat with the same budget.
+  repeat with the same budget. `OOM_HOST_GUARD` is different: the host ran short,
+  usually from outside aq; rerun the same once memory is back (`aq stats` names
+  who held it).
 - **Timeout:** check for a hang before increasing `--timeout`.
 - **Failed/rejected:** inspect diagnostics; a rejected request cannot fit the
   pool. A command failure needs its own diagnosis.

@@ -439,6 +439,12 @@ func (c *cmdCtx) printStats(v stats.Summary) {
 		fmt.Fprintf(w, "  kernel OOM kills outside aq: %s%s\n", bad(i.KernelOOM, fmt.Sprintf("%.0f", i.KernelOOM)), oomGroups(i.KernelOOMBy))
 		fmt.Fprintf(w, "  systemd-oomd kills: %s outside aq, %d of aq tasks\n", bad(float64(i.OOMDOutside), fmt.Sprint(i.OOMDOutside)), i.OOMDTasks)
 		fmt.Fprintf(w, "  memory pressure closed admission %d times, %s in total\n", i.PSIEpisodes, fmtSecs(i.PSIClosedSeconds))
+		if i.GuardEngaged > 0 {
+			fmt.Fprintf(w, "  host guard cut the aq slice %s times; who held memory then:\n", u.red(fmt.Sprint(i.GuardEngaged)))
+			for _, g := range i.GuardSnapshots {
+				fmt.Fprintf(w, "    %s %s\n", u.dim(g.At.Local().Format("01-02 15:04")), g.Detail)
+			}
+		}
 	}
 }
 

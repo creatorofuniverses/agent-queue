@@ -41,6 +41,7 @@ type ExitInfo struct {
 
 type MemInfo struct {
 	Total, Available, SwapTotal, SwapFree uint64
+	Free                                  uint64 // MemFree: not even used as cache
 }
 
 type Executor interface {
@@ -91,6 +92,26 @@ type StandMeter interface {
 	// Containers is the same measurement per container, largest first.
 	Containers(project string) ([]ContainerUsage, bool)
 	Run(ctx context.Context) // refresh loop until ctx ends
+}
+
+// MemorySnapshot is who held the host's memory at one moment, recorded when
+// the host guard starts cutting the aq slice so the cause can be named later.
+type MemorySnapshot struct {
+	// Uncharged is memory in use but charged to no cgroup: the kernel, drivers
+	// and compressed swap (zram).
+	Available, Uncharged uint64
+	Cgroups              []CgroupMemory  // leaf cgroups by memory.current, largest first
+	Processes            []ProcessMemory // by RSS, largest first
+}
+type CgroupMemory struct {
+	Path  string `json:"path"`
+	Bytes uint64 `json:"bytes"`
+}
+type ProcessMemory struct {
+	PID    int    `json:"pid"`
+	Name   string `json:"name"`
+	Cgroup string `json:"cgroup"`
+	RSS    uint64 `json:"rss"`
 }
 
 // ContainerUsage is one container of a stand: its compose service, or its name.

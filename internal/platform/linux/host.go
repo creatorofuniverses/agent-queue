@@ -87,6 +87,8 @@ func parseMeminfo(r io.Reader) (platform.MemInfo, error) {
 			dst, haveTotal = &m.Total, true
 		case "MemAvailable":
 			dst = &m.Available
+		case "MemFree":
+			dst = &m.Free
 		case "SwapTotal":
 			dst = &m.SwapTotal
 		case "SwapFree":

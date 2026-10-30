@@ -448,10 +448,16 @@ journalctl --user -u aq-<id>      # the task unit's journal (systemd: oom-kill, 
 aq logs <id> --stream stderr
 ```
 
-`OOM_GROUP` means the task was killed by the pool limit (`aq.slice`);
-`OOM_HOST_GUARD` means the host guard, which temporarily lowered the slice
-ceiling because the machine was short of memory. Increase `--memory` or reduce
-the command's parallelism.
+`OOM_GROUP` means the task was killed by the pool limit (`aq.slice`): increase
+`--memory` or reduce the command's parallelism. `OOM_HOST_GUARD` means the host
+guard, which temporarily lowered the slice ceiling because the machine was short
+of memory, usually because of something outside aq: a larger `--memory` does
+not help, run it again once memory is back. Each time the guard starts cutting,
+aq records who held memory then (at most every 5 minutes): the largest cgroups
+and processes and the memory in no cgroup (kernel, drivers, zram). `aq stats`
+shows the count and the latest three under Incidents ("host guard cut the aq
+slice N times"), `aq stats export --table incidents` all of them as
+`guard_engaged`.
 
 ## Cancellation
 

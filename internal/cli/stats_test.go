@@ -7,6 +7,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStatsText(t *testing.T) {
@@ -113,6 +114,18 @@ func TestPrintViewReservationChargedByHistory(t *testing.T) {
 	out := b.String()
 	if !strings.Contains(out, "stand:     2.0 GiB memory, 1 cpus (charged 360 MiB by history)\n") ||
 		!strings.Contains(out, "budget:    1.5 GiB memory, 1 cpus (charged 600 MiB by history)\n") {
+		t.Fatal(out)
+	}
+}
+
+func TestPrettyStatsGuardSnapshots(t *testing.T) {
+	var b strings.Builder
+	c := &cmdCtx{stdout: &b, env: func(string) string { return "" }}
+	at := time.Date(2026, 10, 30, 22, 26, 0, 0, time.UTC)
+	c.printStats(stats.Summary{Incidents: &stats.IncidentStats{GuardEngaged: 2, GuardSnapshots: []stats.GuardSnapshot{{At: at, Detail: "available 3.0 GiB; processes: python 4.0 GiB (pid 10, app-big.scope)"}}}})
+	out := b.String()
+	if !strings.Contains(out, "host guard cut the aq slice 2 times; who held memory then:\n") ||
+		!strings.Contains(out, at.Local().Format("01-02 15:04")+" available 3.0 GiB; processes: python 4.0 GiB (pid 10, app-big.scope)\n") {
 		t.Fatal(out)
 	}
 }

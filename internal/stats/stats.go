@@ -158,6 +158,14 @@ type IncidentStats struct {
 	OOMDTasks        int                `json:"oomd_tasks"`
 	PSIEpisodes      int                `json:"psi_episodes"`
 	PSIClosedSeconds float64            `json:"psi_closed_seconds"`
+	// GuardEngaged counts the times the host guard began cutting the aq slice;
+	// GuardSnapshots are the latest three records of who held memory then.
+	GuardEngaged   int             `json:"guard_engaged"`
+	GuardSnapshots []GuardSnapshot `json:"guard_snapshots,omitempty"`
+}
+type GuardSnapshot struct {
+	At     time.Time `json:"at"`
+	Detail string    `json:"detail"`
 }
 
 func Summarize(in Input) Summary {
@@ -517,6 +525,9 @@ func summarizeIncidents(s *Summary, in Input) {
 			} else {
 				g.OOMDOutside++
 			}
+		case "guard_engaged":
+			g.GuardEngaged++
+			g.GuardSnapshots = append([]GuardSnapshot{{At: v.At, Detail: v.Detail}}, g.GuardSnapshots[:min(2, len(g.GuardSnapshots))]...)
 		case "psi_close":
 			if closed.IsZero() {
 				closed = v.At

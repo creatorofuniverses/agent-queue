@@ -18,14 +18,18 @@ type guard struct {
 	host      platform.HostMetrics
 	cfg       config.Config
 	setActive func(bool)
-	applied   uint64
-	have      bool
+	// engaged is called when the guard starts cutting the slice below the pool,
+	// once per episode, so the cause of the shortage can be recorded.
+	engaged func()
+	applied uint64
+	have    bool
+	active  bool
 }
 
 // RunGuard keeps the slice ceiling below what the host can spare, so that
 // under memory shortage managed tasks are killed first. It blocks until ctx ends.
-func RunGuard(ctx context.Context, exec platform.Executor, host platform.HostMetrics, cfg config.Config, setActive func(bool), every time.Duration) {
-	g := &guard{exec: exec, host: host, cfg: cfg, setActive: setActive}
+func RunGuard(ctx context.Context, exec platform.Executor, host platform.HostMetrics, cfg config.Config, setActive func(bool), engaged func(), every time.Duration) {
+	g := &guard{exec: exec, host: host, cfg: cfg, setActive: setActive, engaged: engaged}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -72,7 +76,11 @@ func (g *guard) step() {
 	active := target < g.cfg.PoolMemory
 	if active {
 		g.setActive(true) // before the write: the OOM kill happens inside it
+		if !g.active && g.engaged != nil {
+			g.engaged()
+		}
 	}
+	g.active = active
 	// memory.high == memory.max: a soft limit below max only throttles without swap.
 	// The write blocks for reclaim/OOM; bounded, but may take seconds.
 	if err := g.exec.SetSliceCeiling(target, target); err != nil {
