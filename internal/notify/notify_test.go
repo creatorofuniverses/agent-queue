@@ -130,10 +130,14 @@ func TestExecDelivererFailureAndTimeout(t *testing.T) {
 			t.Fatal(e)
 		}
 		pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-		if e = syscall.Kill(pid, 0); e == nil {
-			// A dead child can remain a zombie until the host init reaps it; it cannot execute.
-			stat, _ := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-			if !strings.Contains(string(stat), ") Z ") {
+		// SIGKILL is delivered asynchronously: give the group a moment to die. A dead
+		// child can remain a zombie until the host init reaps it; it cannot execute.
+		for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+			if syscall.Kill(pid, 0) != nil || err != nil || strings.Contains(string(stat), ") Z ") {
+				break
+			}
+			if time.Now().After(deadline) {
 				t.Fatalf("child %d alive", pid)
 			}
 		}
