@@ -378,6 +378,9 @@ func cmdWait(c *cmdCtx, args []string) error {
 	if v.Diagnostic != "" {
 		line += " " + strings.ReplaceAll(v.Diagnostic, "\n", " ")
 	}
+	if v.MemoryFit != "" {
+		line += " " + v.MemoryFit
+	}
 	for _, e := range v.Events {
 		line += fmt.Sprintf(" event=%s:%s", e.ID, e.Kind)
 	}

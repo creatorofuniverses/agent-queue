@@ -114,6 +114,12 @@ check whether it hung before raising `--timeout`; on 5 read the diagnostic
 (rejected: the request can never fit the pool). Ack the item's event with
 `aq ack EVENT_ID` once the outcome is recorded.
 
+If the line ends with `memory: peak … (underestimated|overestimated)`, your
+`--expected`/`--memory` missed the real peak: size the next run of the same work
+from that peak (with some margin) instead of the old guess. `aq release` of a
+stand with `--docker-project` reports the same for the stand against `--memory`.
+On `stand_over_declared`, declare more next time.
+
 `aq result` also shows `disk:` (bytes written to physical disks) when the host
 records it. Gigabytes per run for a test suite wears the SSD and slows everyone:
 tell the user and look for the cause (a test database without `fsync=off`, an

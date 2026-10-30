@@ -141,3 +141,52 @@ func TestReasonInfra(t *testing.T) {
 		}
 	}
 }
+
+func TestMemoryFit(t *testing.T) {
+	const mib, gib = 1 << 20, 1 << 30
+	ok := func(st State, r Reason, exp, peak uint64) *Item {
+		return &Item{Kind: KindTask, State: st, Reason: r, Limit: 8 * gib, Expected: exp, MemoryPeak: peak}
+	}
+	cases := []struct {
+		name string
+		it   *Item
+		want string
+	}{
+		{"under", ok(StateSucceeded, ReasonNone, 2*gib, 3*gib), "memory: peak 3.0 GiB is 150% of expected 2.0 GiB (underestimated)"},
+		{"over", ok(StateSucceeded, ReasonNone, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated)"},
+		{"over after a failed command", ok(StateFailed, ReasonCommandFailed, 4*gib, gib), "memory: peak 1.0 GiB is 25% of expected 4.0 GiB (overestimated)"},
+		{"under on OOM", ok(StateFailed, ReasonOOM, 2*gib, 8*gib), "memory: peak 8.0 GiB is 400% of expected 2.0 GiB (underestimated)"},
+		{"within tolerance", ok(StateSucceeded, ReasonNone, 2*gib, 2*gib+100*mib), ""},
+		{"small absolute miss", ok(StateSucceeded, ReasonNone, 200*mib, 20*mib), ""},
+		{"timeout cut the run short", ok(StateFailed, ReasonTimeout, 4*gib, gib), ""},
+		{"cancelled run", ok(StateCancelled, ReasonCancelled, 4*gib, gib), ""},
+		{"under on timeout", ok(StateFailed, ReasonTimeout, gib, 2*gib), "memory: peak 2.0 GiB is 200% of expected 1.0 GiB (underestimated)"},
+		{"no peak", ok(StateFailed, ReasonLaunchFailed, 4*gib, 0), ""},
+		{"running", ok(StateRunning, ReasonNone, 4*gib, gib), ""},
+		{"from profile", &Item{Kind: KindTask, State: StateSucceeded, Expected: 4 * gib, MemoryPeak: gib, MemoryFromProfile: true}, ""},
+		{"reservation", &Item{Kind: KindReservation, State: StateReleased, Expected: 4 * gib, MemoryPeak: gib}, ""},
+	}
+	for _, c := range cases {
+		if got := c.it.MemoryFit(); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestStandFit(t *testing.T) {
+	const mib, gib = 1 << 20, 1 << 30
+	cases := []struct {
+		declared, used uint64
+		want           string
+	}{
+		{4 * gib, gib, "stand peak 1.0 GiB is 25% of declared 4.0 GiB (overestimated)"},
+		{2 * gib, 3 * gib, "stand peak 3.0 GiB is 150% of declared 2.0 GiB (underestimated)"},
+		{2 * gib, 2*gib + 100*mib, ""},
+		{4 * gib, 0, ""},
+	}
+	for _, c := range cases {
+		if got := StandFit(c.declared, c.used); got != c.want {
+			t.Errorf("StandFit(%d, %d) = %q, want %q", c.declared, c.used, got, c.want)
+		}
+	}
+}

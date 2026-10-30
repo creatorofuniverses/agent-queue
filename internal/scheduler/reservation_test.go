@@ -392,7 +392,7 @@ func TestStandOverDeclaredEventOnce(t *testing.T) {
 		t.Fatalf("audiences %v", auds)
 	}
 	for _, ev := range evs {
-		if ev.SessionID != "s1" || ev.ClientType != "claude" || ev.Detail == "" || !ev.CreatedAt.Equal(e.clk.Now()) {
+		if ev.SessionID != "s1" || ev.ClientType != "claude" || !strings.HasSuffix(ev.Detail, "uses 2.5 GiB, declared 2.0 GiB (125% of declared)") || !ev.CreatedAt.Equal(e.clk.Now()) {
 			t.Fatalf("event %+v", ev)
 		}
 	}
@@ -402,6 +402,40 @@ func TestStandOverDeclaredEventOnce(t *testing.T) {
 	e.tick(t)
 	if n := len(e.events(t, a.ID, model.EventStandOverDeclared)); n != 2 {
 		t.Fatalf("events after a third tick: %d", n)
+	}
+}
+
+func TestReleaseReportsStandPeak(t *testing.T) {
+	e := newResEnv(t)
+	r := e.rreq(2 * gib)
+	r.DockerProject = "p"
+	a := e.reserve(t, r)
+	e.meter.Set("p", 300*mib)
+	e.tick(t)
+	e.meter.Set("p", 600*mib)
+	e.tick(t)
+	e.meter.Set("p", 400*mib)
+	e.tick(t)
+	got, err := e.s.Release(e.ctx, a.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "stand peak 600 MiB is 29% of declared 2.0 GiB (overestimated)"
+	if got.Diagnostic != want || e.get(t, a.ID).Diagnostic != want {
+		t.Fatalf("diagnostic %q, want %q", got.Diagnostic, want)
+	}
+}
+
+func TestReleaseCloseStandHasNoFeedback(t *testing.T) {
+	e := newResEnv(t)
+	r := e.rreq(2 * gib)
+	r.DockerProject = "p"
+	a := e.reserve(t, r)
+	e.meter.Set("p", 3*gib/2)
+	e.tick(t)
+	got, err := e.s.Release(e.ctx, a.ID, false)
+	if err != nil || got.Diagnostic != "" {
+		t.Fatalf("diagnostic %q, err %v", got.Diagnostic, err)
 	}
 }
 

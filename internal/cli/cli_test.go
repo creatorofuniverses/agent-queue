@@ -26,6 +26,7 @@ const gib = uint64(1) << 30
 type harness struct {
 	paths config.Paths
 	ex    *fake.Executor
+	meter *fake.Meter
 	vars  map[string]string
 	cwd   string
 }
@@ -42,6 +43,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{
 		paths: config.Paths{StateDir: filepath.Join(root, "s"), RuntimeDir: filepath.Join(root, "r"), ConfigFile: filepath.Join(root, "none.toml"), SliceLockDir: root},
 		ex:    fake.NewExecutor(),
+		meter: fake.NewMeter(),
 		cwd:   t.TempDir(),
 	}
 	h.vars = map[string]string{
@@ -71,7 +73,7 @@ func (h *harness) startDaemonCfg(t *testing.T, tweak func(*config.Config)) (stop
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host, nil, daemon.Options{}) }()
+	go func() { done <- daemon.Run(ctx, h.paths, cfg, h.ex, host, h.meter, daemon.Options{}) }()
 	var once sync.Once
 	stop = func() {
 		once.Do(func() {
@@ -689,5 +691,22 @@ func TestDoctorTmpCheck(t *testing.T) {
 	f.tmp.InodesFree = 10
 	if c := check(f); !c.OK || !c.Warn || c.Code != "TMP_LOW" {
 		t.Fatalf("low: %+v", c)
+	}
+}
+
+func TestWaitReportsMemoryFit(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	_, out, _ := h.run("submit", "--memory", "1G", "--expected", "512M", "--timeout", "1m", "--", "true")
+	id := strings.TrimSpace(out)
+	spec := h.launched(t, 1)[0]
+	h.ex.Finish(spec.ID, platform.ExitInfo{ServiceResult: "success", ExitCode: "exited", ExitStatus: "0", EndedAt: time.Now(), MemoryPeak: 900 << 20})
+	h.ex.SetAlive(spec.ID, false)
+	code, wout, werr := h.run("wait", id)
+	if code != 0 || !strings.HasSuffix(strings.TrimSpace(wout), " memory: peak 900 MiB is 176% of expected 512 MiB (underestimated)") {
+		t.Fatalf("wait: code=%d out=%q err=%q", code, wout, werr)
+	}
+	if _, o, _ := h.run("wait", id, "--json"); !strings.Contains(o, `"memory_fit": "memory: peak 900 MiB`) {
+		t.Fatalf("wait --json: %q", o)
 	}
 }

@@ -4,8 +4,11 @@ package model
 import (
 	"crypto/rand"
 	"fmt"
+	"math"
 	"strings"
 	"time"
+
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
 type ItemID string
@@ -214,6 +217,62 @@ func (it *Item) Committed() Resources {
 		return Resources{MemoryBytes: it.Expected + it.TaskMemory, CPUs: it.CPUs + it.TaskCPUs}
 	}
 	return Resources{MemoryBytes: it.Expected, CPUs: it.CPUs}
+}
+
+// Estimate feedback: a peak above fitOver or below fitUnder of the declared
+// memory, and at least fitMinMiss away from it, is reported to the agent so it
+// sizes the next run better.
+const (
+	fitOver    = 1.10
+	fitUnder   = 0.50
+	fitMinMiss = 256 << 20
+)
+
+// MemoryFit tells the agent how a finished task's memory peak compared with
+// the expected memory it declared, or "" when the estimate was close enough.
+// Memory taken from a profile is aq's own estimate and gets no feedback. Only
+// a run that went to the end shows an overestimate: a timeout or cancel cuts
+// the peak short.
+func (it *Item) MemoryFit() string {
+	if it.IsReservation() || it.MemoryFromProfile || !it.State.Terminal() {
+		return ""
+	}
+	complete := it.State == StateSucceeded || it.Reason == ReasonCommandFailed
+	pct, verdict := misfit(it.Expected, it.MemoryPeak, complete)
+	if verdict == "" {
+		return ""
+	}
+	return fmt.Sprintf("memory: peak %s is %d%% of expected %s (%s)",
+		units.FormatSize(it.MemoryPeak), pct, units.FormatSize(it.Expected), verdict)
+}
+
+// StandFit tells the agent how a stand's measured peak compared with the
+// memory declared for it, or "" when the declaration was close enough.
+func StandFit(declared, peak uint64) string {
+	pct, verdict := misfit(declared, peak, true)
+	if verdict == "" {
+		return ""
+	}
+	return fmt.Sprintf("stand peak %s is %d%% of declared %s (%s)",
+		units.FormatSize(peak), pct, units.FormatSize(declared), verdict)
+}
+
+// misfit is peak as a percentage of declared and "underestimated" or
+// "overestimated" when it misses by enough; overestimates count only for a
+// complete run.
+func misfit(declared, peak uint64, complete bool) (int, string) {
+	if declared == 0 || peak == 0 {
+		return 0, ""
+	}
+	r := float64(peak) / float64(declared)
+	pct := int(math.Round(r * 100))
+	switch {
+	case r > fitOver && peak-declared >= fitMinMiss:
+		return pct, "underestimated"
+	case complete && r < fitUnder && declared-peak >= fitMinMiss:
+		return pct, "overestimated"
+	}
+	return pct, ""
 }
 
 // TeardownUnitID is the executor id of a reservation's teardown unit.

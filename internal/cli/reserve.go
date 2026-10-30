@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/client"
@@ -126,6 +127,10 @@ func itemOp(c *cmdCtx, op string, args any, asJSON bool) error {
 	if asJSON {
 		return printJSON(c, v)
 	}
-	fmt.Fprintf(c.stdout, "%s %s\n", v.ID, v.State)
+	line := fmt.Sprintf("%s %s", v.ID, v.State)
+	if v.State.Terminal() && v.Diagnostic != "" { // how it ended, e.g. the stand's peak against its declaration
+		line += " " + strings.ReplaceAll(v.Diagnostic, "\n", " ")
+	}
+	fmt.Fprintln(c.stdout, line)
 	return nil
 }

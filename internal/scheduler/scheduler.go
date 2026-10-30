@@ -112,6 +112,7 @@ type Scheduler struct {
 	waiters        map[model.ItemID]chan struct{} // closed once waitDone
 	passDone       chan struct{}                  // closed and replaced at the end of every pass
 	standUsage     map[model.ItemID]uint64        // fresh stand measurements seen by the last pass
+	standPeak      map[model.ItemID]uint64        // highest stand measurement of each held reservation
 	// teardownLaunching holds reservations whose teardown Launch is in flight; the
 	// reaper leaves them alone, as it does tasks in STARTING.
 	teardownLaunching map[model.ItemID]bool
@@ -158,6 +159,7 @@ func New(d Deps) *Scheduler {
 		waiters:      map[model.ItemID]chan struct{}{},
 		passDone:     make(chan struct{}),
 		standUsage:   map[model.ItemID]uint64{},
+		standPeak:    map[model.ItemID]uint64{},
 
 		teardownLaunching: map[model.ItemID]bool{},
 		launchFailed:      map[model.ItemID]launchFailure{},
@@ -321,7 +323,11 @@ func (s *Scheduler) persistLocked(ctx context.Context, it *model.Item, evs ...mo
 	prevNotified := it.FinishNotified
 	var run *profile.Run
 	if it.State.Terminal() && it.State != model.StateRejected && !it.IsReservation() && !it.FinishNotified {
-		evs = append(evs, s.newEvents(it, model.EventTaskFinished, it.Diagnostic, model.AudienceSession)...)
+		detail := it.Diagnostic
+		if fit := it.MemoryFit(); fit != "" {
+			detail = strings.TrimPrefix(detail+"\n"+fit, "\n")
+		}
+		evs = append(evs, s.newEvents(it, model.EventTaskFinished, detail, model.AudienceSession)...)
 		if it.Reason.Infra() {
 			evs = append(evs, s.newEvents(it, model.EventTaskFailedInfra, string(it.Reason)+": "+it.Diagnostic, model.AudienceOperator)...)
 		}
@@ -513,7 +519,8 @@ func (s *Scheduler) admitTaskLocked(ctx context.Context, it *model.Item, now tim
 // measured) with a fresh measurement of its docker project and memory otherwise, plus
 // while TEARING_DOWN the unused part of its teardown memory (teardownUnconsumedLocked).
 // Nested tasks count only towards their parent's sum. It also hands the meter the
-// held projects and records stand_over_declared once per reservation.
+// held projects, records stand_over_declared once per reservation and keeps
+// each held stand's peak for the release feedback.
 func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem platform.MemInfo, disk uint64) (admission.Snapshot, []*model.Item, []*model.Item) {
 	snap := admission.Snapshot{
 		MemAvailable: mem.Available, DiskFree: disk,
@@ -594,6 +601,11 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		snap.Committed.MemoryBytes += c.MemoryBytes
 		snap.Committed.CPUs += c.CPUs
 	}
+	for id := range s.standPeak {
+		if _, held := s.holderLive[id]; !held {
+			delete(s.standPeak, id) // expired or force-released: nobody asks any more
+		}
+	}
 	if s.d.Meter != nil {
 		slices.Sort(projects)
 		s.d.Meter.Watch(slices.Compact(projects))
@@ -611,10 +623,11 @@ func (s *Scheduler) standUnconsumedLocked(ctx context.Context, it *model.Item) u
 		return it.Expected // no fresh measurement: assume nothing is used yet
 	}
 	s.standUsage[it.ID] = used
+	s.standPeak[it.ID] = max(s.standPeak[it.ID], used)
 	if used > it.Expected && !it.OverDeclaredNotified {
 		it.OverDeclaredNotified = true
-		detail := fmt.Sprintf("stand of reservation %s (docker project %s) uses %s, declared %s",
-			it.ID, it.DockerProject, units.FormatSize(used), units.FormatSize(it.Expected))
+		detail := fmt.Sprintf("stand of reservation %s (docker project %s) uses %s, declared %s (%.0f%% of declared)",
+			it.ID, it.DockerProject, units.FormatSize(used), units.FormatSize(it.Expected), float64(used)/float64(it.Expected)*100)
 		evs := s.newEvents(it, model.EventStandOverDeclared, detail, model.AudienceSession, model.AudienceOperator)
 		if err := s.persistLocked(ctx, it, evs...); err != nil {
 			slog.Error("scheduler: record stand over declared", "id", it.ID, "err", err)

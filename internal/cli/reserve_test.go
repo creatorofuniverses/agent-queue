@@ -226,3 +226,21 @@ func TestListShowsKindAndExpiry(t *testing.T) {
 		t.Fatalf("list:\n%s", out)
 	}
 }
+
+func TestReleaseReportsStandPeak(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemonCfg(t, bigPool)
+	h.meter.Set("stand", 512<<20)
+	res := h.view(t, "reserve", "--memory", "2G", "--ttl", "1h", "--docker-project", "stand", "--teardown", h.script(t, "x"), "--json")
+	deadline := time.Now().Add(5 * time.Second)
+	for v := h.view(t, "status", string(res.ID), "--json"); v.StandMeasured == nil; v = h.view(t, "status", string(res.ID), "--json") {
+		if time.Now().After(deadline) {
+			t.Fatal("stand never measured")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	code, out, e := h.run("release", string(res.ID))
+	if want := string(res.ID) + " RELEASED stand peak 512 MiB is 25% of declared 2.0 GiB (overestimated)\n"; code != 0 || out != want {
+		t.Fatalf("release: %d %q %s; want %q", code, out, e, want)
+	}
+}

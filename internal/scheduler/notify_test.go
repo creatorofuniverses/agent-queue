@@ -316,3 +316,19 @@ func TestAdmissionClosedAlertPerEpisode(t *testing.T) {
 		t.Fatal("pool alert")
 	}
 }
+
+func TestTaskFinishedCarriesMemoryFit(t *testing.T) {
+	e := notifyEnv(t)
+	r := e.req(gib)
+	r.Expected = 512 * mib
+	r.SessionID, r.ClientType = "t", "codex"
+	it := e.submit(t, r)
+	e.tick(t)
+	e.ex.Finish(it.ID, platform.ExitInfo{ServiceResult: "success", ExitStatus: "0", MemoryPeak: 900 * mib})
+	e.ex.SetAlive(it.ID, false)
+	e.tick(t)
+	evs := eventsOf(t, e, it.ID, model.EventTaskFinished)
+	if len(evs) != 1 || evs[0].Detail != "memory: peak 900 MiB is 176% of expected 512 MiB (underestimated)" {
+		t.Fatal(evs)
+	}
+}

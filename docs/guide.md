@@ -256,6 +256,20 @@ aq logs "$id" --tail 50
 
 All viewing commands have `--json` for parsing by programs.
 
+When a finished task's memory peak missed the expected memory you declared,
+the `aq wait` line ends with feedback for the next estimate, also sent in the
+`task_finished` notification and as `memory_fit` in `--json`:
+
+```
+… SUCCEEDED exit=0 waited=0s ran=4m12s memory: peak 4.2 GiB is 124% of expected 3.4 GiB (underestimated)
+```
+
+It appears when the peak is above 110% or below 50% of the expected memory and
+at least 256 MiB away from it. An overestimate is reported only for a run that
+went to the end (`SUCCEEDED` or `COMMAND_FAILED`): a timeout or cancel cuts the
+peak short. Memory taken from a profile gets no feedback: aq corrects its own
+estimate from the history.
+
 `aq top` (or `--json`) shows a single snapshot: memory/PSI/swap, the
 non-overlapping physical categories agents/docker/tasks/other, and separately
 the commitments of tasks/stands/budgets and the reasons the head is delayed.
@@ -441,7 +455,8 @@ docker compose -p myapp-e2e up -d  # bring the stand up only after the grant
   entire life of the reservation: this is safe, but memory is underused. One
   project can belong to only one unfinished reservation (until it is
   `TORN_DOWN`, `RELEASED` or `CANCELLED`). If the stand exceeded the declared
-  amount, a notification is recorded.
+  amount, a notification is recorded, with the measured amount as a percentage
+  of the declared one.
 - `--name`, `--key`, `--session`, `--priority`, `--env K=V`, `--json`: as for
   `submit`.
 
@@ -501,7 +516,10 @@ aq release "$id"           # the agent shut the stand down itself: release witho
 repeating it is safe; you can extend in `GRANTED` and `EXPIRING`. `release`
 releases a granted reservation if it has no unfinished nested tasks, and cancels
 a queued reservation (`CANCELLED`). `aq cancel` on a reservation works only
-while it is queued.
+while it is queued. With `--docker-project`, `release` also prints how the
+stand's measured peak compared with `--memory`, by the same thresholds as for
+tasks (`… RELEASED stand peak 1.1 GiB is 32% of declared 3.4 GiB
+(overestimated)`); it stays in the diagnostic of `aq result`.
 
 ### Expiry and failed teardown
 
