@@ -690,6 +690,13 @@ func (s *Scheduler) standUnconsumedLocked(ctx context.Context, it *model.Item) u
 		it.OverDeclaredNotified = true
 		detail := fmt.Sprintf("stand of reservation %s (docker project %s) uses %s, declared %s (%.0f%% of declared)",
 			it.ID, it.DockerProject, units.FormatSize(used), units.FormatSize(it.Limit), float64(used)/float64(it.Limit)*100)
+		if cs, ok := s.d.Meter.Containers(it.DockerProject); ok && len(cs) > 0 {
+			var parts []string
+			for _, c := range cs[:min(3, len(cs))] {
+				parts = append(parts, c.Name+" "+units.FormatSize(c.Bytes))
+			}
+			detail += "; largest containers: " + strings.Join(parts, ", ")
+		}
 		evs := s.newEvents(it, model.EventStandOverDeclared, detail, model.AudienceSession, model.AudienceOperator)
 		if err := s.persistLocked(ctx, it, evs...); err != nil {
 			slog.Error("scheduler: record stand over declared", "id", it.ID, "err", err)

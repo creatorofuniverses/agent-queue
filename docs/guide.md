@@ -504,7 +504,8 @@ docker compose -p myapp-e2e up -d  # bring the stand up only after the grant
   project can belong to only one unfinished reservation (until it is
   `TORN_DOWN`, `RELEASED` or `CANCELLED`). If the stand exceeded the declared
   amount, a notification is recorded, with the measured amount as a percentage
-  of the declared one.
+  of the declared one and the three largest containers (by compose service or
+  name). A container counts its `memory.current` minus inactive file cache.
 - `--name`, `--key`, `--session`, `--priority`, `--env K=V`, `--json`: as for
   `submit`. `--name` also keys the reservation's history (`<repo root>:<name>`,
   shared by worktrees), see below.

@@ -7,10 +7,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 type dockerFixture struct {
@@ -152,5 +155,25 @@ func TestInactiveFileSaturates(t *testing.T) {
 	got, err := containerMemory(f.root, "aaa")
 	if err != nil || got != 0 {
 		t.Fatalf("got %d,%v", got, err)
+	}
+}
+
+func TestDockerMeterBreakdown(t *testing.T) {
+	f := newDockerFixture(t)
+	f.body["p"] = `[{"Id":"aaa","Names":["/p-db-1"],"Labels":{"com.docker.compose.service":"db"}},{"Id":"bbb","Names":["/runner"]},{"Id":"ccc"}]`
+	f.cgroup(t, "system.slice/docker-aaa.scope", "10485760", "0")
+	f.cgroup(t, "docker/bbb", "104857600", "4194304")
+	now := time.Unix(1000, 0)
+	m := f.meter(&now)
+	m.Watch([]string{"p"})
+	m.refresh(context.Background())
+	got, ok := m.Containers("p")
+	want := []platform.ContainerUsage{{Name: "runner", Bytes: 96 << 20}, {Name: "db", Bytes: 10 << 20}, {Name: "ccc", Bytes: 0}}
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Containers = %+v,%v want %+v", got, ok, want)
+	}
+	now = now.Add(time.Hour)
+	if _, ok := m.Containers("p"); ok {
+		t.Fatal("a stale breakdown")
 	}
 }

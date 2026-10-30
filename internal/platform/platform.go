@@ -88,7 +88,15 @@ type FSUsage struct {
 type StandMeter interface {
 	Watch(projects []string)                      // replaces the set to measure
 	Usage(project string) (bytes uint64, ok bool) // ok=false: no fresh measurement
-	Run(ctx context.Context)                      // refresh loop until ctx ends
+	// Containers is the same measurement per container, largest first.
+	Containers(project string) ([]ContainerUsage, bool)
+	Run(ctx context.Context) // refresh loop until ctx ends
+}
+
+// ContainerUsage is one container of a stand: its compose service, or its name.
+type ContainerUsage struct {
+	Name  string `json:"name"`
+	Bytes uint64 `json:"bytes"`
 }
 
 type AgentUsage struct {

@@ -315,24 +315,49 @@ func (h *Host) NumCPU() int {
 
 // Meter is a StandMeter whose measurements the test sets directly.
 type Meter struct {
-	mu      sync.Mutex
-	usage   map[string]uint64
-	watched []string
+	mu         sync.Mutex
+	usage      map[string]uint64
+	containers map[string][]platform.ContainerUsage
+	watched    []string
 }
 
-func NewMeter() *Meter { return &Meter{usage: map[string]uint64{}} }
+func NewMeter() *Meter {
+	return &Meter{usage: map[string]uint64{}, containers: map[string][]platform.ContainerUsage{}}
+}
 
-// Set makes project report a fresh measurement of bytes.
+// Set makes project report a fresh measurement of bytes, with no breakdown.
 func (m *Meter) Set(project string, bytes uint64) {
 	m.mu.Lock()
 	m.usage[project] = bytes
+	delete(m.containers, project)
 	m.mu.Unlock()
+}
+
+// SetContainers makes project report these containers (largest first) and their sum.
+func (m *Meter) SetContainers(project string, cs ...platform.ContainerUsage) {
+	var sum uint64
+	for _, c := range cs {
+		sum += c.Bytes
+	}
+	m.mu.Lock()
+	m.usage[project], m.containers[project] = sum, cs
+	m.mu.Unlock()
+}
+
+func (m *Meter) Containers(project string) ([]platform.ContainerUsage, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.usage[project]; !ok {
+		return nil, false
+	}
+	return append([]platform.ContainerUsage(nil), m.containers[project]...), true
 }
 
 // Unset makes project report no fresh measurement.
 func (m *Meter) Unset(project string) {
 	m.mu.Lock()
 	delete(m.usage, project)
+	delete(m.containers, project)
 	m.mu.Unlock()
 }
 

@@ -580,3 +580,19 @@ func TestAfterNextPass(t *testing.T) {
 		t.Fatalf("cancelled ctx: %v", err)
 	}
 }
+
+func TestStandOverDeclaredNamesLargestContainers(t *testing.T) {
+	e := newResEnv(t)
+	e.meter.SetContainers("p",
+		platform.ContainerUsage{Name: "db", Bytes: 3 * gib / 2}, platform.ContainerUsage{Name: "api", Bytes: 512 * mib},
+		platform.ContainerUsage{Name: "worker", Bytes: 300 * mib}, platform.ContainerUsage{Name: "redis", Bytes: 20 * mib})
+	r := e.rreq(2 * gib)
+	r.DockerProject = "p"
+	a := e.reserve(t, r)
+	e.tick(t) // granted
+	e.tick(t) // measured while held
+	evs := e.events(t, a.ID, model.EventStandOverDeclared)
+	if len(evs) == 0 || !strings.HasSuffix(evs[0].Detail, "; largest containers: db 1.5 GiB, api 512 MiB, worker 300 MiB") {
+		t.Fatalf("events %+v", evs)
+	}
+}

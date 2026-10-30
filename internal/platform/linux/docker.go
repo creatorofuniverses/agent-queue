@@ -2,6 +2,7 @@ package linux
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,8 +33,9 @@ type DockerMeterConfig struct {
 }
 
 type standSample struct {
-	bytes uint64
-	at    time.Time
+	bytes      uint64
+	containers []platform.ContainerUsage
+	at         time.Time
 }
 
 // DockerMeter measures compose projects through the Docker Engine API and cgroupfs.
@@ -107,6 +110,16 @@ func (m *DockerMeter) Usage(project string) (uint64, bool) {
 	return s.bytes, true
 }
 
+func (m *DockerMeter) Containers(project string) ([]platform.ContainerUsage, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.samples[project]
+	if !ok || m.cfg.Now().Sub(s.at) > m.cfg.Stale {
+		return nil, false
+	}
+	return slices.Clone(s.containers), true
+}
+
 // Run refreshes immediately and then every Refresh until ctx ends.
 func (m *DockerMeter) Run(ctx context.Context) {
 	m.refresh(ctx)
@@ -127,15 +140,19 @@ func (m *DockerMeter) refresh(ctx context.Context) {
 	projects := append([]string(nil), m.watched...)
 	m.mu.Unlock()
 	for _, p := range projects {
-		b, err := m.measure(ctx, p)
+		cs, err := m.measure(ctx, p)
 		if err != nil {
 			continue
+		}
+		var b uint64
+		for _, c := range cs {
+			b += c.Bytes
 		}
 		m.mu.Lock()
 		// Only record if the project is still watched.
 		for _, w := range m.watched {
 			if w == p {
-				m.samples[p] = standSample{bytes: b, at: m.cfg.Now()}
+				m.samples[p] = standSample{bytes: b, containers: cs, at: m.cfg.Now()}
 				break
 			}
 		}
@@ -143,36 +160,49 @@ func (m *DockerMeter) refresh(ctx context.Context) {
 	}
 }
 
-func (m *DockerMeter) measure(ctx context.Context, project string) (uint64, error) {
+// measure is each running container of project with its memory, largest first.
+func (m *DockerMeter) measure(ctx context.Context, project string) ([]platform.ContainerUsage, error) {
 	filters, _ := json.Marshal(map[string][]string{"label": {"com.docker.compose.project=" + project}})
 	u := "http://docker/containers/json?all=0&filters=" + url.QueryEscape(string(filters))
 	ctx, cancel := context.WithTimeout(ctx, m.cfg.RequestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("docker api: %s", resp.Status)
+		return nil, fmt.Errorf("docker api: %s", resp.Status)
 	}
-	var list []struct{ Id string }
+	var list []struct {
+		Id     string
+		Names  []string
+		Labels map[string]string
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return 0, err
+		return nil, err
 	}
-	var total uint64
+	out := make([]platform.ContainerUsage, 0, len(list))
 	for _, c := range list {
 		b, err := containerMemory(m.cfg.CgroupRoot, c.Id)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
-		total += b
+		name := c.Labels["com.docker.compose.service"]
+		if name == "" && len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+		if name == "" {
+			name = c.Id[:min(12, len(c.Id))]
+		}
+		out = append(out, platform.ContainerUsage{Name: name, Bytes: b})
 	}
-	return total, nil
+	slices.SortStableFunc(out, func(a, b platform.ContainerUsage) int { return cmp.Compare(b.Bytes, a.Bytes) })
+	return out, nil
 }
 
 // containerMemory is memory.current minus inactive_file (saturating) of the container's cgroup,
