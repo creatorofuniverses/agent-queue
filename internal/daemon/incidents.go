@@ -107,13 +107,18 @@ func (s *incidentSampler) step(ctx context.Context) {
 
 // recordGroups records the part of delta kernel OOM kills that landed in a
 // known cgroup outside aq, one incident per cgroup, and returns the rest. A
-// cgroup new since the last sample counts from zero.
+// cgroup new since the last sample counts from zero. Ended cgroups come last:
+// a child that disappears moves its old kills into their count.
 func (s *incidentSampler) recordGroups(ctx context.Context, groups map[string]uint64, delta uint64) uint64 {
 	if groups == nil || s.groupPrev == nil {
 		return delta
 	}
 	now := time.Now().UTC()
-	for _, name := range slices.Sorted(maps.Keys(groups)) {
+	names := slices.DeleteFunc(slices.Sorted(maps.Keys(groups)), func(n string) bool { return n == platform.EndedCgroups })
+	if _, ok := s.groupPrev[platform.EndedCgroups]; ok {
+		names = append(names, platform.EndedCgroups)
+	}
+	for _, name := range names {
 		d := min(sub(groups[name], s.groupPrev[name]), delta)
 		if d > 0 {
 			s.record(ctx, now, "kernel_oom", float64(d), name)

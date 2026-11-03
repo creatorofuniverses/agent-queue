@@ -160,3 +160,32 @@ func TestKernelOOMByGroup(t *testing.T) {
 		t.Fatalf("by group %v, want %v", got, want)
 	}
 }
+
+func TestKernelOOMInEndedCgroups(t *testing.T) {
+	s, h, st := newIncTest(t, func() (bool, float64) { return false, 0 })
+	s.sliceOOMKills = func() (uint64, error) { return 0, nil }
+	groups := map[string]uint64{"app.slice": 1}
+	s.groupOOMKills = func() (map[string]uint64, error) { return maps.Clone(groups), nil }
+	h.SetOOMKills(10)
+	s.step(t.Context())
+	// The ended-cgroups count appears for the first time: a baseline, not kills.
+	groups = map[string]uint64{"app.slice": 1, platform.EndedCgroups: 8}
+	s.step(t.Context())
+	// 3 kills: 1 in a new zz.slice, 2 in a test slice created and removed between
+	// samples. app.slice is gone too, so its old kill moves into the ended count:
+	// that grows by 3, and taking it first would leave zz.slice nothing.
+	groups = map[string]uint64{"zz.slice": 1, platform.EndedCgroups: 11}
+	h.SetOOMKills(13)
+	s.step(t.Context())
+	incs, e := st.Incidents(t.Context(), time.Time{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	got := map[string]float64{}
+	for _, v := range incs {
+		got[v.Detail] += v.Value
+	}
+	if want := map[string]float64{"zz.slice": 1, platform.EndedCgroups: 2}; !maps.Equal(got, want) {
+		t.Fatalf("by group %v, want %v", got, want)
+	}
+}

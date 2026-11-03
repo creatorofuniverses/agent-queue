@@ -160,7 +160,7 @@ type IncidentStats struct {
 	OOMDTasks        int                `json:"oomd_tasks"`
 	PSIEpisodes      int                `json:"psi_episodes"`
 	PSIClosedSeconds float64            `json:"psi_closed_seconds"`
-	// GuardEngaged counts the times the host guard began cutting the aq slice;
+	// GuardEngaged counts the times the host guard's ceiling made the kernel OOM in the aq slice;
 	// GuardSnapshots are the latest three records of who held memory then.
 	GuardEngaged   int             `json:"guard_engaged"`
 	GuardSnapshots []GuardSnapshot `json:"guard_snapshots,omitempty"`

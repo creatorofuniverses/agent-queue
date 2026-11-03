@@ -166,8 +166,10 @@ and pressure gates prevent backfill. Forecasts are estimates, so actual starts c
 
 Checking at launch is not enough: running jobs and unrelated applications can
 grow. The host guard regularly lowers the task slice's memory ceiling when
-available memory approaches the configured reserve. When it starts cutting, it
-records a `guard_engaged` incident naming who held memory (largest cgroups and
+available memory approaches the configured reserve. When its ceiling makes the
+kernel OOM in the slice (the slice's own `memory.events.local`, so a task's own
+limit does not count), it records a `guard_engaged` incident naming who held
+memory (largest cgroups and
 processes, memory in no cgroup), at most every 5 minutes: the shortage usually
 comes from outside aq and is gone before anyone looks. Task and pool limits help
 contain memory exhaustion, but they are not a guarantee against every host OOM.

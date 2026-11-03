@@ -15,12 +15,12 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
-// culpritEvery bounds how often a guard engagement is snapshotted: an episode
-// that flaps should not walk /proc every second.
+// culpritEvery bounds how often a guard cut is snapshotted: one shortage makes
+// the kernel OOM many times, and /proc should not be walked every second.
 const culpritEvery = 5 * time.Minute
 
-// culpritRecorder records who held the host's memory when the host guard began
-// cutting the aq slice, as a guard_engaged incident: the shortage that kills aq
+// culpritRecorder records who held the host's memory when the host guard's
+// ceiling made the kernel OOM in the aq slice, as a guard_engaged incident: the shortage that kills aq
 // tasks usually comes from outside aq and is gone a minute later.
 type culpritRecorder struct {
 	st       *store.Store

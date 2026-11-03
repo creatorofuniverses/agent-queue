@@ -44,6 +44,11 @@ type MemInfo struct {
 	Free                                  uint64 // MemFree: not even used as cache
 }
 
+// EndedCgroups is the OtherOOMKills key for kills in the user's cgroups that no
+// longer exist, such as a test slice or a session that has ended: their own
+// counters are gone, the user slice above them keeps the sum.
+const EndedCgroups = "ended cgroups"
+
 type Executor interface {
 	Capabilities() Capabilities
 	Launch(ctx context.Context, spec LaunchSpec) (unitName string, err error)
@@ -54,9 +59,13 @@ type Executor interface {
 	ListManaged(ctx context.Context) ([]model.ItemID, error)  // ids by prefixed cgroup/unit
 	SliceCurrent() (uint64, error)
 	SliceOOMKills() (uint64, error)
+	// SliceOOMs counts the OOMs at the slice's own ceiling (memory.events.local),
+	// not at the limit of a task inside it.
+	SliceOOMs() (uint64, error)
 	TeardownSliceOOMKills() (uint64, error)
-	// OtherOOMKills: oom_kill of every other slice of the user manager and of
-	// system.slice, by cgroup name, so kills outside aq can be told apart.
+	// OtherOOMKills: oom_kill of every other slice of the user manager, of the
+	// user's login sessions and of system.slice, by cgroup name, so kills outside
+	// aq can be told apart; EndedCgroups holds the user's cgroups removed since.
 	OtherOOMKills() (map[string]uint64, error)
 	SliceCeiling() (uint64, error) // actual memory.max; math.MaxUint64 when unlimited
 	SetSliceCeiling(max, high uint64) error
@@ -95,7 +104,7 @@ type StandMeter interface {
 }
 
 // MemorySnapshot is who held the host's memory at one moment, recorded when
-// the host guard starts cutting the aq slice so the cause can be named later.
+// the host guard's ceiling makes the kernel OOM in the aq slice so the cause can be named later.
 type MemorySnapshot struct {
 	// Uncharged is memory in use but charged to no cgroup: the kernel, drivers
 	// and compressed swap (zram).

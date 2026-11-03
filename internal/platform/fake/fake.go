@@ -24,6 +24,7 @@ type Executor struct {
 	beforeStop   func(model.ItemID)
 	sliceCur     uint64
 	sliceOOM     uint64
+	sliceOOMs    uint64
 	teardownOOM  uint64
 	ceilings     [][2]uint64
 	actualMax    uint64
@@ -180,6 +181,19 @@ func (e *Executor) SliceOOMKills() (uint64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.sliceOOM, nil
+}
+
+// SetSliceOOMs sets the OOMs at the slice's own ceiling.
+func (e *Executor) SetSliceOOMs(n uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sliceOOMs = n
+}
+
+func (e *Executor) SliceOOMs() (uint64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.sliceOOMs, nil
 }
 
 func (e *Executor) SetSliceCeiling(max, high uint64) error {

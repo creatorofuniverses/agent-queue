@@ -337,10 +337,13 @@ when a reservation is released or its teardown starts; a daemon restart while
 it is held loses the peaks seen before it.
 
 Kernel OOM kills outside aq are split by the cgroup they happened in: a slice of
-the user manager (`app.slice`, a test suite's own slice) or `system.slice`
-(services and docker containers), e.g. `kernel OOM kills outside aq: 134
-(aqtest.slice 120, app.slice 2)`. Kills left unnamed happened elsewhere or in a
-cgroup that came and went between two samples (every 10 s).
+the user manager (`app.slice`, a test suite's own slice), a login session where
+agents run their own commands (`session-3.scope`) or `system.slice` (services
+and docker containers), e.g. `kernel OOM kills outside aq: 134 (aqtest.slice
+120, ended cgroups 9, app.slice 2)`. `ended cgroups` are the user's cgroups
+removed before aq could name them, such as a test suite's slice that came and
+went between two samples (every 10 s). Kills left unnamed happened elsewhere,
+outside the user's slice and `system.slice`.
 
 ### Disk writes
 
@@ -456,8 +459,9 @@ aq logs <id> --stream stderr
 `--memory` or reduce the command's parallelism. `OOM_HOST_GUARD` means the host
 guard, which temporarily lowered the slice ceiling because the machine was short
 of memory, usually because of something outside aq: a larger `--memory` does
-not help, run it again once memory is back. Each time the guard starts cutting,
-aq records who held memory then (at most every 5 minutes): the largest cgroups
+not help, run it again once memory is back. Each time the guard's ceiling makes
+the kernel kill in the slice, aq records who held memory then (at most every 5
+minutes; a ceiling below the pool that kills nothing is not recorded): the largest cgroups
 and processes (with the agent that started each, if any) and the memory in no
 cgroup (kernel, drivers, zram). `aq stats`
 shows the count and the latest three under Incidents ("host guard cut the aq

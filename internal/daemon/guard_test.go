@@ -126,15 +126,27 @@ func TestGuardSetCeilingFailureRetries(t *testing.T) {
 	}
 }
 
-func TestGuardReportsEachEngagementOnce(t *testing.T) {
-	g, _, host, _ := newGuardTest(20*gib, 2*gib)
+func TestGuardReportsCutsThatHitTheCeiling(t *testing.T) {
+	g, ex, host, _ := newGuardTest(4*gib, 2*gib) // ceiling 3G: below the pool from the first step
 	n := 0
 	g.engaged = func() { n++ }
-	for _, avail := range []uint64{20 * gib, 4 * gib, 4 * gib, 3 * gib, 20 * gib, 4 * gib} {
-		host.Set(platform.MemInfo{Total: 30 * gib, Available: avail})
-		g.step()
+	ex.SetSliceOOMs(5) // OOMs from before the daemon started are a baseline
+	g.step()
+	g.step()
+	if n != 0 { // a ceiling below the pool alone kills nothing
+		t.Fatalf("engaged %d times before any OOM at the ceiling", n)
 	}
-	if n != 2 { // cut twice: at the first 4 GiB and again after it let go
-		t.Fatalf("engaged %d times", n)
+	ex.SetSliceOOMs(6)
+	g.step()
+	g.step()
+	if n != 1 {
+		t.Fatalf("engaged %d times after one OOM at the guard's ceiling", n)
+	}
+	host.Set(platform.MemInfo{Total: 30 * gib, Available: 20 * gib})
+	g.step() // the guard lets go: the ceiling is the pool again
+	ex.SetSliceOOMs(7)
+	g.step() // an OOM at the pool limit is not the guard's
+	if n != 1 {
+		t.Fatalf("engaged %d times after an OOM at the pool limit", n)
 	}
 }

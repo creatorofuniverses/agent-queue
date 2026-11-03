@@ -18,12 +18,13 @@ type guard struct {
 	host      platform.HostMetrics
 	cfg       config.Config
 	setActive func(bool)
-	// engaged is called when the guard starts cutting the slice below the pool,
-	// once per episode, so the cause of the shortage can be recorded.
+	// engaged is called when the guard's ceiling made the kernel OOM in the
+	// slice, so the cause of the shortage can be recorded.
 	engaged func()
 	applied uint64
 	have    bool
-	active  bool
+	ooms    uint64 // OOMs at the slice's own ceiling, as last read
+	oomSeen bool
 }
 
 // RunGuard keeps the slice ceiling below what the host can spare, so that
@@ -44,6 +45,7 @@ func RunGuard(ctx context.Context, exec platform.Executor, host platform.HostMet
 
 // step samples once. On any read error it keeps the applied ceiling.
 func (g *guard) step() {
+	g.checkCut()
 	mem, err := g.host.Memory()
 	if err != nil {
 		slog.Warn("host guard: read host memory", "err", err)
@@ -76,11 +78,7 @@ func (g *guard) step() {
 	active := target < g.cfg.PoolMemory
 	if active {
 		g.setActive(true) // before the write: the OOM kill happens inside it
-		if !g.active && g.engaged != nil {
-			g.engaged()
-		}
 	}
-	g.active = active
 	// memory.high == memory.max: a soft limit below max only throttles without swap.
 	// The write blocks for reclaim/OOM; bounded, but may take seconds.
 	if err := g.exec.SetSliceCeiling(target, target); err != nil {
@@ -92,4 +90,18 @@ func (g *guard) step() {
 	if !active {
 		g.setActive(false)
 	}
+}
+
+// checkCut reports an OOM at the slice's own ceiling while that ceiling was the
+// guard's. A ceiling below the pool alone is no cut: when the pool is close to
+// the host's memory, the guard holds one from the moment the daemon starts.
+func (g *guard) checkCut() {
+	n, err := g.exec.SliceOOMs()
+	if err != nil {
+		return // the next read catches up
+	}
+	if g.oomSeen && n > g.ooms && g.have && g.applied < g.cfg.PoolMemory && g.engaged != nil {
+		g.engaged()
+	}
+	g.ooms, g.oomSeen = n, true
 }

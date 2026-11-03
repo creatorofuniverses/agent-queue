@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 // userManagerCgroup returns the user@UID.service cgroup (relative to the cgroup root)
@@ -154,11 +155,20 @@ func (e *Executor) SliceOOMKills() (uint64, error) {
 	return readEvent(filepath.Join(e.sliceDir(), "memory.events"), "oom_kill")
 }
 
-// OtherOOMKills reads oom_kill of each child of the user manager's cgroup and of
-// system.slice. aq's own slices are left out (their kills are subtracted from a
-// parent slice that holds them); children without a memory controller are skipped.
+// SliceOOMs reads the local "oom" event: the kernel records it on the cgroup
+// whose limit was hit, so a task's own --memory does not count here.
+func (e *Executor) SliceOOMs() (uint64, error) {
+	return readEvent(filepath.Join(e.sliceDir(), "memory.events.local"), "oom")
+}
+
+// OtherOOMKills reads oom_kill of each child of the user manager's cgroup, of
+// the user's login sessions next to it and of system.slice. aq's own slices are
+// left out (their kills are subtracted from a parent slice that holds them);
+// children without a memory controller are skipped. The user slice's count,
+// which keeps the kills of children removed since, gives EndedCgroups.
 func (e *Executor) OtherOOMKills() (map[string]uint64, error) {
 	manager := filepath.Join(e.cfg.CgroupRoot, e.manager)
+	user := filepath.Dir(manager)
 	entries, err := os.ReadDir(manager)
 	if err != nil {
 		return nil, err
@@ -169,15 +179,17 @@ func (e *Executor) OtherOOMKills() (map[string]uint64, error) {
 			dirs[en.Name()] = filepath.Join(manager, en.Name())
 		}
 	}
-	own := []string{e.sliceDir(), e.teardownSliceDir()}
-	out := map[string]uint64{}
-	for name, dir := range dirs {
-		if slices.Contains(own, dir) {
-			continue
+	sessions, _ := os.ReadDir(user) // unreadable: no sessions, no ended count
+	for _, en := range sessions {
+		if p := filepath.Join(user, en.Name()); en.IsDir() && p != manager {
+			dirs[en.Name()] = p
 		}
+	}
+	own := []string{e.sliceDir(), e.teardownSliceDir()}
+	kills := func(dir string) (uint64, bool) {
 		n, err := readEvent(filepath.Join(dir, "memory.events"), "oom_kill")
 		if err != nil {
-			continue // gone or no memory controller
+			return 0, false // gone or no memory controller
 		}
 		for _, o := range own {
 			if strings.HasPrefix(o, dir+string(filepath.Separator)) {
@@ -185,7 +197,23 @@ func (e *Executor) OtherOOMKills() (map[string]uint64, error) {
 				n -= min(n, k)
 			}
 		}
-		out[name] = n
+		return n, true
+	}
+	out := map[string]uint64{}
+	var named uint64 // the part of the user slice's count that live children hold
+	for name, dir := range dirs {
+		if slices.Contains(own, dir) {
+			continue
+		}
+		if n, ok := kills(dir); ok {
+			out[name] = n
+			if strings.HasPrefix(dir, user+string(filepath.Separator)) {
+				named += n
+			}
+		}
+	}
+	if n, ok := kills(user); ok && len(sessions) > 0 {
+		out[platform.EndedCgroups] = n - min(n, named)
 	}
 	return out, nil
 }

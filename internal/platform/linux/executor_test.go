@@ -151,6 +151,7 @@ func fakeCgroup(t *testing.T) (*Executor, string) {
 	}
 	write("memory.current", "1234\n")
 	write("memory.events", "low 0\nhigh 0\nmax 4\noom 2\noom_kill 3\noom_group_kill 0\n")
+	write("memory.events.local", "low 0\nhigh 0\nmax 1\noom 1\noom_kill 0\noom_group_kill 0\n")
 	write("memory.max", "max\n")
 	write("memory.high", "max\n")
 	write("aqtest-one.service/cgroup.procs", "42\n")
@@ -177,6 +178,9 @@ func TestCgroupReads(t *testing.T) {
 	}
 	if v, err := e.SliceOOMKills(); err != nil || v != 3 {
 		t.Fatalf("SliceOOMKills %d %v", v, err)
+	}
+	if v, err := e.SliceOOMs(); err != nil || v != 1 { // the slice's own ceiling, not its tasks'
+		t.Fatalf("SliceOOMs %d %v", v, err)
 	}
 	if v, err := e.MemoryCurrent("one"); err != nil || v != 777 {
 		t.Fatalf("MemoryCurrent %d %v", v, err)
@@ -489,8 +493,14 @@ func TestOtherOOMKills(t *testing.T) {
 	write(filepath.Join(manager, "session.slice/cgroup.procs"), "") // no memory controller
 	write(filepath.Join(manager, "cgroup.procs"), "")
 	write(filepath.Join(e.cfg.CgroupRoot, "system.slice/memory.events"), "oom_kill 2\n")
+	user := filepath.Dir(manager)
+	write(filepath.Join(user, "session-3.scope/memory.events"), "oom_kill 4\n") // an agent's login session
+	// The user slice counts its whole tree: aq's slices 3+1, the cgroups above 5+7+4,
+	// and 6 in cgroups removed since (a test slice, an ended session).
+	write(filepath.Join(user, "memory.events"), "oom_kill 26\n")
 	got, err := e.OtherOOMKills()
-	if want := map[string]uint64{"app.slice": 5, "aqe2e.slice": 7, "system.slice": 2}; err != nil || !maps.Equal(got, want) {
+	want := map[string]uint64{"app.slice": 5, "aqe2e.slice": 7, "session-3.scope": 4, "system.slice": 2, platform.EndedCgroups: 6}
+	if err != nil || !maps.Equal(got, want) {
 		t.Fatalf("OtherOOMKills %v %v, want %v", got, err, want)
 	}
 }
