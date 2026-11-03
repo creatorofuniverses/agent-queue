@@ -1,0 +1,186 @@
+package linux
+
+import (
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// ProjectRoot is the project a working directory belongs to, by the same rule
+// as the profiles but without running git: walk up to the nearest .git. A .git
+// directory makes its parent the root. A .git file ("gitdir: X", a worktree)
+// is followed through X/commondir to the main repository, so every worktree
+// of a repository is one project; without such a link the checkout itself is
+// the root. With no repository above dir, dir is returned.
+func ProjectRoot(dir string) string {
+	for d := dir; ; d = filepath.Dir(d) {
+		g := filepath.Join(d, ".git")
+		if fi, err := os.Stat(g); err == nil {
+			if fi.IsDir() {
+				return d
+			}
+			return worktreeRoot(d, g)
+		}
+		if parent := filepath.Dir(d); parent == d {
+			return dir
+		}
+	}
+}
+
+func worktreeRoot(checkout, gitFile string) string {
+	b, err := os.ReadFile(gitFile)
+	if err != nil {
+		return checkout
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	if !ok {
+		return checkout
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(checkout, gitdir)
+	}
+	c, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return checkout
+	}
+	common := strings.TrimSpace(string(c))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitdir, common)
+	}
+	common = filepath.Clean(common)
+	if filepath.Base(common) == ".git" {
+		return filepath.Dir(common)
+	}
+	return checkout
+}
+
+// procIO reads the write counters of every process that shares a cgroup with
+// an agent, breadth-first from the roots (processes whose parent is not in the
+// set), so a consumer sees ancestors before descendants. A process that
+// vanishes or cannot be read is skipped.
+func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platform.ProcIO {
+	hosts := map[string]bool{}
+	for _, p := range procs {
+		if p.agent >= 0 && !p.inAQOrDocker && p.cgroup != "" {
+			hosts[p.cgroup] = true
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	in := map[int]bool{}
+	var pids []int
+	for pid, p := range procs {
+		if hosts[p.cgroup] && !p.inAQOrDocker {
+			in[pid] = true
+			pids = append(pids, pid)
+		}
+	}
+	sort.Ints(pids)
+	children := map[int][]int{}
+	var queue []int
+	for _, pid := range pids {
+		if pp := procs[pid].ppid; in[pp] && pp != pid {
+			children[pp] = append(children[pp], pid)
+		} else {
+			queue = append(queue, pid)
+		}
+	}
+	var out []platform.ProcIO
+	for seen := map[int]bool{}; len(queue) > 0; queue = queue[1:] {
+		pid := queue[0]
+		if seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		queue = append(queue, children[pid]...)
+		p := procs[pid]
+		start, ok := procStart(filepath.Join(p.dir, "stat"))
+		if !ok {
+			continue
+		}
+		bytes, ok := procWrites(filepath.Join(p.dir, "io"))
+		if !ok {
+			continue
+		}
+		e := platform.ProcIO{PID: pid, PPID: p.ppid, Start: start, Bytes: bytes,
+			Within: sourceKey(p.cgroup, m.manager, m.aqRels(), nil)}
+		if p.agent >= 0 {
+			e.Agent = agents[p.agent]
+			e.Project = m.project(p.dir)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func (m *UsageMeter) aqRels() []string {
+	rels := make([]string, 0, len(m.cfg.Slices))
+	for _, s := range m.cfg.Slices {
+		rels = append(rels, filepath.Join(m.manager, sliceCgroupPath(s)))
+	}
+	return rels
+}
+
+// project is the project root of a process's working directory, cached by
+// directory ("" when the directory cannot be read).
+func (m *UsageMeter) project(procDir string) string {
+	cwd, err := os.Readlink(filepath.Join(procDir, "cwd"))
+	if err != nil {
+		return ""
+	}
+	if r, ok := m.projects[cwd]; ok {
+		return r
+	}
+	r := ProjectRoot(cwd)
+	m.projects[cwd] = r
+	return r
+}
+
+// procStart is starttime, field 22 of /proc/PID/stat. The command name in
+// field 2 may hold spaces and parentheses, so fields count from the last ')'.
+func procStart(path string) (uint64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	s := string(b)
+	i := strings.LastIndexByte(s, ')')
+	if i < 0 {
+		return 0, false
+	}
+	f := strings.Fields(s[i+1:]) // f[0] is field 3
+	if len(f) < 20 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(f[19], 10, 64)
+	return n, err == nil
+}
+
+// procWrites is write_bytes - cancelled_write_bytes from /proc/PID/io.
+func procWrites(path string) (int64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	var w, c int64
+	var haveW bool
+	for _, l := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(l, ":")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "write_bytes":
+			w, err = strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			haveW = err == nil
+		case "cancelled_write_bytes":
+			c, _ = strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		}
+	}
+	return w - c, haveW
+}

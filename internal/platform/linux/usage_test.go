@@ -97,3 +97,80 @@ func TestUsageMeterCountsWhatAgentsRun(t *testing.T) {
 		t.Fatalf("codex %+v", a)
 	}
 }
+
+func TestUsageProcIO(t *testing.T) {
+	root := t.TempDir()
+	manager := "user.slice/user-1000.slice/user@1000.service"
+	usageFile(t, root, "proc/self/cgroup", "0::/"+manager+"/app.slice/aq.service\n")
+	repo := filepath.Join(root, "r")
+	if e := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); e != nil {
+		t.Fatal(e)
+	}
+	session := "user.slice/user-1000.slice/session-3.scope"
+	proc := func(pid, ppid int, comm, cg string, io string) {
+		base := fmt.Sprintf("proc/%d/", pid)
+		usageFile(t, root, base+"comm", comm+"\n")
+		usageFile(t, root, base+"cmdline", comm+"\x00")
+		usageFile(t, root, base+"status", fmt.Sprintf("Name:\t%s\nPPid:\t%d\n", comm, ppid))
+		usageFile(t, root, base+"stat", fmt.Sprintf("%d (%s x) S %d 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 %d 0 0\n", pid, comm, ppid, 1000+pid))
+		usageFile(t, root, base+"cgroup", "0::/"+cg+"\n")
+		usageFile(t, root, base+"smaps_rollup", "Pss: 1 kB\n")
+		if io != "" {
+			usageFile(t, root, base+"io", io)
+		}
+		if e := os.Symlink(repo, filepath.Join(root, base, "cwd")); e != nil {
+			t.Fatal(e)
+		}
+	}
+	proc(10, 1, "claude", session, "rchar: 1\nwrite_bytes: 500\ncancelled_write_bytes: 100\n")
+	proc(11, 10, "bash", session, "write_bytes: 70\ncancelled_write_bytes: 0\n")
+	proc(12, 11, "python", session, "write_bytes: 5\ncancelled_write_bytes: 9\n")
+	proc(13, 11, "gone", session, "") // io unreadable: skipped
+	proc(20, 1, "stranger", session, "write_bytes: 3\ncancelled_write_bytes: 0\n")
+	proc(30, 1, "other", "user.slice/user-1000.slice/session-4.scope", "write_bytes: 9\ncancelled_write_bytes: 0\n")
+	m := NewUsageMeter(UsageMeterConfig{ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg")})
+	v, e := m.Usage(context.Background(), []string{"claude"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	idx := map[int]int{}
+	for i, p := range v.IO {
+		idx[p.PID] = i
+	}
+	for _, pid := range []int{10, 11, 12, 20} {
+		if _, ok := idx[pid]; !ok {
+			t.Fatalf("pid %d missing: %+v", pid, v.IO)
+		}
+	}
+	for _, pid := range []int{13, 30} {
+		if _, ok := idx[pid]; ok {
+			t.Fatalf("pid %d must be absent: %+v", pid, v.IO)
+		}
+	}
+	a := v.IO[idx[10]]
+	if a.Agent != "claude" || a.Project != repo || a.Within != "session:session-3.scope" || a.Bytes != 400 || a.PPID != 1 || a.Start != 1010 {
+		t.Errorf("agent entry = %+v", a)
+	}
+	if b := v.IO[idx[12]]; b.Agent != "" || b.Project != "" || b.Bytes != -4 || b.PPID != 11 || b.Within != "session:session-3.scope" {
+		t.Errorf("descendant entry = %+v", b)
+	}
+	if !(idx[10] < idx[11] && idx[11] < idx[12]) {
+		t.Errorf("order = %+v", v.IO)
+	}
+}
+
+// The usage sampler and the disk meter must name the same source for a cgroup.
+func TestSourceKeyMatchesDiskMeter(t *testing.T) {
+	cfg := diskTree(t, diskIOTree())
+	s, err := NewDiskMeter(cfg).Snapshot(context.Background())
+	if err != nil || len(s.Cgroups) == 0 {
+		t.Fatal(s, err)
+	}
+	containers, _ := cfg.Containers(context.Background())
+	aq := []string{diskManager + "/aqtest.slice"}
+	for _, c := range s.Cgroups {
+		if got := sourceKey(c.ID, diskManager, aq, containers); got != c.Source {
+			t.Errorf("sourceKey(%q) = %q, snapshot says %q", c.ID, got, c.Source)
+		}
+	}
+}

@@ -142,6 +142,9 @@ type AgentUsage struct {
 type Usage struct {
 	Agents        []AgentUsage
 	Docker, Tasks uint64
+	// IO is the write counters of every process in a cgroup that holds an
+	// agent (outside aq and docker), ancestors before descendants.
+	IO []ProcIO
 }
 type UsageMeter interface {
 	Usage(ctx context.Context, agents []string) (Usage, error)

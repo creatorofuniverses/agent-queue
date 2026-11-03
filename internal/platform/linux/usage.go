@@ -18,8 +18,9 @@ type UsageMeterConfig struct {
 	Slices               []string
 }
 type UsageMeter struct {
-	cfg     UsageMeterConfig
-	manager string
+	cfg      UsageMeterConfig
+	manager  string
+	projects map[string]string // working directory -> project root; the sampler runs one pass at a time
 }
 
 func NewUsageMeter(cfg UsageMeterConfig) *UsageMeter {
@@ -30,7 +31,7 @@ func NewUsageMeter(cfg UsageMeterConfig) *UsageMeter {
 		cfg.CgroupRoot = "/sys/fs/cgroup"
 	}
 	b, _ := os.ReadFile(filepath.Join(cfg.ProcRoot, "self/cgroup"))
-	return &UsageMeter{cfg: cfg, manager: userManagerCgroup(string(b), os.Getuid())}
+	return &UsageMeter{cfg: cfg, manager: userManagerCgroup(string(b), os.Getuid()), projects: map[string]string{}}
 }
 func workingSet(dir string) (uint64, error) {
 	cur, e := readUint(filepath.Join(dir, "memory.current"))
@@ -56,6 +57,15 @@ func workingSet(dir string) (uint64, error) {
 // A cgroup removed between open and read returns ENODEV instead of ENOENT.
 func cgroupGone(e error) bool        { return errors.Is(e, fs.ErrNotExist) || errors.Is(e, syscall.ENODEV) }
 func withinCG(path, dir string) bool { return path == dir || strings.HasPrefix(path, dir+"/") }
+
+// usageProc is what the single /proc pass learns about one process.
+type usageProc struct {
+	dir          string
+	ppid, agent  int // agent indexes the agent list, -1 when the process is none
+	cgroup       string
+	inAQOrDocker bool
+}
+
 func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage, error) {
 	v := platform.Usage{Agents: make([]platform.AgentUsage, len(agents))}
 	var excluded []string
@@ -91,12 +101,7 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		return v, e
 	}
 	// One pass reads every process; PSS is read only for agents and what they run.
-	type proc struct {
-		dir          string
-		ppid, agent  int
-		inAQOrDocker bool
-	}
-	procs := map[int]*proc{}
+	procs := map[int]*usageProc{}
 	for _, ent := range ents {
 		if e := ctx.Err(); e != nil {
 			return v, e
@@ -112,7 +117,7 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		}
 		cmd, _ := os.ReadFile(filepath.Join(dir, "cmdline"))
 		argv, _, _ := strings.Cut(string(cmd), "\x00")
-		p := &proc{dir: dir, agent: -1, ppid: parentPID(filepath.Join(dir, "status"))}
+		p := &usageProc{dir: dir, agent: -1, ppid: parentPID(filepath.Join(dir, "status"))}
 		for i, name := range agents {
 			if strings.TrimSpace(string(comm)) == name || filepath.Base(argv) == name {
 				p.agent = i
@@ -126,6 +131,7 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		for _, line := range strings.Split(string(cg), "\n") {
 			if path, ok := strings.CutPrefix(line, "0::"); ok {
 				path = strings.Trim(path, "/")
+				p.cgroup = path
 				p.inAQOrDocker = slices.ContainsFunc(excluded, func(x string) bool { return withinCG(path, x) })
 			}
 		}
@@ -157,6 +163,7 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 			v.Agents[a].SpawnedProcs++
 		}
 	}
+	v.IO = m.procIO(procs, agents)
 	return v, nil
 }
 
