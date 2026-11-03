@@ -148,21 +148,33 @@ now and then with `smartctl -A`.
 
 ## Results on a real workstation
 
-**To be added — measurements have not been collected yet.**
-
-This section will show the workload, machine specifications, aq configuration,
-and measurement period alongside the results. No performance claim is implied.
+Six days of everyday use, 28 October to 3 November 2026, on the workstation
+from the SSD story above: an Intel Core i9-13900H (14 cores, 20 threads),
+31 GiB of RAM with 8 GiB of zram swap, a 1 TB NVMe drive, Fedora with Linux
+7.1. aq ran with `pool_memory = "27G"`, `pool_cpus = 16`, a 10% memory reserve
+and backfill on. Claude Code and Codex sessions worked in 62 project
+directories: Python, Go and Flutter test suites, Docker Compose stands with
+browser tests, image and data builds. The numbers come from `aq stats`, the
+kernel log and the kernel's I/O counters.
 
 | Measurement | Result |
 |---|---|
-| Workload, task count, and concurrent agents | To be added |
-| Completed, failed, and cancelled tasks | To be added |
-| Queue wait and total completion time | To be added |
-| Peak memory and host memory-pressure incidents | To be added |
-| Comparable run without aq | To be added |
+| Workload | 1,061 tasks (581 from Claude Code, 476 from Codex) and 263 reservations; 653 of the tasks ran inside a reservation. At most 8 jobs (tasks and reservations) were active at once; tasks ran 79 hours in total. |
+| Outcomes | 617 tasks succeeded and 362 failed on their own (mostly failing tests). 30 were cancelled and 5 timed out. 32 were rejected at submit, mostly a second nested task sent while the reservation's task budget was in use. |
+| Killed for memory | 7 tasks at their own `--memory` limit, 7 by the host guard when the machine ran short. |
+| Queue wait | Tasks that went through the queue: median 2 ms, 90th percentile 42 ms; 27 of 393 waited over a minute, the longest 52 minutes. Reservations: median 5 ms, 90th percentile 3.5 minutes. The queue had work waiting 8.8 hours in all, mostly because the host itself was short of free memory, not the pool. |
+| Memory | aq tasks held up to 10.3 GiB at once. The host's available memory fell to 3.5 GiB at its lowest (17.5 GiB on average) and zram swap filled up. Memory pressure closed admission twice, 2 minutes 20 seconds in total. |
+| Host OOM | The kernel log shows no host-wide OOM kill: every kernel OOM kill hit a cgroup limit (aq tasks, docker containers, aq's own test suite). |
+| Disk writes | aq tasks wrote 63 GiB to disk: a median run wrote 0.14 MiB, and one mobile test suite wrote 47 GiB in a single run. The drive took 3.0 TiB in the whole period, about 20 GB an hour, and aq tasks wrote about 2% of it. The rest came from work aq does not measure: commands agents ran themselves (one long agent session wrote about 1 TiB), docker containers, including those of reserved stands, and the system journal. |
+| Agents nudged | The optional hook reminded agents 259 times when they started heavy work outside aq: 149 times on the worst day, about 10 a day by the end of the week. |
+| Comparable run without aq | Not measured. Before aq, the drive took 1.2 TB in five hours (about 240 GB an hour). The workload differs, and some test databases moved to tmpfs with `fsync=off` in the same weeks, so the two figures are not a controlled comparison. |
 
-`aq stats --since 7d` and `aq stats export --since 7d --format jsonl` provide
-recorded data for the write-up. A comparison without aq needs a separate run.
+In short: no host-wide OOM kill, and every job ended with a recorded outcome.
+aq does not reach the work agents run around it, and most of the disk wear in
+this period came from there.
+
+`aq stats --since 7d` and `aq stats export --since 7d --format jsonl` give the
+same figures for your own machine.
 
 ## Read more
 
