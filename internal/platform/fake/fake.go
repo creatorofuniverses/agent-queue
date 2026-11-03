@@ -431,3 +431,34 @@ func (e *Executor) TeardownSliceOOMKills() (uint64, error) {
 	defer e.mu.Unlock()
 	return e.teardownOOM, nil
 }
+
+// DiskMeter returns the snapshot it was given.
+type DiskMeter struct {
+	mu   sync.Mutex
+	snap platform.DiskSnapshot
+	err  error
+}
+
+func (m *DiskMeter) Set(s platform.DiskSnapshot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.snap = s
+	m.err = nil
+}
+func (m *DiskMeter) Fail(e error) { m.mu.Lock(); defer m.mu.Unlock(); m.err = e }
+func (m *DiskMeter) Snapshot(ctx context.Context) (platform.DiskSnapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.snap
+	s.Cgroups = append([]platform.CgroupIO(nil), s.Cgroups...)
+	s.Procs = append([]platform.ProcIO(nil), s.Procs...)
+	if m.snap.Parents != nil {
+		s.Parents = map[string]uint64{}
+		for k, v := range m.snap.Parents {
+			s.Parents[k] = v
+		}
+	}
+	return s, m.err
+}
+
+var _ platform.DiskMeter = (*DiskMeter)(nil)

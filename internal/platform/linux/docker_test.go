@@ -201,3 +201,23 @@ func TestDockerMeterMeasuresNewProjectAtOnce(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+func TestDockerMeterSources(t *testing.T) {
+	f := newDockerFixture(t)
+	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/containers/json" || r.URL.Query().Get("all") != "0" || r.URL.Query().Get("filters") != "" {
+			http.Error(w, "unexpected "+r.URL.String(), 400)
+			return
+		}
+		w.Write([]byte(`[{"Id":"aaa","Names":["/a"],"Labels":{"com.docker.compose.project":"runi"}},{"Id":"bbb","Names":["/lonely"]},{"Id":"ccc123456789012345"}]`))
+	})
+	now := time.Unix(1000, 0)
+	got, err := f.meter(&now).Sources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"aaa": "docker:runi", "bbb": "docker:lonely", "ccc123456789012345": "docker:ccc123456789"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v", got)
+	}
+}

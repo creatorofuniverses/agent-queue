@@ -267,3 +267,42 @@ func statValue(path, key string) (uint64, error) {
 }
 
 var _ platform.StandMeter = (*DockerMeter)(nil)
+
+// Sources maps every running container's id to its level-1 disk source key:
+// "docker:<compose project>", or "docker:<name>" for a container outside compose.
+func (m *DockerMeter) Sources(ctx context.Context) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, m.cfg.RequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/containers/json?all=0", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("docker api: %s", resp.Status)
+	}
+	var list []struct {
+		Id     string
+		Names  []string
+		Labels map[string]string
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(list))
+	for _, c := range list {
+		name := c.Labels["com.docker.compose.project"]
+		if name == "" && len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+		if name == "" {
+			name = c.Id[:min(12, len(c.Id))]
+		}
+		out[c.Id] = "docker:" + name
+	}
+	return out, nil
+}

@@ -154,3 +154,37 @@ type OOMKill struct {
 type OOMKillLog interface {
 	Kills(ctx context.Context) ([]OOMKill, error)
 }
+
+// ProcIO is one process's cumulative disk writes, read from /proc/PID/io.
+type ProcIO struct {
+	PID, PPID int
+	// Start is starttime (field 22 of /proc/PID/stat): with PID it identifies the process across PID reuse.
+	Start   uint64
+	Agent   string // the agent it descends from, "" when none
+	Project string // the project of its working directory, "" when unknown
+	// Within is the level-1 source key of the process's cgroup ("" when it is no source).
+	Within string
+	// Bytes is write_bytes - cancelled_write_bytes. It can shrink, so it is signed.
+	Bytes int64
+}
+
+// CgroupIO is the cumulative physical-disk writes of one cgroup that belongs to a level-1 source.
+type CgroupIO struct {
+	Source string // level-1 source key, e.g. "system:systemd-journald.service"
+	ID     string // cgroup path relative to the cgroup root: unique, a source may gather several (a project's containers)
+	Parent string // "system", "user" or "session": whose "<parent>:ended" gets its tail; "" for none (aq, cgroupfs containers)
+	Bytes  uint64 // cumulative wbytes on physical disks
+}
+
+// DiskSnapshot is one raw reading of cumulative disk-write counters.
+type DiskSnapshot struct {
+	Host    uint64            // cumulative bytes written to physical disks
+	Cgroups []CgroupIO        // sources that expose an io.stat; the rest are skipped, not counted as zero
+	Parents map[string]uint64 // "system", "user", "session" -> the parent's cumulative counter (its own writes plus its children's)
+	Procs   []ProcIO          // filled by the usage sampler, not by the DiskMeter
+}
+
+// DiskMeter reads the raw disk-write counters; it has no state of its own.
+type DiskMeter interface {
+	Snapshot(ctx context.Context) (DiskSnapshot, error) // Procs is empty
+}
