@@ -80,9 +80,12 @@ func (m *DiskMeter) Snapshot(ctx context.Context) (platform.DiskSnapshot, error)
 		return ok
 	}
 
-	// system.slice: direct children; containers under the cgroupfs driver.
+	// system.slice: every direct child, sub-slices, mounts and sockets too,
+	// so only cgroups that ended show as system:ended (a sub-slice keeps the
+	// writes of its short-lived template units); containers under the
+	// cgroupfs driver.
 	parent("system", "system.slice")
-	for _, name := range unitDirs(filepath.Join(root, "system.slice")) {
+	for _, name := range dirNames(filepath.Join(root, "system.slice")) {
 		add(unitSource(name, containers), filepath.Join("system.slice", name), "system")
 	}
 	for _, id := range dirNames(filepath.Join(root, "docker")) {
@@ -176,7 +179,8 @@ func dirNames(dir string) []string {
 	return out
 }
 
-// unitSource is the source key of a direct child of system.slice.
+// unitSource is the source key of a direct child of system.slice: a unit
+// or a sub-slice, a container scope by its container.
 func unitSource(name string, containers map[string]string) string {
 	if id, ok := strings.CutPrefix(name, "docker-"); ok {
 		if id, ok := strings.CutSuffix(id, ".scope"); ok {
@@ -215,7 +219,7 @@ func sourceKey(rel, manager string, aqRels []string, containers map[string]strin
 	}
 	parts := strings.Split(rel, "/")
 	switch {
-	case len(parts) >= 2 && parts[0] == "system.slice" && isUnit(parts[1]):
+	case len(parts) >= 2 && parts[0] == "system.slice":
 		return unitSource(parts[1], containers)
 	case len(parts) >= 2 && parts[0] == "docker":
 		return dockerSource(parts[1], containers)

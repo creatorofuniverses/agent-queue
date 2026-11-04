@@ -398,7 +398,10 @@ them, in two levels. The sources add up to the host figure:
 - `aq`: tasks and reservations run by aq;
 - `docker:PROJECT`: containers, grouped by compose project (the label a stand's
   `--docker-project` binds to its reservation);
-- `system:UNIT` and `user:UNIT`: services such as journald and apps;
+- `system:UNIT` and `user:UNIT`: services such as journald and apps; on the
+  system side every child of `system.slice` is one, so a sub-slice such as
+  `system-getty.slice` (with the short-lived units inside it) or a mount is a
+  source of its own;
 - `session:NAME`: a login session, which is where agents run commands outside aq;
 - `other`: the rest, computed for the period as the host figure minus the named
   sources, so it never double counts. It is what no source measured: the kernel

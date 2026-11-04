@@ -99,6 +99,42 @@ func TestDiskMeterSnapshot(t *testing.T) {
 	}
 }
 
+// Every live child of system.slice is a source of its own, not only services
+// and scopes: a sub-slice (its short-lived template units included), a mount,
+// a socket. Otherwise their writes showed as system:ended.
+func TestDiskMeterSystemChildren(t *testing.T) {
+	io := map[string]int{
+		"system.slice":                                       900,
+		"system.slice/system-getty.slice":                    30,
+		"system.slice/system-getty.slice/getty@tty1.service": 30,
+		`system.slice/system-systemd\x2dcoredump.slice`:      400,
+		"system.slice/home.mount":                            5,
+		"system.slice/docker-abc.scope":                      300,
+	}
+	cfg := diskTree(t, io)
+	s, err := NewDiskMeter(cfg).Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]uint64{}
+	for _, c := range s.Cgroups {
+		if c.Parent != "system" {
+			t.Errorf("%+v: parent %q", c, c.Parent)
+		}
+		got[c.Source] += c.Bytes
+	}
+	want := map[string]uint64{"system:system-getty.slice": 30, `system:system-systemd\x2dcoredump.slice`: 400, "system:home.mount": 5, "docker:runi-x": 300}
+	if !maps.Equal(got, want) {
+		t.Fatalf("sources = %v, want %v", got, want)
+	}
+	containers, _ := cfg.Containers(context.Background())
+	for _, c := range s.Cgroups {
+		if k := sourceKey(c.ID+"/x", diskManager, nil, containers); k != c.Source {
+			t.Errorf("sourceKey below %q = %q, snapshot says %q", c.ID, k, c.Source)
+		}
+	}
+}
+
 func TestDiskMeterDegrades(t *testing.T) {
 	io := diskIOTree()
 	delete(io, diskManager+"/app.slice/ai-memory.service")
@@ -129,15 +165,17 @@ func TestSourceKey(t *testing.T) {
 	aq := []string{diskManager + "/aqtest.slice"}
 	c := map[string]string{"abc": "docker:runi-x"}
 	for rel, want := range map[string]string{
-		diskManager + "/aqtest.slice/aqtest-1.service/x": "aq",
-		diskManager + "/app.slice/app-tmux.scope":        "user:app-tmux.scope",
-		diskManager + "/app.slice/foo.service/sub/leaf":  "user:foo.service",
-		diskManager + "/app.slice":                       "",
-		"system.slice/docker-abc.scope/x":                "docker:runi-x",
-		"system.slice/docker-def456789012345.scope":      "docker:def456789012",
-		"system.slice/sshd.service":                      "system:sshd.service",
-		"docker/abc":                                     "docker:runi-x",
-		"user.slice/user-1000.slice/session-3.scope/a":   "session:session-3.scope",
+		diskManager + "/aqtest.slice/aqtest-1.service/x":     "aq",
+		diskManager + "/app.slice/app-tmux.scope":            "user:app-tmux.scope",
+		diskManager + "/app.slice/foo.service/sub/leaf":      "user:foo.service",
+		diskManager + "/app.slice":                           "",
+		"system.slice/docker-abc.scope/x":                    "docker:runi-x",
+		"system.slice/docker-def456789012345.scope":          "docker:def456789012",
+		"system.slice/sshd.service":                          "system:sshd.service",
+		"system.slice/system-getty.slice/getty@tty1.service": "system:system-getty.slice",
+		"system.slice/home.mount":                            "system:home.mount",
+		"docker/abc":                                         "docker:runi-x",
+		"user.slice/user-1000.slice/session-3.scope/a":       "session:session-3.scope",
 		"init.scope": "",
 	} {
 		if got := sourceKey(rel, diskManager, aq, c); got != want {
