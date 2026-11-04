@@ -85,11 +85,19 @@ type StatsConfig struct {
 	AgentProcesses []string
 }
 
+// DiskConfig tunes the disk-write alarm: AlertRate is bytes per hour (0 turns
+// it off), judged over AlertWindow.
+type DiskConfig struct {
+	AlertRate   uint64
+	AlertWindow time.Duration
+}
+
 type Config struct {
 	Profiles            ProfilesConfig
 	Scheduler           SchedulerConfig
 	Retention           RetentionConfig
 	Stats               StatsConfig
+	Disk                DiskConfig
 	Agents              []AgentConfig
 	Notify              NotifyConfig
 	Webhook             WebhookConfig
@@ -120,6 +128,7 @@ func Default() Config {
 		Scheduler:           SchedulerConfig{true},
 		Retention:           RetentionConfig{7 * 24 * time.Hour, 5 * gib, 90 * 24 * time.Hour, 30 * 24 * time.Hour, 2 * 24 * time.Hour},
 		Stats:               StatsConfig{30 * time.Second, []string{"claude", "codex"}},
+		Disk:                DiskConfig{50 * gib, 10 * time.Minute},
 		Agents:              []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}},
 		Notify:              NotifyConfig{time.Second, 5 * time.Minute, 30 * time.Second, 24 * time.Hour, 10 * time.Minute, 5 * time.Minute},
 		Webhook:             WebhookConfig{Timeout: 10 * time.Second, Format: WebhookFormatAQ},
@@ -180,6 +189,10 @@ type rawConfig struct {
 		SampleInterval *string   `toml:"sample_interval"`
 		AgentProcesses *[]string `toml:"agent_processes"`
 	} `toml:"stats"`
+	Disk struct {
+		AlertRate   *string `toml:"alert_rate"`
+		AlertWindow *string `toml:"alert_window"`
+	} `toml:"disk"`
 	Agents []rawAgent `toml:"agents"`
 	Notify struct {
 		RetryMin             *string `toml:"retry_min"`
@@ -279,6 +292,12 @@ func Load(path string) (Config, error) {
 	if v := raw.Stats.AgentProcesses; v != nil {
 		c.Stats.AgentProcesses = *v
 	}
+	if v := raw.Disk.AlertRate; v != nil && strings.TrimSpace(*v) == "0" {
+		c.Disk.AlertRate = 0 // ParseSize rejects zero; here it means "off"
+	} else {
+		size("disk.alert_rate", v, &c.Disk.AlertRate)
+	}
+	dur("disk.alert_window", raw.Disk.AlertWindow, &c.Disk.AlertWindow)
 	if v := raw.Profiles.Window; v != nil {
 		c.Profiles.Window = *v
 	}
@@ -559,6 +578,9 @@ func (c Config) validatePlan4() error {
 	}
 	if c.Stats.SampleInterval < 5*time.Second || c.Stats.SampleInterval > 5*time.Minute {
 		return fmt.Errorf("stats.sample_interval must be within 5s..5m")
+	}
+	if c.Disk.AlertWindow < 5*c.Stats.SampleInterval {
+		return fmt.Errorf("disk.alert_window must be at least 5 sample intervals (%s)", 5*c.Stats.SampleInterval)
 	}
 	for _, n := range c.Stats.AgentProcesses {
 		if n == "" || strings.Contains(n, "/") {

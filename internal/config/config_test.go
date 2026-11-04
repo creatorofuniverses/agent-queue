@@ -446,3 +446,53 @@ func TestTmpPathsUnderTmpRoot(t *testing.T) {
 		t.Error(got)
 	}
 }
+
+func TestDiskDefaults(t *testing.T) {
+	d := Default().Disk
+	if d.AlertRate != 50*gib || d.AlertWindow != 10*time.Minute {
+		t.Fatalf("bad disk defaults: %+v", d)
+	}
+}
+
+func loadDisk(t *testing.T, body string) (Config, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "c.toml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Load(path)
+}
+
+func TestDiskParse(t *testing.T) {
+	c, err := loadDisk(t, "[disk]\nalert_rate = \"20G\"\nalert_window = \"15m\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Disk.AlertRate != 20*gib || c.Disk.AlertWindow != 15*time.Minute {
+		t.Fatalf("bad disk: %+v", c.Disk)
+	}
+	if err := c.Validate(64*gib, 16); err != nil {
+		t.Fatal(err)
+	}
+	c, err = loadDisk(t, "[disk]\nalert_rate = \"0\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Disk.AlertRate != 0 {
+		t.Fatalf("alert_rate 0 not kept: %+v", c.Disk)
+	}
+	if err := c.Validate(64*gib, 16); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiskWindowTooShort(t *testing.T) {
+	c, err := loadDisk(t, "[disk]\nalert_window = \"2m\"\n[stats]\nsample_interval = \"30s\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Validate(64*gib, 16)
+	if err == nil || !strings.Contains(err.Error(), "disk.alert_window must be at least 5 sample intervals") {
+		t.Fatalf("want window error, got %v", err)
+	}
+}

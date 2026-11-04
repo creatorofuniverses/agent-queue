@@ -119,3 +119,10 @@ samples_full_res = "2d"
 # Host sampling period and agent process names.
 sample_interval = "30s"
 agent_processes = ["claude", "codex"]
+
+[disk]
+# Disk-write alarm: fires when the host writes at least this many bytes per
+# hour, judged over the window below. "0" turns the alarm off.
+alert_rate = "50G"
+# Window the rate is judged over; at least 5 x stats.sample_interval.
+alert_window = "10m"
