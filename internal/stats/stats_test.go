@@ -253,6 +253,32 @@ func TestSummarizeDiskShareAndStrayAgent(t *testing.T) {
 	}
 }
 
+// Each busiest hour has its own "other" (the hour's host minus its clamped
+// sources), which can be the hour's top writer, also when no source was
+// measured that hour.
+func TestSummarizeDiskBusiestOther(t *testing.T) {
+	h0 := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	h1, h2 := h0.Add(time.Hour), h0.Add(2*time.Hour)
+	s := Summarize(Input{Since: h0, Until: h2.Add(time.Hour), DiskWrites: []store.DiskWrite{
+		dw(h0, "host", "", 100*gib), dw(h0, "aq", "", 1*gib),
+		dw(h1, "host", "", 40*gib),
+		dw(h2, "host", "", 20*gib), dw(h2, "aq", "", 15*gib), dw(h2, "session:ended", "", -3*gib),
+		dw(h2, "agent:claude:/p", "aq", 2*gib),
+	}})
+	b := s.DiskHost.Busiest
+	if len(b) != 3 {
+		t.Fatalf("%+v", b)
+	}
+	want := []DiskHourStats{
+		{Hour: h0, Written: 100 * gib, Top: "other", TopWritten: 99 * gib},
+		{Hour: h1, Written: 40 * gib, Top: "other", TopWritten: 40 * gib},
+		{Hour: h2, Written: 20 * gib, Top: "aq", TopWritten: 15 * gib, TopAgent: "agent:claude:/p"},
+	}
+	if !reflect.DeepEqual(b, want) {
+		t.Fatalf("Busiest = %+v\nwant      %+v", b, want)
+	}
+}
+
 func TestSummarizeDiskEmpty(t *testing.T) {
 	s := Summarize(Input{})
 	if s.DiskHost != nil {

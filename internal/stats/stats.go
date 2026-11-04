@@ -604,7 +604,7 @@ type DiskAgentStats struct {
 type DiskHourStats struct {
 	Hour       time.Time `json:"hour"`
 	Written    uint64    `json:"written"`
-	Top        string    `json:"top"`
+	Top        string    `json:"top"` // the hour's largest source, "other" (its host − Σ sources) included
 	TopWritten uint64    `json:"top_written"`
 	TopAgent   string    `json:"top_agent,omitempty"`
 }
@@ -685,14 +685,20 @@ func summarizeDiskHost(s *Summary, in Input) {
 		if v <= 0 {
 			continue
 		}
+		// The hour's own "other", as the period's: what its named sources
+		// leave of its host total. It can be the hour's top writer.
 		hs := DiskHourStats{Hour: h, Written: uint64(v)}
-		var topv int64
+		var named uint64
 		for _, name := range keys(srcHour[h]) {
-			if b := srcHour[h][name]; b > topv {
-				hs.Top, topv = name, b
+			b := clampU(srcHour[h][name])
+			named += b
+			if b > hs.TopWritten {
+				hs.Top, hs.TopWritten = name, b
 			}
 		}
-		hs.TopWritten = uint64(topv)
+		if other := satSub(hs.Written, named); other > hs.TopWritten {
+			hs.Top, hs.TopWritten = "other", other
+		}
 		var agentv int64
 		for _, a := range keys(agentHour[h][hs.Top]) {
 			if b := agentHour[h][hs.Top][a]; b > agentv {

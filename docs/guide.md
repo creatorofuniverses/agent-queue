@@ -422,7 +422,7 @@ cancelled write is charged to the process that deleted it, not the one that
 wrote it; and writes made while the daemon was down are lost.
 
 `aq stats disk` shows the period's total and rate, the sources, the heaviest
-hours and the tasks whose runs wrote the most; `aq stats export --table disk`
+hours (each with its top writer, which can be `other`) and the tasks whose runs wrote the most; `aq stats export --table disk`
 gives the hourly rows. `aq top` has a `disk:` line with the current rate and the
 heaviest writer; it is marked stale when the last sample is older than 3
 minutes.
