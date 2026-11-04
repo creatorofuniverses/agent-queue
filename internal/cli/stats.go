@@ -21,7 +21,7 @@ func cmdStats(c *cmdCtx, args []string) error {
 	asJSON := fs.Bool("json", false, "JSON output")
 	name := fs.String("profile", "", "only this profile `KEY` or task name")
 	format := fs.String("format", "jsonl", "export `FORMAT`: jsonl or csv")
-	table := fs.String("table", "", "export `TABLE`: items, runs, host, incidents, events or hook (csv needs one)")
+	table := fs.String("table", "", "export `TABLE`: items, runs, host, incidents, events, disk or hook (csv needs one)")
 	pos, e := parseFlags(fs, args)
 	if e != nil {
 		return e
