@@ -63,7 +63,7 @@ func (a *Alarm) Observe(at time.Time, span time.Duration, d Delta) (AlarmEvent, 
 	}
 	a.samples = a.samples[i:]
 	if a.active {
-		a.ep.add(d)
+		a.ep.add(d, 1) // the episode began at a window start, before this sample
 	}
 	if a.rate == 0 || a.first.After(start) {
 		return AlarmEvent{}, false
@@ -73,13 +73,13 @@ func (a *Alarm) Observe(at time.Time, span time.Duration, d Delta) (AlarmEvent, 
 	var parts [alarmParts]float64
 	part := a.window / alarmParts
 	for _, s := range a.samples {
-		win.add(s.d)
+		win.add(s.d, inside(start, s))
 		spread(&parts, start, part, a.window, s)
 	}
 	perHour := func(b float64, over time.Duration) float64 {
 		return b * float64(time.Hour) / float64(over)
 	}
-	avg := perHour(float64(win.host), a.window)
+	avg := perHour(win.host, a.window)
 
 	if !a.active {
 		hot := 0
@@ -104,6 +104,19 @@ func (a *Alarm) Observe(at time.Time, span time.Duration, d Delta) (AlarmEvent, 
 		return ev, true
 	}
 	return AlarmEvent{}, false
+}
+
+// inside is the share of a sample's interval (from, at] that falls after
+// start: the window holds only that much of its writes, for the average, the
+// bytes and the rankings alike, as it does for the parts. Counting the oldest
+// sample whole would overstate a window that is not a whole number of
+// samples, enough to keep a steady rate below the all-clear from ever clearing.
+func inside(start time.Time, s alarmSample) float64 {
+	span := s.at.Sub(s.from)
+	if span <= 0 || !s.from.Before(start) {
+		return 1
+	}
+	return float64(s.at.Sub(start)) / float64(span)
 }
 
 // spread adds a sample's host writes to the parts of the window (start,
@@ -132,30 +145,36 @@ func spread(parts *[alarmParts]float64, start time.Time, part, end time.Duration
 	}
 }
 
-// tally sums deltas: the host's clamped per sample (a counter reset must not
-// cancel writes), the sources' and agents' signed, so that an ended tail
-// given back later cancels out, as in the report; top clamps.
+// tally sums deltas, each weighted by the share of it that falls in the
+// window: the host's clamped per sample (a counter reset must not cancel
+// writes), the sources' and agents' signed, so that an ended tail given back
+// later cancels out, as in the report; top clamps.
 type tally struct {
-	host    int64
-	sources map[string]int64
-	agents  map[string]AgentDelta // by key; Bytes accumulated
+	host    float64
+	sources map[string]float64
+	agents  map[string]agentBytes // by key
 }
 
-func (t *tally) add(d Delta) {
-	t.host += max(0, d.Host)
+type agentBytes struct {
+	within string
+	bytes  float64
+}
+
+func (t *tally) add(d Delta, w float64) {
+	t.host += float64(max(0, d.Host)) * w
 	for k, v := range d.Sources {
 		if t.sources == nil {
-			t.sources = map[string]int64{}
+			t.sources = map[string]float64{}
 		}
-		t.sources[k] += v
+		t.sources[k] += float64(v) * w
 	}
 	for _, ag := range d.Agents {
 		if t.agents == nil {
-			t.agents = map[string]AgentDelta{}
+			t.agents = map[string]agentBytes{}
 		}
 		cur := t.agents[ag.Key]
-		cur.Key, cur.Within = ag.Key, ag.Within
-		cur.Bytes += ag.Bytes
+		cur.within = ag.Within
+		cur.bytes += float64(ag.Bytes) * w
 		t.agents[ag.Key] = cur
 	}
 }
@@ -164,23 +183,23 @@ func (t *tally) add(d Delta) {
 // sources: what no source measured) among them.
 func (t *tally) top(over time.Duration) []SourceRate {
 	var out []SourceRate
-	rate := func(b int64) float64 { return float64(b) * float64(time.Hour) / float64(over) }
+	rate := func(b float64) float64 { return b * float64(time.Hour) / float64(over) }
 	other := t.host
 	for k, b := range t.sources {
 		other -= b
 		if b <= 0 {
 			continue
 		}
-		best := AgentDelta{}
-		for _, ag := range t.agents {
-			if ag.Within != k {
+		bestKey, best := "", 0.0
+		for key, ag := range t.agents {
+			if ag.within != k {
 				continue
 			}
-			if ag.Bytes > best.Bytes || (ag.Bytes == best.Bytes && ag.Key < best.Key) {
-				best = ag
+			if ag.bytes > best || (ag.bytes == best && bestKey != "" && key < bestKey) {
+				bestKey, best = key, ag.bytes
 			}
 		}
-		out = append(out, SourceRate{Source: k, Agent: best.Key, BytesPerHour: rate(b)})
+		out = append(out, SourceRate{Source: k, Agent: bestKey, BytesPerHour: rate(b)})
 	}
 	if other > 0 {
 		out = append(out, SourceRate{Source: "other", BytesPerHour: rate(other)})

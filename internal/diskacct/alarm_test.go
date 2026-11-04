@@ -234,3 +234,34 @@ func TestAlarmWindowNotDivisibleBySamples(t *testing.T) {
 		}
 	}
 }
+
+// A window that is not a whole number of samples takes only the part of its
+// oldest sample that falls inside it, for the average as for the parts: with
+// 1m samples and a 6m30s window, a steady 24 GiB/h after an alarm is below
+// half of 50 GiB/h and must clear, not read as 24×7/6.5 = 25.8 GiB/h.
+func TestAlarmWindowTakesOverlapOfOldestSample(t *testing.T) {
+	a := NewAlarm(thresh, 6*time.Minute+30*time.Second)
+	perMin := func(g int64) int64 { return g << 30 / 60 }
+	evs, _ := feedEvery(a, time.Minute, 1, 20, func(int) Delta {
+		return Delta{Host: perMin(100), Sources: map[string]int64{"aq": perMin(100)}}
+	})
+	if len(evs) != 1 || !evs[0].High {
+		t.Fatalf("raise: %+v", evs)
+	}
+	// Seven sample ends in the window, six and a half minutes of writes.
+	if want := float64(100 << 30); evs[0].BytesPerHour > want*1.001 {
+		t.Errorf("raise rate = %v, want %v", evs[0].BytesPerHour, want)
+	}
+	if want := uint64(perMin(100)) * 13 / 2; evs[0].Written > want+want/1000 {
+		t.Errorf("raise written = %d, want %d", evs[0].Written, want)
+	}
+	if r := evs[0].Top[0].BytesPerHour; r > float64(100<<30)*1.001 {
+		t.Errorf("raise top rate = %v", r)
+	}
+	evs, _ = feedEvery(a, time.Minute, 21, 30, func(int) Delta {
+		return Delta{Host: perMin(24), Sources: map[string]int64{"aq": perMin(24)}}
+	})
+	if len(evs) != 1 || evs[0].High {
+		t.Fatalf("clear: %+v", evs)
+	}
+}
