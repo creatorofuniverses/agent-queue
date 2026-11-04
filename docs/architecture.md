@@ -277,8 +277,8 @@ never added to a sum. `other` is not stored per sample: per-sample deltas can ru
 backward (cgroups are re-created, units end), so a per-sample remainder would be
 noisy and sometimes negative; the report computes it over the period as the host
 total minus the named sources. The alarm is a small state machine over the same
-deltas (rate over a window, one event per episode, an all-clear when the rate
-has stayed low) and emits `disk_writes_high`/`disk_writes_normal` through the
+deltas (rate over a window, one event per episode, an all-clear when the window average
+falls below half the threshold) and emits `disk_writes_high`/`disk_writes_normal` through the
 usual event delivery.
 
 Retention removes old logs and history while preserving active items, including

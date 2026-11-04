@@ -341,11 +341,11 @@ aq stats export --since 7d --format csv --table host
 
 ```
 Disk       3.0 TiB written (20.0 GiB/h) · aq tasks 2%
-           top: session:session-3.scope 1.0 TiB (≈ claude ~/sber/auto-evolve)
+           top: session:session-3.scope 1.0 TiB (≈ claude ~/src/shop)
 ...
 Worth a look
-  ! disk          session:session-3.scope wrote 1.0 TiB, ≈ all of it claude ~/sber/auto-evolve
-  ! reservations  guardrails-qualification-full held 7 GiB·h it never used
+  ! disk          session:session-3.scope wrote 1.0 TiB, ≈ all of it claude ~/src/shop
+  ! reservations  e2e-stand held 7 GiB·h it never used
 ```
 
 «Reservation fit» сравнивает записанные пики резервов каждого имени с
@@ -422,11 +422,12 @@ sudo systemctl daemon-reload
 устаревшая.
 
 Для записи нужна та же делегация `io`, что и выше. Почасовые строки хранятся
-столько же, сколько `history_max_age`.
+столько же, сколько история задач (`history_max_age`, но не меньше `logs_max_age`).
 
 #### Тревога о записи на диск
 
-Если хост пишет быстрее `alert_rate` всё окно `alert_window`, aq один раз
+Окно делится на пять равных частей. Если хотя бы в четырёх из них скорость не
+ниже `alert_rate` (одиночный короткий всплеск не считается), aq один раз
 отправляет через webhook уведомление `disk_writes_high`: скорость, сколько это
 длилось, объём и главные источники (с оценкой по агентам):
 
@@ -434,8 +435,8 @@ sudo systemctl daemon-reload
 disk writes at 120 GiB/h for 10m (20 GiB): session:session-3.scope 118 GiB/h (≈ claude ~/proj)
 ```
 
-За эпизод оно приходит один раз. Когда скорость на целое окно опускается ниже
-порога, следует `disk_writes_normal` с объёмом эпизода и главным писателем. aq
+За эпизод оно приходит один раз. Когда средняя скорость за целое окно падает ниже
+половины порога, следует `disk_writes_normal` с объёмом эпизода и главным писателем. aq
 только сообщает: он ничего не останавливает и не ограничивает. Настройка в
 `config.toml`:
 

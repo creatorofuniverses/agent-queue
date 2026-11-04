@@ -336,6 +336,17 @@ profile filter returns only the items and runs of that profile. Export tables ar
 environment, cwd, session identifiers and delivery error texts are not included
 in statistics or exports.
 
+For example, part of an overview:
+
+```
+Disk       3.0 TiB written (20.0 GiB/h) · aq tasks 2%
+           top: session:session-3.scope 1.0 TiB (≈ claude ~/src/shop)
+...
+Worth a look
+  ! disk          session:session-3.scope wrote 1.0 TiB, ≈ all of it claude ~/src/shop
+  ! reservations  e2e-stand held 7 GiB·h it never used
+```
+
 "Reservation fit" compares each reservation name's recorded peaks with what it
 declared: the stand against `--memory` (only with `--docker-project`, otherwise
 it is not measured) and the busiest moment of its nested tasks against
@@ -408,21 +419,21 @@ gives the hourly rows. `aq top` has a `disk:` line with the current rate and the
 heaviest writer; it is marked stale when the last sample is older than 3
 minutes.
 
-Writes need the same `io` delegation as above. Hourly rows are kept
-for `history_max_age`.
+Writes need the same `io` delegation as above. Hourly rows are kept as
+long as task history (`history_max_age`, but not less than `logs_max_age`).
 
 #### Disk-write alarm
 
-When the host writes faster than `alert_rate` for the whole `alert_window`, aq
-sends one `disk_writes_high` notification through the webhook, naming the rate,
+The window is split into five equal parts. When at least four of them are at or
+above `alert_rate`, so a single short spike does not count, aq sends one `disk_writes_high` notification through the webhook, naming the rate,
 how long it lasted, the bytes and the top sources (with the agent estimate):
 
 ```
 disk writes at 120 GiB/h for 10m (20 GiB): session:session-3.scope 118 GiB/h (≈ claude ~/proj)
 ```
 
-It fires once per episode. When the rate falls below the threshold for a window,
-`disk_writes_normal` follows with the episode's total and the main writer. aq
+It fires once per episode. When the average over a whole window falls below half the
+threshold, `disk_writes_normal` follows with the episode's total and the main writer. aq
 only reports; it does not stop or throttle anything. Set it in `config.toml`:
 
 ```toml
