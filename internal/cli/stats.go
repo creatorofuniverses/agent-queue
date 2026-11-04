@@ -8,6 +8,8 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -19,6 +21,7 @@ func cmdStats(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("stats")
 	since := fs.String("since", "7d", "history window `DURATION`, e.g. 1d or 12h")
 	asJSON := fs.Bool("json", false, "JSON output")
+	all := fs.Bool("all", false, "every section, untruncated")
 	name := fs.String("profile", "", "only this profile `KEY` or task name")
 	format := fs.String("format", "jsonl", "export `FORMAT`: jsonl or csv")
 	table := fs.String("table", "", "export `TABLE`: items, runs, host, incidents, events, disk or hook (csv needs one)")
@@ -26,8 +29,18 @@ func cmdStats(c *cmdCtx, args []string) error {
 	if e != nil {
 		return e
 	}
-	if len(pos) > 0 {
+	area := ""
+	if export {
+		if len(pos) > 0 {
+			return usagef("stats: unexpected arguments")
+		}
+	} else if len(pos) > 1 {
 		return usagef("stats: unexpected arguments")
+	} else if len(pos) == 1 {
+		area = pos[0]
+		if !slices.Contains(statsAreas, area) {
+			return usagef("stats: unknown area %q (one of %s)", area, strings.Join(statsAreas, ", "))
+		}
 	}
 	duration, e := units.ParseDuration(*since)
 	if e != nil {
@@ -101,6 +114,6 @@ func cmdStats(c *cmdCtx, args []string) error {
 	if *asJSON {
 		return printJSON(c, v)
 	}
-	c.printStats(v)
+	c.printStats(v, area, *all)
 	return nil
 }

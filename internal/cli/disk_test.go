@@ -63,7 +63,7 @@ func TestResultShowsDiskIO(t *testing.T) {
 func TestStatsShowsDiskWrites(t *testing.T) {
 	var b strings.Builder
 	c := &cmdCtx{stdout: &b, env: func(string) string { return "" }}
-	c.printStats(stats.Summary{Disk: []stats.DiskStats{{Profile: "/r:db", Runs: 2, Written: 3 << 30, P50: 1 << 30, Max: 2 << 30}, {Runs: 1, Written: 1}}})
+	c.printStats(stats.Summary{Disk: []stats.DiskStats{{Profile: "/r:db", Runs: 2, Written: 3 << 30, P50: 1 << 30, Max: 2 << 30}, {Runs: 1, Written: 1}}}, "", true)
 	out := b.String()
 	if !strings.Contains(out, "Disk writes") || !strings.Contains(out, "/r:db") || !strings.Contains(out, "3.0 GiB") || !strings.Contains(out, "(unnamed)") {
 		t.Fatal(out)

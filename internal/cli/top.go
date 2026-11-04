@@ -3,7 +3,9 @@ package cli
 import (
 	"fmt"
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
+	"time"
 )
 
 func cmdTop(c *cmdCtx, args []string) error {
@@ -48,9 +50,33 @@ func printTop(c *cmdCtx, v daemon.TopView) {
 		head = string(v.Queue.HeadID) + " blocked by " + blockedText(v.Queue.BlockedBy, v.Queue.BlockedDetail)
 	}
 	fmt.Fprintf(c.stdout, "queue: %d queued, %d running, %d held; head %s\n", v.Queue.Queued, v.Queue.Running, v.Queue.Held, head)
+	fmt.Fprintf(c.stdout, "disk: %s\n", c.diskText(v.Disk, time.Now()))
 	if t := v.Tmp; t != nil {
 		fmt.Fprintf(c.stdout, "tmp: %s\n", tmpText(t))
 	}
+}
+
+// diskStale is how old the last disk rate may be before aq top says so.
+const diskStale = 3 * time.Minute
+
+// diskText is the host write rate of the last sample, its top source and the
+// agent estimated behind it. A rate older than diskStale carries its age, so a
+// stuck sampler is not read as a quiet disk.
+func (c *cmdCtx) diskText(d *daemon.DiskRate, now time.Time) string {
+	if d == nil {
+		return "no samples yet"
+	}
+	s := size(uint64(max(d.BytesPerSec, 0))) + "/s"
+	if d.Top != "" {
+		s += fmt.Sprintf(" — %s %s/s", d.Top, size(uint64(max(d.TopBytesPerSec, 0))))
+		if d.TopAgent != "" {
+			s += " (≈ " + stats.AgentLabel(d.TopAgent, c.env("HOME")) + ")"
+		}
+	}
+	if age := now.Sub(d.At); age > diskStale {
+		s += " (as of " + fmtDur(age.Round(time.Second)) + " ago)"
+	}
+	return s
 }
 
 // tmpText is where task temp dirs live and how full that filesystem is.

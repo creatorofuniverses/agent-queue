@@ -9,7 +9,6 @@ import (
 
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
-	"github.com/creatorofuniverses/agent-queue/internal/stats"
 )
 
 // Pretty renderers: used only when c.ui.pretty (a person at a terminal).
@@ -234,6 +233,10 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 		fmt.Fprintf(w, "  %s %s %s\n", u.dim("next:"), shortID(q.HeadID), u.yellow("blocked by "+blockedText(q.BlockedBy, q.BlockedDetail)))
 	}
 
+	fmt.Fprintln(w)
+	u.heading(w, "Disk writes")
+	fmt.Fprintf(w, "  %s\n", c.diskText(v.Disk, time.Now()))
+
 	if t := v.Tmp; t != nil {
 		fmt.Fprintln(w)
 		u.heading(w, "Temp dirs")
@@ -317,136 +320,6 @@ func (c *cmdCtx) prettyEstimate(v daemon.EstimateView) {
 	u.field(w, "memory", fmt.Sprintf("%s limit · %s expected%s", size(v.Limit), size(v.Expected), src))
 	u.field(w, "duration", fmt.Sprintf("%s %s", fmtSecs(v.DurationSeconds), u.dim("("+v.DurationSource+")")))
 	u.field(w, "confidence", v.Confidence)
-}
-
-// printStats is the text summary of aq stats; plain and pretty share it.
-func (c *cmdCtx) printStats(v stats.Summary) {
-	u, w := c.ui, c.stdout
-	period := fmt.Sprintf("%s — %s", v.Since.Local().Format("2006-01-02 15:04"), v.Until.Local().Format("2006-01-02 15:04"))
-	fmt.Fprintf(w, "%s %s\n", u.bold("aq stats"), u.dim(period))
-
-	section := func(title string) { fmt.Fprintln(w); u.heading(w, title) }
-	section("Items")
-	if len(v.Items) == 0 {
-		fmt.Fprintln(w, u.dim("  none"))
-	} else {
-		t := &table{head: []string{"KIND", "CLIENT", "COUNT", "OUTCOMES", "WAIT p50/p90", "RUN p50/p90"}, right: map[int]bool{2: true}}
-		for _, g := range v.Items {
-			t.add(g.Kind, g.ClientType, fmt.Sprint(g.Count), counts(g.Outcomes), fmtSecs(g.WaitP50)+" / "+fmtSecs(g.WaitP90), fmtSecs(g.RunP50)+" / "+fmtSecs(g.RunP90))
-		}
-		indent(w, t, u)
-	}
-
-	if len(v.Profiles) > 0 {
-		section("Profiles")
-		t := &table{head: []string{"PROFILE", "RUNS", "USABLE", "OOM", "TIMEOUT", "FROM HISTORY", "OVER EXPECTED", "PEAK/EXPECTED p50/p90", "TIME/ESTIMATE p50/p90"}, right: map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true, 6: true}}
-		for _, p := range v.Profiles {
-			t.add(shortProfile(p.Profile, c.env("HOME")), fmt.Sprint(p.Runs), fmt.Sprint(p.Usable), fmt.Sprint(p.OOM), fmt.Sprint(p.Timeouts), fmt.Sprint(p.MemoryFromProfile), fmt.Sprint(p.PeakOverExpected),
-				ratios(p.PeakToExpectedP50, p.PeakToExpectedP90), ratios(p.DurationToEstimateP50, p.DurationToEstimateP90))
-		}
-		indent(w, t, u)
-	}
-	if len(v.Disk) > 0 {
-		section("Disk writes (tasks, physical disks)")
-		t := &table{head: []string{"PROFILE", "RUNS", "WRITTEN", "PER RUN p50", "MAX"}, right: map[int]bool{1: true, 2: true, 3: true, 4: true}}
-		for i, d := range v.Disk {
-			if i == 10 {
-				fmt.Fprintf(w, "  %s\n", u.dim(fmt.Sprintf("%d more in aq stats --json", len(v.Disk)-i)))
-				break
-			}
-			name := shortProfile(d.Profile, c.env("HOME"))
-			if name == "" {
-				name = "(unnamed)"
-			}
-			t.add(name, fmt.Sprint(d.Runs), size(d.Written), size(d.P50), size(d.Max))
-		}
-		indent(w, t, u)
-	}
-	if v.Profile != "" {
-		return
-	}
-
-	if q := v.Queue; q != nil {
-		section("Queue")
-		line := fmt.Sprintf("  not empty %s of %s sampled", fmtSecs(q.NonEmptySeconds), fmtSecs(q.SampledSeconds))
-		if len(q.BlockedSeconds) > 0 {
-			var parts []string
-			for _, k := range sortedKeys(q.BlockedSeconds) {
-				parts = append(parts, fmt.Sprintf("%s %s", k, fmtSecs(q.BlockedSeconds[k])))
-			}
-			line += " · head blocked by " + strings.Join(parts, ", ")
-		}
-		fmt.Fprintln(w, line)
-	}
-	if h := v.Host; h != nil && h.Samples > 0 {
-		section(fmt.Sprintf("Host memory (%d samples)", h.Samples))
-		t := &table{head: []string{"", "AVG", "MAX"}, right: map[int]bool{1: true, 2: true}}
-		t.add("agents", size(h.AgentsAvg), size(h.AgentsMax))
-		t.add("run by agents", size(h.SpawnedAvg), size(h.SpawnedMax))
-		t.add("docker", size(h.DockerAvg), size(h.DockerMax))
-		t.add("aq tasks", size(h.TasksAvg), size(h.TasksMax))
-		t.add("other", size(h.OtherAvg), size(h.OtherMax))
-		t.add("committed", size(h.CommittedAvg), size(h.CommittedMax))
-		t.add("not yet used", size(h.UnconsumedAvg), size(h.UnconsumedMax))
-		indent(w, t, u)
-		fmt.Fprintf(w, "  available min %s · avg %s · swap max %s · PSI max %.2f\n", size(h.MemAvailableMin), size(h.MemAvailableAvg), size(h.SwapUsedMax), h.PSIMax)
-	}
-	if len(v.Reservations) > 0 {
-		section("Reservations")
-		t := &table{head: []string{"CLIENT", "COUNT", "ACTIVE", "EXPIRED", "RELEASED", "FORCED", "TORN DOWN", "TEARDOWN FAILED", "UNKNOWN", "EXTENSIONS"}, right: map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true, 9: true}}
-		for _, r := range v.Reservations {
-			t.add(r.ClientType, fmt.Sprint(r.Count), fmt.Sprint(r.Active), fmt.Sprint(r.Expired), fmt.Sprint(r.Released), fmt.Sprint(r.ForceReleased), fmt.Sprint(r.TornDown), fmt.Sprint(r.TeardownFailed), fmt.Sprint(r.TeardownUnknown), fmt.Sprint(r.Extensions))
-		}
-		indent(w, t, u)
-	}
-	if len(v.ReservationFit) > 0 {
-		section("Reservation fit (peak / declared)")
-		t := &table{head: []string{"RESERVATION", "COUNT", "STAND p50/p90", "BUDGET p50/p90", "UNUSED GiB·h"}, right: map[int]bool{1: true, 4: true}}
-		for i, r := range v.ReservationFit {
-			if i == 10 {
-				fmt.Fprintf(w, "  %s\n", u.dim(fmt.Sprintf("%d more in aq stats --json", len(v.ReservationFit)-i)))
-				break
-			}
-			t.add(shortProfile(r.Name, c.env("HOME")), fmt.Sprint(r.Reservations), measuredRatios(r.StandsMeasured, r.StandPeakP50, r.StandPeakP90),
-				measuredRatios(r.BudgetsMeasured, r.BudgetPeakP50, r.BudgetPeakP90), fmt.Sprintf("%.1f", r.UnusedGiBHours))
-		}
-		indent(w, t, u)
-	}
-	if len(v.Delivery) > 0 {
-		section("Notifications")
-		t := &table{head: []string{"CHANNEL", "EVENTS", "SENT", "ACKED", "PENDING", "FAILED", "SKIPPED", "UNACKED", "LATENCY p50/p90"}, right: map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true}}
-		for _, d := range v.Delivery {
-			t.add(d.Channel, fmt.Sprint(d.Events), fmt.Sprint(d.Sent), fmt.Sprint(d.Acked), fmt.Sprint(d.Pending), fmt.Sprint(d.Failed), fmt.Sprint(d.Skipped), fmt.Sprint(d.Unacked), fmtSecs(d.LatencyP50)+" / "+fmtSecs(d.LatencyP90))
-		}
-		indent(w, t, u)
-	}
-	if h := v.Hook; h != nil {
-		section(fmt.Sprintf("Hook hints (%d)", h.Hits))
-		if len(h.ByClient) > 0 {
-			fmt.Fprintf(w, "  by client: %s\n", counts(h.ByClient))
-		}
-		for _, p := range h.ByPattern {
-			fmt.Fprintf(w, "  %s %s %s\n", u.dim(fmt.Sprintf("#%d", p.Index+1)), pad(fmt.Sprint(p.Hits), 5), u.dim(p.Pattern))
-		}
-	}
-	if i := v.Incidents; i != nil {
-		section("Incidents")
-		bad := func(n float64, s string) string {
-			if n > 0 {
-				return u.red(s)
-			}
-			return s
-		}
-		fmt.Fprintf(w, "  kernel OOM kills outside aq: %s%s\n", bad(i.KernelOOM, fmt.Sprintf("%.0f", i.KernelOOM)), oomGroups(i.KernelOOMBy))
-		fmt.Fprintf(w, "  systemd-oomd kills: %s outside aq, %d of aq tasks\n", bad(float64(i.OOMDOutside), fmt.Sprint(i.OOMDOutside)), i.OOMDTasks)
-		fmt.Fprintf(w, "  memory pressure closed admission %d times, %s in total\n", i.PSIEpisodes, fmtSecs(i.PSIClosedSeconds))
-		if i.GuardEngaged > 0 {
-			fmt.Fprintf(w, "  host guard cut the aq slice %s times; who held memory then:\n", u.red(fmt.Sprint(i.GuardEngaged)))
-			for _, g := range i.GuardSnapshots {
-				fmt.Fprintf(w, "    %s %s\n", u.dim(g.At.Local().Format("01-02 15:04")), g.Detail)
-			}
-		}
-	}
 }
 
 // ratios is a p50/p90 pair, or "—" when there was nothing to compare (no estimate).
