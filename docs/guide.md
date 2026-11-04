@@ -411,8 +411,8 @@ them, in two levels. The sources add up to the host figure:
   the host's bytes and 10 GiB, and the alarm names it among the top sources.
 
 The second level names agents. Inside a source, `aq stats disk` can put
-`≈ claude ~/proj` next to it: the agent process tree (`[stats] agent_processes`)
-and its project directory. A descendant the agent once had keeps counting for
+`≈ claude ~/proj` next to it: the agent process tree (`[stats] agent_processes`
+and its descendants in the agent's cgroup) and its project directory. A descendant the agent once had keeps counting for
 it while it lives, after the agent exits too. This is an estimate and is not part of the sum. It
 counts a write when the page is dirtied, while the source is counted when the
 bytes go to the device, so over seconds the two differ and over hours they

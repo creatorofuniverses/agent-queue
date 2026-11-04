@@ -135,7 +135,7 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 		if !ok {
 			continue
 		}
-		e := platform.ProcIO{PID: pid, PPID: p.ppid, Start: start, Bytes: bytes,
+		e := platform.ProcIO{PID: pid, PPID: p.ppid, Start: start, Bytes: bytes, Cgroup: p.cgroup,
 			Within: sourceKey(p.cgroup, m.manager, m.aqRels(), nil)}
 		if p.agent >= 0 {
 			e.Agent = agents[p.agent]

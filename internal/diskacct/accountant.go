@@ -106,6 +106,7 @@ type proc struct {
 	root    procKey // the agent root it was first seen under
 	key     string  // the root's agent key, as last seen
 	within  string  // the root's source, as last seen
+	cgroup  string  // the root's cgroup, as last seen: the tree stops at it
 	pending []transfer
 	gone    int // samples since it vanished; 0 while alive
 }
@@ -248,29 +249,33 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 			// was only skipped, and the link stays.
 			st.parent = procKey{}
 		}
+		// The tree is the agent and its descendants in the agent's cgroup:
+		// a child started in another cgroup is never a member, and a member
+		// outside its root's cgroup now (one of them moved) is not counted
+		// while it is. Its writes are that cgroup's source's.
 		switch {
 		case p.Agent != "": // an agent heads its own tree, even inside another's
 			key := "agent:" + p.Agent + ":" + p.Project
 			if p.Project != "" || st.root != k || st.key == "" { // keep the project over a failed read
 				st.key = key
 			}
-			st.member, st.root, st.within = true, k, p.Within
+			st.member, st.root, st.within, st.cgroup = true, k, p.Within, p.Cgroup
 		case st.member && st.root == k: // a root that is no agent any more keeps its key
-			st.within = p.Within
+			st.within, st.cgroup = p.Within, p.Cgroup
 		case st.member: // follow the root's current key while it lives
 			if j, ok := index[st.root.pid]; ok && ps[j].Start == st.root.start {
 				visit(j)
 				r := a.procs[st.root]
-				st.key, st.within = r.key, r.within
+				st.key, st.within, st.cgroup = r.key, r.within, r.cgroup
 			}
-		case pst != nil && pst.member:
-			st.member, st.root, st.key, st.within = true, pst.root, pst.key, pst.within
+		case pst != nil && pst.member && p.Cgroup == pst.cgroup:
+			st.member, st.root, st.key, st.within, st.cgroup = true, pst.root, pst.key, pst.within, pst.cgroup
 		}
 
 		raw := p.Bytes - st.last
 		credit, rest := a.settle(st.pending, raw)
 		st.pending, st.last = rest, p.Bytes
-		if growth := raw - credit; st.member && growth != 0 {
+		if growth := raw - credit; st.member && p.Cgroup == st.cgroup && growth != 0 {
 			sums[sum{st.key, st.within}] += growth
 		}
 	}

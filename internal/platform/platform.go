@@ -167,6 +167,8 @@ type ProcIO struct {
 	Project string // the project of its working directory, "" when unknown
 	// Within is the level-1 source key of the process's cgroup ("" when it is no source).
 	Within string
+	// Cgroup is the process's cgroup path: an agent's tree stops at it.
+	Cgroup string
 	// Bytes is write_bytes - cancelled_write_bytes. It can shrink, so it is signed.
 	Bytes int64
 }

@@ -149,7 +149,7 @@ func TestUsageProcIO(t *testing.T) {
 		}
 	}
 	a := v.IO[idx[10]]
-	if a.Agent != "claude" || a.Project != repo || a.Within != "session:session-3.scope" || a.Bytes != 400 || a.PPID != 1 || a.Start != 1010 {
+	if a.Agent != "claude" || a.Project != repo || a.Within != "session:session-3.scope" || a.Cgroup != session || a.Bytes != 400 || a.PPID != 1 || a.Start != 1010 {
 		t.Errorf("agent entry = %+v", a)
 	}
 	if b := v.IO[idx[12]]; b.Agent != "" || b.Project != "" || b.Bytes != -4 || b.PPID != 11 || b.Within != "session:session-3.scope" {

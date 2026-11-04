@@ -666,3 +666,43 @@ func TestAgentMixedSignTransfersKeepOrigin(t *testing.T) {
 		}
 	}
 }
+
+// An agent's tree stops at its cgroup: a child started in another cgroup
+// (another agent's, here) is that cgroup's source's, not the agent's, and so
+// is what it starts there; a member that moves to another cgroup is no
+// longer counted from then on. Reaping such a child adds nothing either.
+func TestAgentTreeStopsAtCgroup(t *testing.T) {
+	const (
+		cgA = "user.slice/user-1000.slice/session-a.scope"
+		cgB = "user.slice/user-1000.slice/user@1000.service/app.slice/b.scope"
+	)
+	in := func(p platform.ProcIO, cg string) platform.ProcIO {
+		p.Cgroup = cg
+		p.Within = map[string]string{cgA: "session:session-a.scope", cgB: "user:b.scope"}[cg]
+		return p
+	}
+	A := func(b int64) platform.ProcIO { return in(agentProc(10, 1, "claude", "/p", "", b), cgA) }
+	B := func(b int64) platform.ProcIO { return in(plain(11, 10, b), cgB) } // A's shell, in b.scope
+	D := func(b int64) platform.ProcIO { return in(plain(12, 11, b), cgB) } // what B runs there
+	C := func(b int64) platform.ProcIO { return in(agentProc(20, 1, "codex", "/q", "", b), cgB) }
+	M := func(cg string, b int64) platform.ProcIO { return in(plain(13, 10, b), cg) } // A's member, moved later
+	a := New()
+	steps := [][]platform.ProcIO{
+		{A(0), B(0), D(0), C(0), M(cgA, 0)},
+		{A(0), B(100 * mib), D(10 * mib), C(1 * mib), M(cgA, 5*mib)},
+		{A(0), B(100 * mib), D(10 * mib), C(1 * mib), M(cgB, 8*mib)},
+		{A(110 * mib), C(1 * mib), M(cgB, 9*mib)}, // A reaped B, which had reaped D
+	}
+	want := [][]AgentDelta{
+		nil,
+		{{Key: "agent:claude:/p", Within: "session:session-a.scope", Bytes: 5 * mib}, {Key: "agent:codex:/q", Within: "user:b.scope", Bytes: 1 * mib}},
+		nil,
+		nil,
+	}
+	for i, ps := range steps {
+		d, _ := a.Step(platform.DiskSnapshot{Procs: ps})
+		if !slices.Equal(d.Agents, want[i]) {
+			t.Errorf("step %d: Agents = %+v, want %+v", i, d.Agents, want[i])
+		}
+	}
+}
