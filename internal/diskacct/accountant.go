@@ -46,7 +46,8 @@ type procKey struct {
 
 // tombstoneSamples is how many consecutive samples a vanished process may be
 // missing (a failed read, a skipped cgroup, a pass cut short) and still
-// resume from its last counter. It outlives every transfer, which lives two.
+// resume from its last counter and take back the transfers it handed over or
+// carried: those wait as long as it is a tombstone.
 const tombstoneSamples = 10
 
 // proc is the ledger entry of one process seen in an agent's cgroup.
@@ -58,7 +59,7 @@ const tombstoneSamples = 10
 // them when it reaps the child.
 type proc struct {
 	last    int64
-	parent  procKey // last known parent; zero when it was outside the snapshot
+	parent  procKey // last known parent; zero when it was outside the snapshot and not a tombstone
 	member  bool    // once in an agent tree, always in it
 	root    procKey // the agent root it was first seen under
 	key     string  // the root's agent key, as last seen
@@ -70,9 +71,15 @@ type proc struct {
 // transfer is credited counter handed over by a vanished process, kept by
 // origin and route so that a process that reappears takes back exactly what
 // is still pending.
+//
+// A transfer is held by the nearest live ancestor of its origin, since that
+// one's counter gets it on a reap, whether the processes in between were
+// reaped too or only skipped. Those in between are its carriers. While a
+// carrier is a tombstone, the transfer cannot expire: the carrier may come
+// back and take it. With no live ancestor it stays with the topmost tombstone.
 type transfer struct {
 	origin   procKey   // whose last counter this is
-	carriers []procKey // who held it before the current holder, first holder first
+	carriers []procKey // the tombstones between origin and holder, lowest first
 	amount   int64
 	aged     bool // waited one interval already: dropped after this one
 }
@@ -161,11 +168,15 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 			a.procs[k] = st
 		}
 		var pst *proc // the parent, already visited
-		st.parent = procKey{}
 		if j, ok := index[p.PPID]; ok && p.PPID != p.PID {
 			visit(j)
 			st.parent = procKey{p.PPID, ps[j].Start}
 			pst = a.procs[st.parent]
+		} else if e := a.procs[st.parent]; e == nil || e.gone == 0 || st.parent.pid != p.PPID {
+			// While the PPID still names the last known parent, now a
+			// tombstone, that parent lives (an orphan gets a new PPID): it
+			// was only skipped, and the link stays.
+			st.parent = procKey{}
 		}
 		switch {
 		case p.Agent != "": // an agent heads its own tree, even inside another's
@@ -187,7 +198,7 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 		}
 
 		raw := p.Bytes - st.last
-		credit, rest := settle(st.pending, raw)
+		credit, rest := a.settle(st.pending, raw)
 		st.pending, st.last = rest, p.Bytes
 		if growth := raw - credit; st.member && growth != 0 {
 			sums[sum{st.key, st.within}] += growth
@@ -211,12 +222,12 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 }
 
 // settle credits a live process's pending transfers against its counter's
-// change raw and returns the credit and what may wait one more interval.
+// change raw and returns the credit and what may wait.
 // A positive total is credited up to the positive part of raw, a negative
 // one down to the negative part: a transfer the counter has not caught up
 // with waits instead of turning into growth, so a child that was only
 // skipped, not reaped, takes it back without a trace.
-func settle(pending []transfer, raw int64) (int64, []transfer) {
+func (a *Accountant) settle(pending []transfer, raw int64) (int64, []transfer) {
 	var total int64
 	for _, t := range pending {
 		total += t.amount
@@ -225,31 +236,60 @@ func settle(pending []transfer, raw int64) (int64, []transfer) {
 	if total >= 0 {
 		credit = min(total, max(0, raw))
 	}
-	// The oldest is credited first: of the remainder, only this interval's
-	// transfers of its sign wait, the freshest first; the aged rest is dropped.
+	// Of the remainder, transfers of its sign are kept: first the pinned
+	// ones (a carrier may take them back, so they are credited last), then
+	// this interval's, the freshest first, which age. Aged ones are dropped.
 	left := total - credit
-	var out []transfer
-	for i := len(pending) - 1; i >= 0 && left != 0; i-- {
-		t := pending[i]
-		if t.aged || t.amount == 0 || (t.amount > 0) != (left > 0) {
+	order := make([]int, 0, len(pending))
+	for i := len(pending) - 1; i >= 0; i-- {
+		if a.pinned(pending[i]) {
+			order = append(order, i)
+		}
+	}
+	for i := len(pending) - 1; i >= 0; i-- {
+		if !a.pinned(pending[i]) && !pending[i].aged {
+			order = append(order, i)
+		}
+	}
+	keep := make([]bool, len(pending))
+	out := slices.Clone(pending)
+	for _, i := range order {
+		t := &out[i]
+		if left == 0 {
+			break
+		}
+		if t.amount == 0 || (t.amount > 0) != (left > 0) {
 			continue
 		}
 		if (left > 0 && t.amount > left) || (left < 0 && t.amount < left) {
 			t.amount = left
 		}
 		left -= t.amount
-		t.aged = true
-		out = append(out, t)
+		t.aged = t.aged || !a.pinned(*t)
+		keep[i] = true
 	}
-	slices.Reverse(out)
-	return credit, out
+	kept := out[:0]
+	for i, t := range out {
+		if keep[i] {
+			kept = append(kept, t)
+		}
+	}
+	return credit, kept
+}
+
+// pinned reports whether a carrier of t is a tombstone that may come back.
+func (a *Accountant) pinned(t transfer) bool {
+	for _, c := range t.carriers {
+		if e := a.procs[c]; e != nil && e.gone > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // handOver turns the processes that vanished since the last sample into
-// tombstones. Bottom-up through every generation that vanished together, each
-// hands its last counter and the transfers it holds to its last known parent
-// while that one is tracked and was alive; otherwise the transfers stay with
-// the tombstone and expire there.
+// tombstones. Each hands its last counter, and the transfers it holds, to
+// its nearest live ancestor through the tombstones in between (see transfer).
 func (a *Accountant) handOver(alive map[procKey]bool) {
 	var gone []procKey
 	for k, st := range a.procs {
@@ -257,41 +297,39 @@ func (a *Accountant) handOver(alive map[procKey]bool) {
 			gone = append(gone, k)
 		}
 	}
-	vanishing := make(map[procKey]bool, len(gone))
+	slices.SortFunc(gone, compareKeys)
 	for _, k := range gone {
-		vanishing[k] = true
+		a.procs[k].gone = 1
 	}
-	depth := map[procKey]int{}
-	var depthOf func(k procKey, hops int) int
-	depthOf = func(k procKey, hops int) int {
-		if d, ok := depth[k]; ok {
-			return d
-		}
-		d := 0
-		if p := a.procs[k].parent; vanishing[p] && hops < len(gone) { // hops: a stale link loop cannot recurse forever
-			d = 1 + depthOf(p, hops+1)
-		}
-		depth[k] = d
-		return d
-	}
-	slices.SortFunc(gone, func(x, y procKey) int {
-		return cmp.Or(cmp.Compare(depthOf(y, 0), depthOf(x, 0)), compareKeys(x, y))
-	})
 	for _, k := range gone {
 		st := a.procs[k]
-		st.gone = 1
-		h := a.procs[st.parent]
-		if h == nil || h.gone > 0 {
-			continue
+		holder, route := k, []procKey(nil) // route: the tombstones above k, below the holder
+		for p := st.parent; len(route) <= len(a.procs); {
+			e := a.procs[p]
+			if e == nil {
+				break
+			}
+			if holder != k {
+				route = append(route, holder)
+			}
+			holder = p
+			if e.gone == 0 {
+				break
+			}
+			p = e.parent
 		}
+		if holder == k {
+			continue // nobody above: its transfers wait on its tombstone
+		}
+		h := a.procs[holder]
 		for _, t := range st.pending {
-			t.carriers = append(slices.Clone(t.carriers), k)
+			t.carriers = slices.Concat(t.carriers, []procKey{k}, route)
 			t.aged = false // the hand-over is news of this interval
 			h.pending = append(h.pending, t)
 		}
 		st.pending = nil
 		if st.last != 0 {
-			h.pending = append(h.pending, transfer{origin: k, amount: st.last})
+			h.pending = append(h.pending, transfer{origin: k, carriers: route, amount: st.last})
 		}
 	}
 }
@@ -299,8 +337,8 @@ func (a *Accountant) handOver(alive map[procKey]bool) {
 // revive brings back a process that was missing from earlier samples but
 // never reaped. It takes back what it handed over and is still pending: its
 // own counter goes nowhere, and transfers it carried return to it, since
-// its counter, not its parent's, covers them. What a parent already credited
-// stays credited.
+// its counter, not its ancestor's, covers them. What an ancestor already
+// credited stays credited.
 func (a *Accountant) revive(k procKey) {
 	st := a.procs[k]
 	st.gone = 0
@@ -319,7 +357,7 @@ func (a *Accountant) revive(k procKey) {
 			switch {
 			case t.origin == k:
 			case i >= 0:
-				t.carriers = t.carriers[:i:i]
+				t.carriers = t.carriers[:i:i] // pinned so far, so never aged
 				st.pending = append(st.pending, t)
 			default:
 				kept = append(kept, t)
@@ -329,8 +367,9 @@ func (a *Accountant) revive(k procKey) {
 	}
 }
 
-// age ends the interval for tombstones: their aged transfers are dropped,
-// the rest wait one more, and a tombstone missing too long is forgotten.
+// age forgets tombstones missing too long, with the transfers they hold.
+// Transfers held by a tombstone do not expire before: nobody's counter can
+// show them meanwhile.
 func (a *Accountant) age() {
 	for k, st := range a.procs {
 		if st.gone == 0 {
@@ -341,14 +380,6 @@ func (a *Accountant) age() {
 			continue
 		}
 		st.gone++
-		kept := st.pending[:0]
-		for _, t := range st.pending {
-			if !t.aged {
-				t.aged = true
-				kept = append(kept, t)
-			}
-		}
-		st.pending = kept
 	}
 }
 

@@ -439,3 +439,76 @@ func TestAgentTombstonesExpire(t *testing.T) {
 		t.Errorf("ledger holds %d entries, want only the agent", len(a.procs))
 	}
 }
+
+// A process skipped around the reaps of its children: whatever happens while
+// it is unseen, its children's writes are counted once. Each case is a tree
+// A (agent) -> B -> D with D's 1G seen first.
+func TestAgentSkippedReaper(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	B := func(ppid int, b int64) platform.ProcIO { return plain(11, ppid, b) }
+	D := func(ppid int) platform.ProcIO { return plain(12, ppid, gib) }
+	for name, c := range map[string]struct {
+		snaps []platform.DiskSnapshot
+		want  int64
+	}{
+		"B skipped while D seen, D reaped as B returns": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(A(0), D(11)), procs(A(0), B(10, gib)),
+		}, gib},
+		"B skipped twice, D reaped meanwhile": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(A(0), D(11)), procs(A(0)), procs(A(0), B(10, gib)),
+		}, gib},
+		"B and D skipped, D reaped, B back two samples later": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(A(0)), procs(A(0)), procs(A(0), B(10, gib)),
+		}, gib},
+		"B and D skipped long, D reaped, B back": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(A(0)), procs(A(0)), procs(A(0)), procs(A(0)), procs(A(0), B(10, gib)),
+		}, gib},
+		"B skipped, then D and B reaped before the next sample": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(A(0), D(11)), procs(A(gib)),
+		}, gib},
+		"B skipped, D reaped, A writes on its own meanwhile": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(A(0), D(11)), procs(A(3 * gib)), procs(A(3*gib), B(10, gib)),
+		}, 4 * gib},
+		"whole tree skipped, D reaped during the skip": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(), procs(A(0), B(10, gib)),
+		}, gib},
+		"whole tree skipped long, D reaped during the skip": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), B(10, 0), D(11)), procs(), procs(), procs(), procs(), procs(A(0), B(10, gib)),
+		}, gib},
+	} {
+		total, steps := agentTotal(t, key, c.snaps...)
+		if total != c.want {
+			t.Errorf("%s: agent total = %d (steps %v), want %d", name, total, steps, c.want)
+		}
+	}
+}
+
+// Cases around the skipped-reaper rules that must not change: PID reuse
+// while the old process is a tombstone, a skipped child back under init
+// after its holder was reaped, a reparent to the agent.
+func TestAgentSkipNeighbours(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	for name, c := range map[string]struct {
+		snaps []platform.DiskSnapshot
+		want  int64
+	}{
+		"PID reuse while the old one is a tombstone": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), plain(11, 10, gib)), procs(A(gib)),
+			procs(A(gib), platform.ProcIO{PID: 11, PPID: 10, Start: 99}),
+			procs(A(gib), platform.ProcIO{PID: 11, PPID: 10, Start: 99, Bytes: 50 * mib}),
+		}, gib + 50*mib},
+		"C skipped, its holder B reaped, C back under init": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), plain(11, 10, 0), plain(12, 11, gib)), procs(A(0), plain(11, 10, 0)), procs(A(0)), procs(A(0), plain(12, 1, gib)),
+		}, gib},
+		"reparent to A after B reaped, then C reaped": {[]platform.DiskSnapshot{
+			procs(A(0)), procs(A(0), plain(11, 10, 0), plain(12, 11, gib)), procs(A(0), plain(12, 10, gib)), procs(A(gib)), procs(A(gib)),
+		}, gib},
+	} {
+		total, steps := agentTotal(t, key, c.snaps...)
+		if total != c.want {
+			t.Errorf("%s: agent total = %d (steps %v), want %d", name, total, steps, c.want)
+		}
+	}
+}
