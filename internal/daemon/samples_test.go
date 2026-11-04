@@ -218,20 +218,6 @@ func TestStatsSamplerDiskFailureKeepsMemorySample(t *testing.T) {
 	}
 }
 
-func TestAgentLabel(t *testing.T) {
-	for key, want := range map[string]string{
-		"agent:claude:/home/u/sber/auto-evolve": "claude ~/sber/auto-evolve",
-		"agent:codex:/home/u":                   "codex ~",
-		"agent:codex:/home/user2/x":             "codex /home/user2/x",
-		"agent:kimi:":                           "kimi",
-		"docker:runi":                           "docker:runi",
-	} {
-		if got := AgentLabel(key, "/home/u"); got != want {
-			t.Errorf("%s: %q, want %q", key, got, want)
-		}
-	}
-}
-
 // The alarm's events go to the webhook like the daemon's own, or are skipped
 // without one.
 func TestOperatorEmitter(t *testing.T) {

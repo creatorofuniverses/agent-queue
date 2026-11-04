@@ -14,6 +14,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
@@ -206,7 +207,7 @@ func alarmText(ev diskacct.AlarmEvent, home string) string {
 	for _, s := range ev.Top {
 		t := s.Source + " " + perHour(s.BytesPerHour)
 		if s.Agent != "" {
-			t += " (≈ " + AgentLabel(s.Agent, home) + ")"
+			t += " (≈ " + stats.AgentLabel(s.Agent, home) + ")"
 		}
 		top = append(top, t)
 	}
@@ -236,25 +237,4 @@ func shortDuration(d time.Duration) string {
 		s = strings.TrimSuffix(s, "0m")
 	}
 	return s
-}
-
-// AgentLabel renders an agent key "agent:<name>:<project>" as "<name>
-// <project>", the project under home shown with ~. Other keys stay as they are.
-func AgentLabel(key, home string) string {
-	rest, ok := strings.CutPrefix(key, "agent:")
-	if !ok {
-		return key
-	}
-	name, project, _ := strings.Cut(rest, ":")
-	if home != "" && home != "/" {
-		if project == home {
-			project = "~"
-		} else if p, ok := strings.CutPrefix(project, home+"/"); ok {
-			project = "~/" + p
-		}
-	}
-	if project == "" {
-		return name
-	}
-	return name + " " + project
 }

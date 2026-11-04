@@ -7,6 +7,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"os"
 	"slices"
 	"time"
 )
@@ -40,7 +41,7 @@ func (d *server) stats(ctx context.Context, raw json.RawMessage) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	in := stats.Input{Since: since, Until: time.Now().UTC(), Profile: a.Profile, Patterns: d.cfg.Hook.Patterns, SliceName: d.cfg.SliceName, TeardownSliceName: d.cfg.TeardownSliceName()}
+	in := stats.Input{Since: since, Until: time.Now().UTC(), Profile: a.Profile, Patterns: d.cfg.Hook.Patterns, SliceName: d.cfg.SliceName, TeardownSliceName: d.cfg.TeardownSliceName(), Home: os.Getenv("HOME")}
 	if in.Items, e = d.st.ItemsSince(ctx, since, a.Profile); e != nil {
 		return nil, e
 	}
@@ -58,6 +59,9 @@ func (d *server) stats(ctx context.Context, raw json.RawMessage) (any, error) {
 			return nil, e
 		}
 		if in.PSIClosedAtSince, e = d.st.PSIClosedAt(ctx, since); e != nil {
+			return nil, e
+		}
+		if in.DiskWrites, e = d.st.DiskWritesSince(ctx, since); e != nil {
 			return nil, e
 		}
 		if in.Hits, e = hook.ReadHits(d.paths.StateDir, since); e != nil {

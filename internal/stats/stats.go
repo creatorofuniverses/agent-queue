@@ -2,10 +2,13 @@
 package stats
 
 import (
+	"fmt"
 	"github.com/creatorofuniverses/agent-queue/internal/hook"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/profile"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/units"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +27,10 @@ type Input struct {
 	SliceName, TeardownSliceName string
 	// PSIClosedAtSince: admission was closed by pressure when the window began.
 	PSIClosedAtSince bool
+	// DiskWrites: hourly disk bytes by source (store.DiskWritesSince); Home is
+	// the daemon's $HOME, shown as ~ in agent projects of finding texts.
+	DiskWrites []store.DiskWrite
+	Home       string
 }
 type Summary struct {
 	Since        time.Time          `json:"since"`
@@ -40,6 +47,10 @@ type Summary struct {
 	Delivery       []ChannelStats        `json:"delivery"`
 	Hook           *HookStats            `json:"hook"`
 	Incidents      *IncidentStats        `json:"incidents"`
+
+	DiskHost *DiskHostStats `json:"disk_host,omitempty"`
+	Overview *Overview      `json:"overview,omitempty"`
+	Findings []Finding      `json:"findings"`
 }
 type ItemGroup struct {
 	Kind       string         `json:"kind"`
@@ -171,7 +182,7 @@ type GuardSnapshot struct {
 }
 
 func Summarize(in Input) Summary {
-	s := Summary{Since: in.Since, Until: in.Until, Profile: in.Profile, Items: []ItemGroup{}, Profiles: []ProfileStats{}}
+	s := Summary{Since: in.Since, Until: in.Until, Profile: in.Profile, Items: []ItemGroup{}, Profiles: []ProfileStats{}, Findings: []Finding{}}
 	summarizeItems(&s, in)
 	summarizeProfiles(&s, in)
 	summarizeDisk(&s, in)
@@ -194,6 +205,9 @@ func Summarize(in Input) Summary {
 		}
 	}
 	summarizeIncidents(&s, in)
+	summarizeDiskHost(&s, in)
+	summarizeOverview(&s, in)
+	s.Findings = findings(&s, in)
 	return s
 }
 func keys[T any](m map[string]T) []string {
@@ -546,4 +560,376 @@ func summarizeIncidents(s *Summary, in Input) {
 	if !closed.IsZero() {
 		g.PSIClosedSeconds += max(0, in.Until.Sub(closed).Seconds())
 	}
+}
+
+// AgentLabel renders an agent key "agent:<name>:<project>" as "<name>
+// <project>", the project under home shown with ~. Other keys stay as they are.
+func AgentLabel(key, home string) string {
+	rest, ok := strings.CutPrefix(key, "agent:")
+	if !ok {
+		return key
+	}
+	name, project, _ := strings.Cut(rest, ":")
+	if home != "" && home != "/" {
+		if project == home {
+			project = "~"
+		} else if p, ok := strings.CutPrefix(project, home+"/"); ok {
+			project = "~/" + p
+		}
+	}
+	if project == "" {
+		return name
+	}
+	return name + " " + project
+}
+
+// DiskHostStats: what the host disks were written and by whom. Totals are
+// clamped at report time (the hourly rows are signed sums, see store.DiskWrite).
+type DiskHostStats struct {
+	Written uint64            `json:"written"`
+	Hours   float64           `json:"hours"`   // hours with host data
+	Sources []DiskSourceStats `json:"sources"` // largest first, with "other" = max(0, host − Σ sources)
+	Busiest []DiskHourStats   `json:"busiest"` // up to 5 hours, most written first
+}
+type DiskSourceStats struct {
+	Source      string           `json:"source"`
+	Written     uint64           `json:"written"`
+	Reservation string           `json:"reservation,omitempty"` // docker:<p>: the latest reservation of that docker project
+	Agents      []DiskAgentStats `json:"agents,omitempty"`      // each total clamped into [0, Written of the source]
+}
+type DiskAgentStats struct {
+	Agent   string `json:"agent"`
+	Written uint64 `json:"written"`
+}
+type DiskHourStats struct {
+	Hour       time.Time `json:"hour"`
+	Written    uint64    `json:"written"`
+	Top        string    `json:"top"`
+	TopWritten uint64    `json:"top_written"`
+	TopAgent   string    `json:"top_agent,omitempty"`
+}
+
+func clampU(v int64) uint64 { return uint64(max(v, 0)) }
+
+func summarizeDiskHost(s *Summary, in Input) {
+	if len(in.DiskWrites) == 0 {
+		return
+	}
+	const hostKey = "host"
+	hostHour := map[time.Time]int64{}
+	srcHour := map[time.Time]map[string]int64{}
+	agentHour := map[time.Time]map[string]map[string]int64{} // hour → source → agent
+	srcTotal := map[string]int64{}
+	agentTotal := map[string]map[string]int64{} // source → agent
+	var host int64
+	for _, r := range in.DiskWrites {
+		switch {
+		case r.Source == hostKey && r.Within == "":
+			hostHour[r.Hour] += r.Bytes
+			host += r.Bytes
+		case strings.HasPrefix(r.Source, "agent:") && r.Within != "":
+			if agentTotal[r.Within] == nil {
+				agentTotal[r.Within] = map[string]int64{}
+			}
+			agentTotal[r.Within][r.Source] += r.Bytes
+			if agentHour[r.Hour] == nil {
+				agentHour[r.Hour] = map[string]map[string]int64{}
+			}
+			if agentHour[r.Hour][r.Within] == nil {
+				agentHour[r.Hour][r.Within] = map[string]int64{}
+			}
+			agentHour[r.Hour][r.Within][r.Source] += r.Bytes
+		case r.Within == "":
+			srcTotal[r.Source] += r.Bytes
+			if srcHour[r.Hour] == nil {
+				srcHour[r.Hour] = map[string]int64{}
+			}
+			srcHour[r.Hour][r.Source] += r.Bytes
+		}
+	}
+	d := &DiskHostStats{Written: clampU(host), Hours: float64(len(hostHour)), Sources: []DiskSourceStats{}, Busiest: []DiskHourStats{}}
+	var sum uint64
+	for _, name := range keys(srcTotal) {
+		w := clampU(srcTotal[name])
+		sum += w
+		src := DiskSourceStats{Source: name, Written: w}
+		for _, a := range keys(agentTotal[name]) {
+			if aw := min(clampU(agentTotal[name][a]), w); aw > 0 {
+				src.Agents = append(src.Agents, DiskAgentStats{Agent: a, Written: aw})
+			}
+		}
+		sort.SliceStable(src.Agents, func(i, j int) bool { return src.Agents[i].Written > src.Agents[j].Written })
+		if p, ok := strings.CutPrefix(name, "docker:"); ok {
+			var last *model.Item
+			for _, it := range in.Items {
+				if it.IsReservation() && it.DockerProject == p && (last == nil || !it.CreatedAt.Before(last.CreatedAt)) {
+					last = it
+				}
+			}
+			if last != nil {
+				src.Reservation = last.Project + ":" + last.Name
+			}
+		}
+		if w > 0 {
+			d.Sources = append(d.Sources, src)
+		}
+	}
+	if other := satSub(d.Written, sum); other > 0 {
+		d.Sources = append(d.Sources, DiskSourceStats{Source: "other", Written: other})
+	}
+	sort.SliceStable(d.Sources, func(i, j int) bool { return d.Sources[i].Written > d.Sources[j].Written })
+	for h, v := range hostHour {
+		if v <= 0 {
+			continue
+		}
+		hs := DiskHourStats{Hour: h, Written: uint64(v)}
+		var topv int64
+		for _, name := range keys(srcHour[h]) {
+			if b := srcHour[h][name]; b > topv {
+				hs.Top, topv = name, b
+			}
+		}
+		hs.TopWritten = uint64(topv)
+		var agentv int64
+		for _, a := range keys(agentHour[h][hs.Top]) {
+			if b := agentHour[h][hs.Top][a]; b > agentv {
+				hs.TopAgent, agentv = a, b
+			}
+		}
+		d.Busiest = append(d.Busiest, hs)
+	}
+	sort.Slice(d.Busiest, func(i, j int) bool {
+		if d.Busiest[i].Written != d.Busiest[j].Written {
+			return d.Busiest[i].Written > d.Busiest[j].Written
+		}
+		return d.Busiest[i].Hour.Before(d.Busiest[j].Hour)
+	})
+	if len(d.Busiest) > 5 {
+		d.Busiest = d.Busiest[:5]
+	}
+	s.DiskHost = d
+}
+
+// Overview carries the numbers of the one-screen summary.
+type Overview struct {
+	Tasks            int     `json:"tasks"`
+	Reservations     int     `json:"reservations"`
+	WaitedOverMinute int     `json:"waited_over_minute"`
+	WaitP50          float64 `json:"wait_p50"` // top-level tasks (no parent reservation) that were admitted
+	WaitP90          float64 `json:"wait_p90"`
+	Succeeded        int     `json:"succeeded"`
+	Failed           int     `json:"failed"`
+	KilledOwnLimit   int     `json:"killed_own_limit"`
+	KilledHostGuard  int     `json:"killed_host_guard"`
+	Rejected         int     `json:"rejected"`
+	TasksPeak        uint64  `json:"tasks_peak"`
+	AvailableMin     uint64  `json:"available_min"`
+	PressureClosures int     `json:"pressure_closures"`
+	PressureSeconds  float64 `json:"pressure_seconds"`
+	DiskWritten      uint64  `json:"disk_written"`
+	DiskPerHour      float64 `json:"disk_per_hour"`
+	AQShare          float64 `json:"aq_share"`
+	TopWriter        string  `json:"top_writer"`
+	TopWriterAgent   string  `json:"top_writer_agent"`
+	TopWriterBytes   uint64  `json:"top_writer_bytes"`
+	HookNudges       int     `json:"hook_nudges"`
+	DeliveredShare   float64 `json:"delivered_share"` // (acked + sent) / all events but skipped
+}
+
+func summarizeOverview(s *Summary, in Input) {
+	o := &Overview{}
+	s.Overview = o
+	var waits []float64
+	for _, it := range in.Items {
+		if it.IsReservation() {
+			o.Reservations++
+			continue
+		}
+		if it.Kind != model.KindTask {
+			continue
+		}
+		o.Tasks++
+		switch {
+		case it.State == model.StateSucceeded:
+			o.Succeeded++
+		case it.State == model.StateRejected:
+			o.Rejected++
+		case it.State == model.StateFailed && it.Reason == model.ReasonOOM:
+			o.KilledOwnLimit++
+		case it.State == model.StateFailed && it.Reason == model.ReasonOOMHostGuard:
+			o.KilledHostGuard++
+		case it.State == model.StateFailed:
+			o.Failed++
+		}
+		if it.ParentID == "" && !it.AdmittedAt.IsZero() {
+			w := max(0, it.AdmittedAt.Sub(it.CreatedAt).Seconds())
+			waits = append(waits, w)
+			if w > 60 {
+				o.WaitedOverMinute++
+			}
+		}
+	}
+	o.WaitP50, o.WaitP90 = profile.Percentile(waits, 50), profile.Percentile(waits, 90)
+	if s.Host != nil {
+		o.TasksPeak, o.AvailableMin = s.Host.TasksMax, s.Host.MemAvailableMin
+	}
+	if s.Incidents != nil {
+		o.PressureClosures, o.PressureSeconds = s.Incidents.PSIEpisodes, s.Incidents.PSIClosedSeconds
+	}
+	if s.Hook != nil {
+		o.HookNudges = s.Hook.Hits
+	}
+	if d := s.DiskHost; d != nil {
+		o.DiskWritten = d.Written
+		if d.Hours > 0 {
+			o.DiskPerHour = float64(d.Written) / d.Hours
+		}
+		for _, src := range d.Sources {
+			if src.Source == "aq" && d.Written > 0 {
+				o.AQShare = float64(src.Written) / float64(d.Written)
+			}
+			if o.TopWriter == "" && src.Source != "other" {
+				o.TopWriter, o.TopWriterBytes = src.Source, src.Written
+				if len(src.Agents) > 0 {
+					o.TopWriterAgent = src.Agents[0].Agent
+				}
+			}
+		}
+	}
+	var delivered, all int
+	for _, c := range s.Delivery {
+		delivered += c.Acked + c.Sent
+		all += c.Events - c.Skipped
+	}
+	if all > 0 {
+		o.DeliveredShare = float64(delivered) / float64(all)
+	}
+}
+
+// Finding is one line of "worth a look": the stats area it points at, a human
+// text and the weight that ranks it.
+type Finding struct {
+	Area   string  `json:"area"`
+	Text   string  `json:"text"`
+	Weight float64 `json:"weight"`
+}
+
+// Thresholds and base weights of the findings; tune here.
+const (
+	maxFindings        = 7
+	diskShareMin       = 0.25     // a source outside aq writing this share of the host's bytes ...
+	diskBytesMin       = 10 << 30 // ... and at least this much, or a single run writing this much
+	profilePeakOver    = 1.2
+	unusedGiBHoursMin  = 1.0
+	weightGuard        = 6.0
+	weightDiskSource   = 5.0
+	weightNotify       = 4.5
+	weightDiskRun      = 4.0
+	weightKernelOOM    = 3.5
+	weightProfiles     = 3.0
+	weightBudget       = 2.5
+	weightReservations = 2.0
+)
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+func findings(s *Summary, in Input) []Finding {
+	out := []Finding{}
+	add := func(area, text string, w float64) { out = append(out, Finding{Area: area, Text: text, Weight: w}) }
+	if d := s.DiskHost; d != nil {
+		for _, src := range d.Sources {
+			if src.Source == "aq" || src.Source == "other" || src.Written < diskBytesMin || float64(src.Written) < diskShareMin*float64(d.Written) {
+				continue
+			}
+			share := float64(src.Written) / float64(d.Written)
+			t := fmt.Sprintf("%s wrote %s", src.Source, units.FormatSize(src.Written))
+			if len(src.Agents) > 0 {
+				a := src.Agents[0]
+				switch f := float64(a.Written) / float64(src.Written); {
+				case f >= 0.9:
+					t += ", ≈ all of it " + AgentLabel(a.Agent, in.Home)
+				case f >= 0.5:
+					t += fmt.Sprintf(", mostly %s", AgentLabel(a.Agent, in.Home))
+				}
+			}
+			add("disk", t, weightDiskSource+min(share, 1))
+		}
+	}
+	var heavy *model.Item
+	for _, it := range in.Items {
+		if it.Kind == model.KindTask && it.IOWriteBytes != nil && *it.IOWriteBytes >= diskBytesMin && (heavy == nil || *it.IOWriteBytes > *heavy.IOWriteBytes) {
+			heavy = it
+		}
+	}
+	if heavy != nil {
+		name := heavy.Profile
+		if name == "" {
+			name = heavy.Name
+		}
+		add("disk", fmt.Sprintf("%s wrote %s in one run", name, units.FormatSize(*heavy.IOWriteBytes)), weightDiskRun+min(float64(*heavy.IOWriteBytes)/(1<<40), 0.99))
+	}
+	if killed, engaged := s.Overview != nil && s.Overview.KilledHostGuard > 0, s.Incidents != nil && s.Incidents.GuardEngaged > 0; killed || engaged {
+		t := ""
+		if o := s.Overview; o != nil && o.KilledHostGuard > 0 {
+			t = plural(o.KilledHostGuard, "task was", "tasks were") + " killed by the host guard"
+		}
+		if g := s.Incidents; g != nil && g.GuardEngaged > 0 {
+			if t != "" {
+				t += "; "
+			}
+			t += fmt.Sprintf("guard ceiling engaged %d×", g.GuardEngaged)
+			if len(g.GuardSnapshots) > 0 {
+				t += " (last: " + g.GuardSnapshots[0].Detail + ")"
+			}
+		}
+		add("incidents", t, weightGuard)
+	}
+	bad := 0
+	for _, p := range s.Profiles {
+		if p.OOM > 0 || p.PeakToExpectedP90 > profilePeakOver {
+			bad++
+		}
+	}
+	if bad > 0 {
+		add("profiles", plural(bad, "profile", "profiles")+fmt.Sprintf(" ran out of memory or peak >%.0f%% over their --memory", (profilePeakOver-1)*100), weightProfiles+min(float64(bad), 10)/20)
+	}
+	if len(s.ReservationFit) > 0 && s.ReservationFit[0].UnusedGiBHours >= unusedGiBHoursMin {
+		r := s.ReservationFit[0]
+		add("reservations", fmt.Sprintf("%s held %.0f GiB·h it never used", r.Name, r.UnusedGiBHours), weightReservations+min(r.UnusedGiBHours/1000, 1))
+	}
+	busy := 0
+	for _, it := range in.Items {
+		if it.State == model.StateRejected && strings.HasPrefix(it.Diagnostic, "task budget: memory ") && strings.Contains(it.Diagnostic, " expected plus ") {
+			busy++
+		}
+	}
+	if busy > 0 {
+		add("budget", plural(busy, "nested task", "nested tasks")+" rejected while the task budget was busy", weightBudget+min(float64(busy), 100)/200)
+	}
+	failed, pending := 0, 0
+	for _, c := range s.Delivery {
+		failed += c.Failed
+		pending += c.Pending
+	}
+	if failed > 0 || pending > 0 {
+		add("notify", fmt.Sprintf("%d notifications failed, %d pending", failed, pending), weightNotify)
+	}
+	if g := s.Incidents; g != nil {
+		var oom float64
+		for k, v := range g.KernelOOMBy {
+			if k != platform.EndedCgroups {
+				oom += v
+			}
+		}
+		if oom > 0 {
+			add("incidents", fmt.Sprintf("kernel OOM killed %.0f processes outside aq", oom), weightKernelOOM)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Weight > out[j].Weight })
+	return out[:min(len(out), maxFindings)]
 }

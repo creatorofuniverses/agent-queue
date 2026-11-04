@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/creatorofuniverses/agent-queue/internal/hook"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
@@ -8,6 +9,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"maps"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -167,5 +169,180 @@ func TestSummarizeGuardEngagements(t *testing.T) {
 	want := []GuardSnapshot{{At: t0.Add(4 * time.Hour), Detail: "snapshot 4"}, {At: t0.Add(3 * time.Hour), Detail: "snapshot 3"}, {At: t0.Add(2 * time.Hour), Detail: "snapshot 2"}}
 	if g.GuardEngaged != 5 || !reflect.DeepEqual(g.GuardSnapshots, want) {
 		t.Fatalf("%+v", g)
+	}
+}
+func TestAgentLabel(t *testing.T) {
+	for key, want := range map[string]string{
+		"agent:claude:/home/u/sber/auto-evolve": "claude ~/sber/auto-evolve",
+		"agent:codex:/home/u":                   "codex ~",
+		"agent:codex:/home/user2/x":             "codex /home/user2/x",
+		"agent:kimi:":                           "kimi",
+		"docker:runi":                           "docker:runi",
+	} {
+		if got := AgentLabel(key, "/home/u"); got != want {
+			t.Errorf("%s: %q, want %q", key, got, want)
+		}
+	}
+}
+
+const gib = 1 << 30
+
+func dw(h time.Time, src, within string, b int64) store.DiskWrite {
+	return store.DiskWrite{Hour: h, Source: src, Within: within, Bytes: b}
+}
+
+func TestSummarizeDiskHost(t *testing.T) {
+	h0 := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	h1 := h0.Add(time.Hour)
+	in := Input{Since: h0, Until: h1.Add(time.Hour), Items: []*model.Item{
+		{Kind: model.KindReservation, Project: "P", Name: "old", DockerProject: "runi", CreatedAt: h0},
+		{Kind: model.KindReservation, Project: "P", Name: "new", DockerProject: "runi", CreatedAt: h1},
+	}, DiskWrites: []store.DiskWrite{
+		dw(h0, "host", "", 100*gib), dw(h1, "host", "", 50*gib),
+		dw(h0, "docker:runi", "", 60*gib), dw(h1, "docker:runi", "", 20*gib),
+		dw(h0, "aq", "", 10*gib), dw(h1, "aq", "", -2*gib), // total 8
+		dw(h0, "session:ended", "", 5*gib),
+		dw(h0, "agent:claude:/p", "docker:runi", 70*gib), dw(h1, "agent:claude:/p", "docker:runi", 20*gib), // 90 > 80: clamped
+		dw(h0, "agent:codex:/q", "docker:runi", 3*gib),
+		dw(h0, "agent:neg:/q", "docker:runi", -5*gib), // negative: dropped
+	}}
+	s := Summarize(in)
+	d := s.DiskHost
+	if d == nil || d.Written != 150*gib || d.Hours != 2 {
+		t.Fatalf("%+v", d)
+	}
+	var got []string
+	for _, x := range d.Sources {
+		got = append(got, x.Source)
+	}
+	// other = 150 - (80 + 8 + 5) = 57
+	if !reflect.DeepEqual(got, []string{"docker:runi", "other", "aq", "session:ended"}) {
+		t.Fatal(got)
+	}
+	if d.Sources[1].Written != 57*gib || d.Sources[2].Written != 8*gib {
+		t.Fatal(d.Sources)
+	}
+	r := d.Sources[0]
+	if r.Written != 80*gib || r.Reservation != "P:new" || len(r.Agents) != 2 || r.Agents[0].Agent != "agent:claude:/p" || r.Agents[0].Written != 80*gib || r.Agents[1].Written != 3*gib {
+		t.Fatalf("%+v", r)
+	}
+	if len(d.Busiest) != 2 || d.Busiest[0].Hour != h0 || d.Busiest[0].Written != 100*gib || d.Busiest[0].Top != "docker:runi" || d.Busiest[0].TopWritten != 60*gib || d.Busiest[0].TopAgent != "agent:claude:/p" || d.Busiest[1].Written != 50*gib {
+		t.Fatalf("%+v", d.Busiest)
+	}
+}
+
+func TestSummarizeDiskEmpty(t *testing.T) {
+	s := Summarize(Input{})
+	if s.DiskHost != nil {
+		t.Fatal(s.DiskHost)
+	}
+	if s.Overview == nil || s.Overview.DiskWritten != 0 {
+		t.Fatal(s.Overview)
+	}
+}
+
+func TestOverview(t *testing.T) {
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	task := func(st model.State, r model.Reason, wait time.Duration) *model.Item {
+		it := &model.Item{Kind: model.KindTask, State: st, Reason: r, CreatedAt: now}
+		if wait >= 0 {
+			it.AdmittedAt = now.Add(wait)
+		}
+		return it
+	}
+	nested := task(model.StateSucceeded, "", 10*time.Minute)
+	nested.ParentID = "r1"
+	h := now.Truncate(time.Hour)
+	in := Input{Since: now, Until: now.Add(time.Hour), Items: []*model.Item{
+		task(model.StateSucceeded, "", 2*time.Second),
+		task(model.StateSucceeded, "", 90*time.Second),
+		task(model.StateFailed, model.ReasonCommandFailed, -1),
+		task(model.StateFailed, model.ReasonOOM, 4*time.Second),
+		task(model.StateFailed, model.ReasonOOMHostGuard, 6*time.Second),
+		task(model.StateRejected, "", -1),
+		nested,
+		{Kind: model.KindReservation, State: model.StateReleased},
+	}, Samples: []store.HostSample{{Span: time.Minute, MemAvailable: 7, Tasks: 9}, {Span: time.Minute, MemAvailable: 3, Tasks: 4}},
+		Incidents: []model.Incident{{At: now, Kind: "psi_close"}, {At: now.Add(10 * time.Second), Kind: "psi_open"}},
+		Patterns:  []string{"x"}, Hits: []hook.Hit{{Pattern: 0, Client: "c"}, {Pattern: 0, Client: "c"}},
+		Events:     []model.Event{{Channel: model.ChannelWebhook, Status: model.EventSent}, {Channel: model.ChannelWebhook, Status: model.EventAcked}, {Channel: model.ChannelWebhook, Status: model.EventFailed}, {Channel: model.ChannelWebhook, Status: model.EventSkipped}},
+		DiskWrites: []store.DiskWrite{dw(h, "host", "", 100*gib), dw(h, "aq", "", 10*gib), dw(h, "session:s.scope", "", 60*gib), dw(h, "agent:claude:/home/u/x", "session:s.scope", 59*gib)}, Home: "/home/u",
+	}
+	o := Summarize(in).Overview
+	if o == nil {
+		t.Fatal("no overview")
+	}
+	// waits of admitted top-level tasks: 2, 90, 4, 6
+	if o.Tasks != 7 || o.Reservations != 1 || o.WaitedOverMinute != 1 || o.WaitP50 != 4 || o.WaitP90 != 90 {
+		t.Fatalf("%+v", o)
+	}
+	if o.Succeeded != 3 || o.Failed != 1 || o.KilledOwnLimit != 1 || o.KilledHostGuard != 1 || o.Rejected != 1 {
+		t.Fatalf("%+v", o)
+	}
+	if o.TasksPeak != 9 || o.AvailableMin != 3 || o.PressureClosures != 1 || o.PressureSeconds != 10 || o.HookNudges != 2 {
+		t.Fatalf("%+v", o)
+	}
+	if o.DiskWritten != 100*gib || o.DiskPerHour != 100*gib || o.AQShare != 0.1 || o.TopWriter != "session:s.scope" || o.TopWriterAgent != "agent:claude:/home/u/x" || o.TopWriterBytes != 60*gib {
+		t.Fatalf("%+v", o)
+	}
+	if o.DeliveredShare != 2.0/3 {
+		t.Fatal(o.DeliveredShare)
+	}
+}
+
+func TestFindingsOrderAndCap(t *testing.T) {
+	h := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	w := uint64(30 * gib)
+	items := []*model.Item{
+		{Kind: model.KindTask, Name: "heavy", State: model.StateSucceeded, IOWriteBytes: &w},
+		{Kind: model.KindTask, State: model.StateFailed, Reason: model.ReasonOOMHostGuard},
+		{Kind: model.KindTask, State: model.StateRejected, Diagnostic: "task budget: memory 1 GiB expected plus 2 GiB of nested tasks exceeds task memory 2 GiB of reservation r"},
+		{Kind: model.KindTask, State: model.StateRejected, Diagnostic: "task budget: memory limit 3 GiB exceeds task memory 2 GiB of reservation r"},
+	}
+	in := Input{Since: h, Until: h.Add(time.Hour), Items: items,
+		Runs:       []profile.Run{{Profile: "p", State: model.StateFailed, Reason: model.ReasonOOM, MemoryPeak: 100, Expected: 100}},
+		Incidents:  []model.Incident{{At: h, Kind: "kernel_oom", Value: 1, Detail: "app.slice"}, {At: h, Kind: "guard_engaged", Detail: "who held it"}},
+		Events:     []model.Event{{Channel: model.ChannelWebhook, Status: model.EventFailed}},
+		DiskWrites: []store.DiskWrite{dw(h, "host", "", 100*gib), dw(h, "session:s.scope", "", 60*gib), dw(h, "agent:claude:/home/u/x", "session:s.scope", 59*gib)}, Home: "/home/u",
+	}
+	s := Summarize(in)
+	// disk source, run, guard, profile, budget, notify, kernel OOM = 7 candidates; add a reservation
+	s2 := in
+	s2.Items = append(append([]*model.Item(nil), items...), &model.Item{Kind: model.KindReservation, Project: "P", Name: "r", Expected: 10 * gib, Limit: 10 * gib, DockerProject: "d", AdmittedAt: h, EndedAt: h.Add(3 * time.Hour), MemoryPeak: 1, TaskMemoryPeak: new(uint64)})
+	f := Summarize(s2).Findings
+	if len(f) != 7 {
+		t.Fatalf("%d: %+v", len(f), f)
+	}
+	for i := 1; i < len(f); i++ {
+		if f[i].Weight > f[i-1].Weight {
+			t.Fatalf("not sorted: %+v", f)
+		}
+	}
+	areas := map[string]string{}
+	for _, x := range s.Findings {
+		areas[x.Area] += x.Text + "\n"
+	}
+	if len(s.Findings) != 6 && len(s.Findings) != 7 {
+		t.Fatalf("%+v", s.Findings)
+	}
+	if want := "session:s.scope wrote 60.0 GiB, ≈ all of it claude ~/x"; !strings.Contains(areas["disk"], want) {
+		t.Fatalf("%q", areas["disk"])
+	}
+	if !strings.Contains(areas["budget"], "1 nested task") {
+		t.Fatalf("%q", areas["budget"])
+	}
+}
+
+func TestFindingsNone(t *testing.T) {
+	s := Summarize(Input{})
+	if s.Findings == nil || len(s.Findings) != 0 {
+		t.Fatal(s.Findings)
+	}
+	b, _ := json.Marshal(s)
+	if !strings.Contains(string(b), `"findings":[]`) {
+		t.Fatal(string(b))
+	}
+	if p := Summarize(Input{Profile: "x"}); p.Findings == nil {
+		t.Fatal("nil findings with a profile")
 	}
 }
