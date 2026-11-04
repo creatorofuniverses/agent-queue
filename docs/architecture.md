@@ -273,7 +273,7 @@ Disk writes are accounted in two levels. Every host sample, the accountant in
 deltas as hourly sums in the `disk_writes` table. Level one (sources) adds up to
 the host figure. Level two (agents) is a per-process estimate from
 `/proc/PID/io` inside a source, over each agent and its descendants in the
-agent's cgroup (a process once seen in the tree stays with it while it lives); it is stored with the source it lived in and
+agent's cgroup (a process once seen in the tree stays with it while it lives, through reads that fail for a few samples); it is stored with the source it lived in and
 never added to a sum. Counters are diffed per physical disk and per cgroup: a
 disk that goes away adds nothing, a counter that went backwards belongs to a
 cgroup re-created under the same path and counts from zero, and a cgroup missing

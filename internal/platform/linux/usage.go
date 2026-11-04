@@ -21,10 +21,10 @@ type UsageMeter struct {
 	cfg      UsageMeterConfig
 	manager  string
 	projects map[string]string // working directory -> project root; the sampler runs one pass at a time
-	// tracked is the agent-tree processes the last pass reported, PID ->
-	// start time: they are read while they live, with or without an agent
-	// left in their cgroup.
-	tracked map[int]uint64
+	// tracked is the agent-tree processes the last pass reported or could
+	// not read, by PID: they are read while they live, with or without an
+	// agent left in their cgroup.
+	tracked map[int]trackedProc
 }
 
 func NewUsageMeter(cfg UsageMeterConfig) *UsageMeter {

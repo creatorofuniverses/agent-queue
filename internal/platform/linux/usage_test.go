@@ -235,3 +235,72 @@ func TestUsageProcIOSurvivors(t *testing.T) {
 		t.Fatalf("all gone: %v, tracked %v", got, m.tracked)
 	}
 }
+
+// A remembered process that cannot be read for a scan is not forgotten: it
+// is dropped only once it is gone (no /proc/PID, or another start time) or
+// after trackedMisses scans in a row without a reading.
+func TestUsageProcIOSurvivorUnreadable(t *testing.T) {
+	root := t.TempDir()
+	manager := "user.slice/user-1000.slice/user@1000.service"
+	usageFile(t, root, "proc/self/cgroup", "0::/"+manager+"/app.slice/aq.service\n")
+	session := "user.slice/user-1000.slice/session-3.scope"
+	proc := func(pid, ppid int, comm string, start int) {
+		base := fmt.Sprintf("proc/%d/", pid)
+		usageFile(t, root, base+"comm", comm+"\n")
+		usageFile(t, root, base+"cmdline", comm+"\x00")
+		usageFile(t, root, base+"status", fmt.Sprintf("Name:\t%s\nPPid:\t%d\n", comm, ppid))
+		usageFile(t, root, base+"stat", fmt.Sprintf("%d (%s) S %d 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 %d 0 0\n", pid, comm, ppid, start))
+		usageFile(t, root, base+"cgroup", "0::/"+session+"\n")
+		usageFile(t, root, base+"io", "write_bytes: 7\ncancelled_write_bytes: 0\n")
+	}
+	hide := func(pid int, file string) {
+		if e := os.Remove(filepath.Join(root, fmt.Sprintf("proc/%d/%s", pid, file))); e != nil {
+			t.Fatal(e)
+		}
+	}
+	m := NewUsageMeter(UsageMeterConfig{ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg")})
+	pids := func() []int {
+		t.Helper()
+		v, e := m.Usage(context.Background(), []string{"claude"})
+		if e != nil {
+			t.Fatal(e)
+		}
+		var out []int
+		for _, p := range v.IO {
+			out = append(out, p.PID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	proc(10, 1, "claude", 100)
+	proc(11, 10, "writer", 110)
+	if got := pids(); !slices.Equal(got, []int{10, 11}) {
+		t.Fatalf("with the agent: %v", got)
+	}
+	if e := os.RemoveAll(filepath.Join(root, "proc/10")); e != nil {
+		t.Fatal(e)
+	}
+	for _, file := range []string{"io", "stat", "comm"} {
+		proc(11, 1, "writer", 110)
+		hide(11, file)
+		if got := pids(); len(got) != 0 {
+			t.Fatalf("%s unreadable: %v", file, got)
+		}
+		proc(11, 1, "writer", 110)
+		if got := pids(); !slices.Equal(got, []int{11}) {
+			t.Fatalf("%s readable again: %v, want the writer", file, got)
+		}
+	}
+	// Unreadable for good: forgotten after a bounded number of scans.
+	hide(11, "io")
+	for range trackedMisses {
+		pids()
+	}
+	if len(m.tracked) != 0 {
+		t.Fatalf("still tracked after %d failed reads: %v", trackedMisses, m.tracked)
+	}
+	proc(11, 1, "writer", 110)
+	if got := pids(); len(got) != 0 {
+		t.Fatalf("forgotten writer read again: %v", got)
+	}
+}

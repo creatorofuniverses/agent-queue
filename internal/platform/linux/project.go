@@ -1,7 +1,9 @@
 package linux
 
 import (
+	"errors"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -67,8 +69,10 @@ func worktreeRoot(checkout, gitFile string) string {
 // The agent tree as seen here is an agent and what its processes start in
 // their own cgroup. Remembered by PID and start time, its processes are
 // read after the agent exits, with no agent left in the cgroup to select
-// it, and so are the children they start there; a process forgets nothing
-// but exits.
+// it, and so are the children they start there. A remembered process is
+// forgotten once it is gone (no /proc/PID, or another start time under its
+// PID) or after trackedMisses scans in a row without a reading; one that
+// cannot be read for a while is kept, or nothing would select it again.
 func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platform.ProcIO {
 	hosts := map[string]bool{}
 	for _, p := range procs {
@@ -76,12 +80,33 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 			hosts[p.cgroup] = true
 		}
 	}
+	prev, next := m.tracked, map[int]trackedProc{} // what the next pass remembers
+	// miss keeps a remembered identity that this pass could not read.
+	miss := func(pid int, start uint64) {
+		n := 1
+		if t, ok := prev[pid]; ok && t.start == start {
+			n = t.misses + 1
+		}
+		if n < trackedMisses {
+			next[pid] = trackedProc{start: start, misses: n}
+		}
+	}
 	survivor := map[int]bool{} // tracked and still the same process
-	for pid, start := range m.tracked {
-		if p := procs[pid]; p != nil && !p.inAQOrDocker {
-			if s, ok := procStart(filepath.Join(p.dir, "stat")); ok && s == start {
-				survivor[pid] = true
-			}
+	for pid, t := range prev {
+		p := procs[pid]
+		if p != nil && p.inAQOrDocker {
+			continue // counted as tasks or docker now
+		}
+		dir := filepath.Join(m.cfg.ProcRoot, strconv.Itoa(pid))
+		s, ok := procStart(filepath.Join(dir, "stat"))
+		switch {
+		case ok && s != t.start:
+			// another process under the PID
+		case ok && p != nil:
+			survivor[pid] = true
+		case !ok && procGone(dir):
+		default:
+			miss(pid, t.start)
 		}
 	}
 	in := map[int]bool{}
@@ -103,8 +128,8 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 			}
 		}
 	}
+	m.tracked = next
 	if len(pids) == 0 {
-		m.tracked = nil
 		return nil
 	}
 	sort.Ints(pids)
@@ -118,7 +143,6 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 		}
 	}
 	var out []platform.ProcIO
-	tracked := map[int]uint64{}
 	for seen := map[int]bool{}; len(queue) > 0; queue = queue[1:] {
 		pid := queue[0]
 		if seen[pid] {
@@ -129,11 +153,25 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 		p := procs[pid]
 		start, ok := procStart(filepath.Join(p.dir, "stat"))
 		if !ok {
+			if t, known := prev[pid]; known && survivor[pid] {
+				miss(pid, t.start)
+			}
 			continue
 		}
+		// Parents come first: a child of a tracked process in its cgroup is
+		// in the tree too.
+		_, parentTracked := next[p.ppid]
+		pp := procs[p.ppid]
+		remember := p.agent >= 0 || survivor[pid] || (parentTracked && pp != nil && pp.cgroup == p.cgroup)
 		bytes, ok := procWrites(filepath.Join(p.dir, "io"))
 		if !ok {
+			if remember {
+				miss(pid, start)
+			}
 			continue
+		}
+		if remember {
+			next[pid] = trackedProc{start: start}
 		}
 		e := platform.ProcIO{PID: pid, PPID: p.ppid, Start: start, Bytes: bytes, Cgroup: p.cgroup,
 			Within: sourceKey(p.cgroup, m.manager, m.aqRels(), nil)}
@@ -141,16 +179,26 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 			e.Agent = agents[p.agent]
 			e.Project = m.project(p.dir)
 		}
-		// Parents come first: a child of a tracked process in its cgroup is
-		// in the tree too.
-		_, parentTracked := tracked[p.ppid]
-		if pp := procs[p.ppid]; p.agent >= 0 || survivor[pid] || (parentTracked && pp != nil && pp.cgroup == p.cgroup) {
-			tracked[pid] = start
-		}
 		out = append(out, e)
 	}
-	m.tracked = tracked
 	return out
+}
+
+// trackedProc is a remembered agent-tree process: its start time, and how
+// many passes in a row could not read it.
+type trackedProc struct {
+	start  uint64
+	misses int
+}
+
+// trackedMisses is how many scans in a row a remembered process may go
+// unread before it is forgotten.
+const trackedMisses = 10
+
+// procGone reports whether /proc/PID no longer exists: the process exited.
+func procGone(dir string) bool {
+	_, err := os.Stat(dir)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 func (m *UsageMeter) aqRels() []string {
