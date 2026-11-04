@@ -446,6 +446,10 @@ alert_rate = "50G"     # bytes per hour; "0" turns the alarm off
 alert_window = "10m"   # at least 5 x stats.sample_interval
 ```
 
+Without `alert_window` the window is 10 minutes, or five sample intervals when
+`stats.sample_interval` is longer than 2 minutes. With the alarm off the window
+is not checked.
+
 ## Retention
 
 Every 10 minutes and after recovery, the daemon deletes the logs of finished

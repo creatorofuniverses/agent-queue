@@ -124,5 +124,6 @@ agent_processes = ["claude", "codex"]
 # Disk-write alarm: fires when the host writes at least this many bytes per
 # hour, judged over the window below. "0" turns the alarm off.
 alert_rate = "50G"
-# Window the rate is judged over; at least 5 x stats.sample_interval.
+# Window the rate is judged over; at least 5 x stats.sample_interval while the
+# alarm is on. Unset: 10m, or 5 x stats.sample_interval when that is longer.
 alert_window = "10m"

@@ -86,7 +86,8 @@ type StatsConfig struct {
 }
 
 // DiskConfig tunes the disk-write alarm: AlertRate is bytes per hour (0 turns
-// it off), judged over AlertWindow.
+// it off), judged over AlertWindow (default 10m, or 5 sample intervals when
+// that is longer).
 type DiskConfig struct {
 	AlertRate   uint64
 	AlertWindow time.Duration
@@ -298,6 +299,9 @@ func Load(path string) (Config, error) {
 		size("disk.alert_rate", v, &c.Disk.AlertRate)
 	}
 	dur("disk.alert_window", raw.Disk.AlertWindow, &c.Disk.AlertWindow)
+	if raw.Disk.AlertWindow == nil { // the default follows a long sample interval
+		c.Disk.AlertWindow = max(c.Disk.AlertWindow, 5*c.Stats.SampleInterval)
+	}
 	if v := raw.Profiles.Window; v != nil {
 		c.Profiles.Window = *v
 	}
@@ -579,7 +583,7 @@ func (c Config) validatePlan4() error {
 	if c.Stats.SampleInterval < 5*time.Second || c.Stats.SampleInterval > 5*time.Minute {
 		return fmt.Errorf("stats.sample_interval must be within 5s..5m")
 	}
-	if c.Disk.AlertWindow < 5*c.Stats.SampleInterval {
+	if c.Disk.AlertRate > 0 && c.Disk.AlertWindow < 5*c.Stats.SampleInterval {
 		return fmt.Errorf("disk.alert_window must be at least 5 sample intervals (%s)", 5*c.Stats.SampleInterval)
 	}
 	for _, n := range c.Stats.AgentProcesses {

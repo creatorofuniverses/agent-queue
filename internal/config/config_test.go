@@ -496,3 +496,30 @@ func TestDiskWindowTooShort(t *testing.T) {
 		t.Fatalf("want window error, got %v", err)
 	}
 }
+
+// A config valid before [disk] existed keeps loading: without alert_window
+// the window follows a long sample_interval, and an alarm turned off needs
+// no window at all.
+func TestDiskWindowDefaultFollowsInterval(t *testing.T) {
+	c, err := loadDisk(t, "[stats]\nsample_interval = \"3m\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(64*gib, 16); err != nil {
+		t.Fatal(err)
+	}
+	if c.Disk.AlertWindow != 15*time.Minute {
+		t.Fatalf("window = %v, want 5 x 3m", c.Disk.AlertWindow)
+	}
+	c, err = loadDisk(t, "[stats]\nsample_interval = \"30s\"\n")
+	if err != nil || c.Disk.AlertWindow != 10*time.Minute {
+		t.Fatalf("window = %v, %v; want the 10m default", c.Disk.AlertWindow, err)
+	}
+	c, err = loadDisk(t, "[disk]\nalert_rate = \"0\"\nalert_window = \"1m\"\n[stats]\nsample_interval = \"3m\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(64*gib, 16); err != nil {
+		t.Fatalf("alarm off, window unused: %v", err)
+	}
+}
