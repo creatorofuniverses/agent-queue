@@ -231,6 +231,28 @@ func TestSummarizeDiskHost(t *testing.T) {
 	}
 }
 
+// aq's share cannot exceed the whole (sources can run ahead of the host
+// counter at the period's edges), and an agent row outside any source is an
+// estimate too: never summed as a source.
+func TestSummarizeDiskShareAndStrayAgent(t *testing.T) {
+	h := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	s := Summarize(Input{Since: h, Until: h.Add(time.Hour), DiskWrites: []store.DiskWrite{
+		dw(h, "host", "", 10*gib), dw(h, "aq", "", 15*gib), dw(h, "agent:claude:/p", "", 50*gib)}})
+	if s.Overview.AQShare != 1 {
+		t.Errorf("AQShare = %v, want 1", s.Overview.AQShare)
+	}
+	for _, src := range s.DiskHost.Sources {
+		if strings.HasPrefix(src.Source, "agent:") {
+			t.Errorf("agent row summed as a source: %+v", s.DiskHost.Sources)
+		}
+	}
+	s = Summarize(Input{Since: h, Until: h.Add(time.Hour), DiskWrites: []store.DiskWrite{
+		dw(h, "host", "", 100*gib), dw(h, "session:s.scope", "", 40*gib), dw(h, "agent:claude:/p", "", 50*gib)}})
+	if len(s.DiskHost.Sources) != 2 || s.DiskHost.Sources[0].Source != "other" || s.DiskHost.Sources[0].Written != 60*gib {
+		t.Errorf("Sources = %+v, want other 60 GiB and the session", s.DiskHost.Sources)
+	}
+}
+
 func TestSummarizeDiskEmpty(t *testing.T) {
 	s := Summarize(Input{})
 	if s.DiskHost != nil {

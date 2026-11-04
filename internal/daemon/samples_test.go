@@ -261,3 +261,15 @@ func TestOperatorEmitter(t *testing.T) {
 		}
 	}
 }
+
+// An agent that lives in no source has nowhere to be shown: no row, so the
+// report cannot take it for a level-1 source.
+func TestDiskRowsSkipAgentOutsideSources(t *testing.T) {
+	at := time.Date(2026, 11, 4, 10, 30, 0, 0, time.UTC)
+	rows := diskRows(at, diskacct.Delta{Host: 5, Agents: []diskacct.AgentDelta{
+		{Key: "agent:claude:/p", Within: "", Bytes: 3},
+		{Key: "agent:codex:/q", Within: "session:s.scope", Bytes: 2}}})
+	if len(rows) != 2 || rows[0].Source != "host" || rows[1].Source != "agent:codex:/q" || rows[1].Within != "session:s.scope" {
+		t.Fatalf("%+v", rows)
+	}
+}

@@ -627,7 +627,10 @@ func summarizeDiskHost(s *Summary, in Input) {
 		case r.Source == hostKey && r.Within == "":
 			hostHour[r.Hour] += r.Bytes
 			host += r.Bytes
-		case strings.HasPrefix(r.Source, "agent:") && r.Within != "":
+		case strings.HasPrefix(r.Source, "agent:"): // an estimate inside its source, never a source
+			if r.Within == "" {
+				continue
+			}
 			if agentTotal[r.Within] == nil {
 				agentTotal[r.Within] = map[string]int64{}
 			}
@@ -787,7 +790,7 @@ func summarizeOverview(s *Summary, in Input) {
 		}
 		for _, src := range d.Sources {
 			if src.Source == "aq" && d.Written > 0 {
-				o.AQShare = float64(src.Written) / float64(d.Written)
+				o.AQShare = min(1, float64(src.Written)/float64(d.Written)) // sources can run ahead of the host at the edges
 			}
 			if src.Source == "other" && d.Written > 0 {
 				o.OtherShare = float64(src.Written) / float64(d.Written)

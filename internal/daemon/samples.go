@@ -141,7 +141,8 @@ func (d *SamplerDeps) sampleDisk(ctx context.Context, procs []platform.ProcIO, p
 }
 
 // diskRows are a delta's hourly rows: the host counter, each source and each
-// agent estimate (within the source it lives in). Zero values add nothing.
+// agent estimate (within the source it lives in; one in no source has nowhere
+// to be shown). Zero values add nothing.
 func diskRows(at time.Time, d diskacct.Delta) []store.DiskWrite {
 	hour := at.UTC().Truncate(time.Hour)
 	var rows []store.DiskWrite
@@ -154,7 +155,7 @@ func diskRows(at time.Time, d diskacct.Delta) []store.DiskWrite {
 		}
 	}
 	for _, a := range d.Agents {
-		if a.Bytes != 0 {
+		if a.Bytes != 0 && a.Within != "" {
 			rows = append(rows, store.DiskWrite{Hour: hour, Source: a.Key, Within: a.Within, Bytes: a.Bytes})
 		}
 	}
