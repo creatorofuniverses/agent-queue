@@ -729,6 +729,7 @@ type Overview struct {
 	DiskWritten      uint64  `json:"disk_written"`
 	DiskPerHour      float64 `json:"disk_per_hour"`
 	AQShare          float64 `json:"aq_share"`
+	OtherShare       float64 `json:"other_share"` // what no source measured, of DiskWritten
 	TopWriter        string  `json:"top_writer"`
 	TopWriterAgent   string  `json:"top_writer_agent"`
 	TopWriterBytes   uint64  `json:"top_writer_bytes"`
@@ -788,6 +789,9 @@ func summarizeOverview(s *Summary, in Input) {
 			if src.Source == "aq" && d.Written > 0 {
 				o.AQShare = float64(src.Written) / float64(d.Written)
 			}
+			if src.Source == "other" && d.Written > 0 {
+				o.OtherShare = float64(src.Written) / float64(d.Written)
+			}
 			if o.TopWriter == "" && src.Source != "other" {
 				o.TopWriter, o.TopWriterBytes = src.Source, src.Written
 				if len(src.Agents) > 0 {
@@ -843,10 +847,14 @@ func findings(s *Summary, in Input) []Finding {
 	add := func(area, text string, w float64) { out = append(out, Finding{Area: area, Text: text, Weight: w}) }
 	if d := s.DiskHost; d != nil {
 		for _, src := range d.Sources {
-			if src.Source == "aq" || src.Source == "other" || src.Written < diskBytesMin || float64(src.Written) < diskShareMin*float64(d.Written) {
+			if src.Source == "aq" || src.Written < diskBytesMin || float64(src.Written) < diskShareMin*float64(d.Written) {
 				continue
 			}
 			share := float64(src.Written) / float64(d.Written)
+			if src.Source == "other" {
+				add("disk", units.FormatSize(src.Written)+" written outside measured sources (kernel and filesystem journal, other users, or io not delegated)", weightDiskSource+min(share, 1))
+				continue
+			}
 			t := fmt.Sprintf("%s wrote %s", src.Source, units.FormatSize(src.Written))
 			if len(src.Agents) > 0 {
 				a := src.Agents[0]

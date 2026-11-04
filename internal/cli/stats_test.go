@@ -203,6 +203,19 @@ func TestStatsOverviewCutsLongNames(t *testing.T) {
 	}
 }
 
+// The Disk row names the unattributed share when it is significant.
+func TestStatsOverviewUnattributed(t *testing.T) {
+	s := weekSummary()
+	s.Overview.OtherShare = 0.37
+	if out := statsOut(s, "", false); !strings.Contains(out, "aq tasks 2% · unattributed 37%") {
+		t.Fatal(out)
+	}
+	s.Overview.OtherShare = 0.05
+	if out := statsOut(s, "", false); strings.Contains(out, "unattributed") {
+		t.Fatal(out)
+	}
+}
+
 func TestStatsOverviewNothingStandsOutAndNoDisk(t *testing.T) {
 	s := weekSummary()
 	s.Findings, s.DiskHost = nil, nil

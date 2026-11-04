@@ -303,7 +303,7 @@ func TestFindingsOrderAndCap(t *testing.T) {
 		Runs:       []profile.Run{{Profile: "p", State: model.StateFailed, Reason: model.ReasonOOM, MemoryPeak: 100, Expected: 100}},
 		Incidents:  []model.Incident{{At: h, Kind: "kernel_oom", Value: 1, Detail: "app.slice"}, {At: h, Kind: "guard_engaged", Detail: "who held it"}},
 		Events:     []model.Event{{Channel: model.ChannelWebhook, Status: model.EventFailed}},
-		DiskWrites: []store.DiskWrite{dw(h, "host", "", 100*gib), dw(h, "session:s.scope", "", 60*gib), dw(h, "agent:claude:/home/u/x", "session:s.scope", 59*gib)}, Home: "/home/u",
+		DiskWrites: []store.DiskWrite{dw(h, "host", "", 100*gib), dw(h, "aq", "", 35*gib), dw(h, "session:s.scope", "", 60*gib), dw(h, "agent:claude:/home/u/x", "session:s.scope", 59*gib)}, Home: "/home/u",
 	}
 	s := Summarize(in)
 	// disk source, run, guard, profile, budget, notify, kernel OOM = 7 candidates; add a reservation
@@ -330,6 +330,31 @@ func TestFindingsOrderAndCap(t *testing.T) {
 	}
 	if !strings.Contains(areas["budget"], "1 nested task") {
 		t.Fatalf("%q", areas["budget"])
+	}
+}
+
+// What no source measured is a "who" too: a finding when it is a large
+// share, and its share in the overview.
+func TestFindingsAndOverviewNameOther(t *testing.T) {
+	h := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	in := Input{Since: h, Until: h.Add(time.Hour), DiskWrites: []store.DiskWrite{
+		dw(h, "host", "", 100*gib), dw(h, "aq", "", 10*gib), dw(h, "session:s.scope", "", 20*gib)}}
+	s := Summarize(in)
+	if o := s.Overview; o.OtherShare != 0.7 || o.TopWriter != "session:s.scope" {
+		t.Fatalf("%+v", o)
+	}
+	want := "70.0 GiB written outside measured sources (kernel and filesystem journal, other users, or io not delegated)"
+	if len(s.Findings) != 1 || s.Findings[0].Area != "disk" || s.Findings[0].Text != want {
+		t.Fatalf("%+v", s.Findings)
+	}
+	// Small in share or in bytes: no finding.
+	in.DiskWrites = []store.DiskWrite{dw(h, "host", "", 100*gib), dw(h, "aq", "", 80*gib)}
+	if f := Summarize(in).Findings; len(f) != 0 {
+		t.Fatalf("%+v", f)
+	}
+	in.DiskWrites = []store.DiskWrite{dw(h, "host", "", 9*gib)}
+	if f := Summarize(in).Findings; len(f) != 0 {
+		t.Fatalf("%+v", f)
 	}
 }
 

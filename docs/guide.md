@@ -401,7 +401,11 @@ them, in two levels. The sources add up to the host figure:
 - `system:UNIT` and `user:UNIT`: services such as journald and apps;
 - `session:NAME`: a login session, which is where agents run commands outside aq;
 - `other`: the rest, computed for the period as the host figure minus the named
-  sources, so it never double counts.
+  sources, so it never double counts. It is what no source measured: the kernel
+  and the filesystem journal, other users, cgroups without `io` delegation. It
+  is a writer like the others: the overview's Disk row shows it as
+  `unattributed N%` from 10%, it becomes a "Worth a look" item from a quarter of
+  the host's bytes and 10 GiB, and the alarm names it among the top sources.
 
 The second level names agents. Inside a source, `aq stats disk` can put
 `≈ claude ~/proj` next to it: the agent process tree (`[stats] agent_processes`)

@@ -414,15 +414,23 @@ func (c *cmdCtx) statsOverview(v stats.Summary) {
 	fmt.Fprintln(w, u.dim("More: aq stats "+strings.Join(statsAreas, "|")+" · aq stats --all"))
 }
 
-// overviewDisk is the Disk row, total and rate with aq's share, and a second
-// row for the top writer and the agent estimated behind it. Long names are
-// cut by truncate in row, so neither row wraps.
+// unattributedShown is the share of the host's writes no source measured
+// from which the Disk row names it.
+const unattributedShown = 0.10
+
+// overviewDisk is the Disk row, total and rate with aq's share (and the
+// unattributed one when it is significant), and a second row for the top
+// writer and the agent estimated behind it. Long names are cut by truncate in
+// row, so neither row wraps.
 func (c *cmdCtx) overviewDisk(v stats.Summary) (string, string) {
 	o := v.Overview
 	if v.DiskHost == nil {
 		return "no samples yet", ""
 	}
 	head := fmt.Sprintf("%s written (%s/h) · aq tasks %.0f%%", size(o.DiskWritten), size(uint64(o.DiskPerHour)), 100*o.AQShare)
+	if o.OtherShare >= unattributedShown {
+		head += fmt.Sprintf(" · unattributed %.0f%%", 100*o.OtherShare)
+	}
 	if o.TopWriter == "" {
 		return head, ""
 	}

@@ -149,6 +149,31 @@ func TestAlarmTopSources(t *testing.T) {
 	}
 }
 
+// What no source measured (the kernel and filesystem journal, other users,
+// io not delegated) is named "other" in Top, as the report does: the host
+// over the window minus the sources, ended tails taken back included.
+func TestAlarmTopOther(t *testing.T) {
+	a := NewAlarm(thresh, window)
+	evs, _ := feed(a, 1, 20, func(i int) Delta {
+		d := Delta{Host: perStep(100), Sources: map[string]int64{"session:s.scope": perStep(20), "system:ended": perStep(20)}}
+		if i%2 == 0 { // a missed cgroup: ended shows it first, and gives it back
+			d.Sources["system:ended"] = -perStep(10)
+		}
+		return d
+	})
+	if len(evs) != 1 {
+		t.Fatalf("events = %+v", evs)
+	}
+	top := evs[0].Top
+	if len(top) < 2 || top[0].Source != "other" || top[0].Agent != "" || top[1].Source != "session:s.scope" {
+		t.Fatalf("Top = %+v", top)
+	}
+	// 100 − 20 − (20 − 10)/2 = 75 GiB/h
+	if want := float64(75 << 30); top[0].BytesPerHour < want*0.99 || top[0].BytesPerHour > want*1.01 {
+		t.Errorf("other = %v, want %v", top[0].BytesPerHour, want)
+	}
+}
+
 func TestAlarmDisabled(t *testing.T) {
 	a := NewAlarm(0, window)
 	evs, _ := feed(a, 1, 100, func(int) Delta { return host(100 * gib) })

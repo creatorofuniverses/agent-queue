@@ -108,7 +108,9 @@ func (a *Alarm) Observe(at time.Time, span time.Duration, d Delta) (AlarmEvent, 
 	return AlarmEvent{}, false
 }
 
-// tally sums positive deltas.
+// tally sums deltas: the host's clamped per sample (a counter reset must not
+// cancel writes), the sources' and agents' signed, so that an ended tail
+// given back later cancels out, as in the report; top clamps.
 type tally struct {
 	host    int64
 	sources map[string]int64
@@ -118,29 +120,33 @@ type tally struct {
 func (t *tally) add(d Delta) {
 	t.host += max(0, d.Host)
 	for k, v := range d.Sources {
-		if v > 0 {
-			if t.sources == nil {
-				t.sources = map[string]int64{}
-			}
-			t.sources[k] += v
+		if t.sources == nil {
+			t.sources = map[string]int64{}
 		}
+		t.sources[k] += v
 	}
 	for _, ag := range d.Agents {
-		if ag.Bytes > 0 {
-			if t.agents == nil {
-				t.agents = map[string]AgentDelta{}
-			}
-			cur := t.agents[ag.Key]
-			cur.Key, cur.Within = ag.Key, ag.Within
-			cur.Bytes += ag.Bytes
-			t.agents[ag.Key] = cur
+		if t.agents == nil {
+			t.agents = map[string]AgentDelta{}
 		}
+		cur := t.agents[ag.Key]
+		cur.Key, cur.Within = ag.Key, ag.Within
+		cur.Bytes += ag.Bytes
+		t.agents[ag.Key] = cur
 	}
 }
 
+// top is the three sources that wrote the most, "other" (the host minus all
+// sources: what no source measured) among them.
 func (t *tally) top(over time.Duration) []SourceRate {
 	var out []SourceRate
+	rate := func(b int64) float64 { return float64(b) * float64(time.Hour) / float64(over) }
+	other := t.host
 	for k, b := range t.sources {
+		other -= b
+		if b <= 0 {
+			continue
+		}
 		best := AgentDelta{}
 		for _, ag := range t.agents {
 			if ag.Within != k {
@@ -150,8 +156,10 @@ func (t *tally) top(over time.Duration) []SourceRate {
 				best = ag
 			}
 		}
-		out = append(out, SourceRate{Source: k, Agent: best.Key,
-			BytesPerHour: float64(b) * float64(time.Hour) / float64(over)})
+		out = append(out, SourceRate{Source: k, Agent: best.Key, BytesPerHour: rate(b)})
+	}
+	if other > 0 {
+		out = append(out, SourceRate{Source: "other", BytesPerHour: rate(other)})
 	}
 	slices.SortFunc(out, func(x, y SourceRate) int {
 		return cmp.Or(cmp.Compare(y.BytesPerHour, x.BytesPerHour), cmp.Compare(x.Source, y.Source))
