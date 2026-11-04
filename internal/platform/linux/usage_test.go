@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -172,5 +173,65 @@ func TestSourceKeyMatchesDiskMeter(t *testing.T) {
 		if got := sourceKey(c.ID, diskManager, aq, containers); got != c.Source {
 			t.Errorf("sourceKey(%q) = %q, snapshot says %q", c.ID, got, c.Source)
 		}
+	}
+}
+
+// A process seen in an agent's tree keeps being read after the agent exits,
+// even with no agent left in its cgroup, as long as it lives; so do the
+// children it starts there. Strangers in the cgroup are not remembered, and
+// a remembered process that exits is forgotten.
+func TestUsageProcIOSurvivors(t *testing.T) {
+	root := t.TempDir()
+	manager := "user.slice/user-1000.slice/user@1000.service"
+	usageFile(t, root, "proc/self/cgroup", "0::/"+manager+"/app.slice/aq.service\n")
+	session := "user.slice/user-1000.slice/session-3.scope"
+	proc := func(pid, ppid int, comm string, start int) {
+		base := fmt.Sprintf("proc/%d/", pid)
+		usageFile(t, root, base+"comm", comm+"\n")
+		usageFile(t, root, base+"cmdline", comm+"\x00")
+		usageFile(t, root, base+"status", fmt.Sprintf("Name:\t%s\nPPid:\t%d\n", comm, ppid))
+		usageFile(t, root, base+"stat", fmt.Sprintf("%d (%s) S %d 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 %d 0 0\n", pid, comm, ppid, start))
+		usageFile(t, root, base+"cgroup", "0::/"+session+"\n")
+		usageFile(t, root, base+"io", "write_bytes: 7\ncancelled_write_bytes: 0\n")
+	}
+	gone := func(pid int) {
+		if e := os.RemoveAll(filepath.Join(root, fmt.Sprintf("proc/%d", pid))); e != nil {
+			t.Fatal(e)
+		}
+	}
+	m := NewUsageMeter(UsageMeterConfig{ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg")})
+	pids := func() []int {
+		t.Helper()
+		v, e := m.Usage(context.Background(), []string{"claude"})
+		if e != nil {
+			t.Fatal(e)
+		}
+		var out []int
+		for _, p := range v.IO {
+			out = append(out, p.PID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	proc(10, 1, "claude", 100)
+	proc(11, 10, "writer", 110)
+	proc(20, 1, "stranger", 120)
+	if got := pids(); !slices.Equal(got, []int{10, 11, 20}) {
+		t.Fatalf("with the agent: %v", got)
+	}
+	gone(10)
+	proc(11, 1, "writer", 110) // orphaned
+	proc(12, 11, "child", 130) // started after the agent left
+	if got := pids(); !slices.Equal(got, []int{11, 12}) {
+		t.Fatalf("after the agent exited: %v, want the writer and its child", got)
+	}
+	gone(11)
+	proc(11, 1, "reused", 140) // the PID is someone else's now
+	if got := pids(); !slices.Equal(got, []int{12}) {
+		t.Fatalf("after the writer exited: %v, want only its child", got)
+	}
+	gone(12)
+	if got := pids(); len(got) != 0 || len(m.tracked) != 0 {
+		t.Fatalf("all gone: %v, tracked %v", got, m.tracked)
 	}
 }

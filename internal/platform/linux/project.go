@@ -59,9 +59,16 @@ func worktreeRoot(checkout, gitFile string) string {
 }
 
 // procIO reads the write counters of every process that shares a cgroup with
-// an agent, breadth-first from the roots (processes whose parent is not in the
-// set), so a consumer sees ancestors before descendants. A process that
+// an agent, and of the agent-tree processes an earlier pass reported while
+// they live, breadth-first from the roots (processes whose parent is not in
+// the set), so a consumer sees ancestors before descendants. A process that
 // vanishes or cannot be read is skipped.
+//
+// The agent tree as seen here is an agent and what its processes start in
+// their own cgroup. Remembered by PID and start time, its processes are
+// read after the agent exits, with no agent left in the cgroup to select
+// it, and so are the children they start there; a process forgets nothing
+// but exits.
 func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platform.ProcIO {
 	hosts := map[string]bool{}
 	for _, p := range procs {
@@ -69,16 +76,36 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 			hosts[p.cgroup] = true
 		}
 	}
-	if len(hosts) == 0 {
-		return nil
+	survivor := map[int]bool{} // tracked and still the same process
+	for pid, start := range m.tracked {
+		if p := procs[pid]; p != nil && !p.inAQOrDocker {
+			if s, ok := procStart(filepath.Join(p.dir, "stat")); ok && s == start {
+				survivor[pid] = true
+			}
+		}
 	}
 	in := map[int]bool{}
 	var pids []int
 	for pid, p := range procs {
-		if hosts[p.cgroup] && !p.inAQOrDocker {
+		if !p.inAQOrDocker && (hosts[p.cgroup] || survivor[pid]) {
 			in[pid] = true
 			pids = append(pids, pid)
 		}
+	}
+	// What survivors start in their cgroup, however deep.
+	for grew := len(survivor) > 0; grew; {
+		grew = false
+		for pid, p := range procs {
+			if pp := procs[p.ppid]; !in[pid] && in[p.ppid] && pp != nil && pp.cgroup == p.cgroup && !p.inAQOrDocker {
+				in[pid] = true
+				pids = append(pids, pid)
+				grew = true
+			}
+		}
+	}
+	if len(pids) == 0 {
+		m.tracked = nil
+		return nil
 	}
 	sort.Ints(pids)
 	children := map[int][]int{}
@@ -91,6 +118,7 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 		}
 	}
 	var out []platform.ProcIO
+	tracked := map[int]uint64{}
 	for seen := map[int]bool{}; len(queue) > 0; queue = queue[1:] {
 		pid := queue[0]
 		if seen[pid] {
@@ -113,8 +141,15 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 			e.Agent = agents[p.agent]
 			e.Project = m.project(p.dir)
 		}
+		// Parents come first: a child of a tracked process in its cgroup is
+		// in the tree too.
+		_, parentTracked := tracked[p.ppid]
+		if pp := procs[p.ppid]; p.agent >= 0 || survivor[pid] || (parentTracked && pp != nil && pp.cgroup == p.cgroup) {
+			tracked[pid] = start
+		}
 		out = append(out, e)
 	}
+	m.tracked = tracked
 	return out
 }
 
