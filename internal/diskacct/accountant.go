@@ -297,6 +297,11 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 // one down to the negative part: a transfer the counter has not caught up
 // with waits instead of turning into growth, so a child that was only
 // skipped, not reaped, takes it back without a trace.
+//
+// The credit is taken from transfers of its sign only; those of the other
+// sign are not netted against them. Each transfer keeps its own signed
+// amount, so a child that comes back takes back exactly what it handed over,
+// whatever its siblings' transfers did meanwhile.
 func (a *Accountant) settle(pending []transfer, raw int64) (int64, []transfer) {
 	var total int64
 	for _, t := range pending {
@@ -306,41 +311,47 @@ func (a *Accountant) settle(pending []transfer, raw int64) (int64, []transfer) {
 	if total >= 0 {
 		credit = min(total, max(0, raw))
 	}
-	// Of the remainder, transfers of its sign are kept: first the pinned
-	// ones (a carrier may take them back, so they are credited last), then
-	// this interval's, the freshest first, which age. Aged ones are dropped.
-	left := total - credit
-	order := make([]int, 0, len(pending))
-	for i := len(pending) - 1; i >= 0; i-- {
-		if a.pinned(pending[i]) {
-			order = append(order, i)
-		}
-	}
-	for i := len(pending) - 1; i >= 0; i-- {
-		if !a.pinned(pending[i]) && !pending[i].aged {
-			order = append(order, i)
-		}
-	}
-	keep := make([]bool, len(pending))
+	// The credit comes first from the transfers that waited their interval
+	// already, then from this interval's, the oldest first, and last from
+	// the pinned ones (a carrier may take them back). What is left of the
+	// pinned ones waits; this interval's age; aged ones are dropped.
 	out := slices.Clone(pending)
+	order := make([]int, 0, len(out))
+	for _, pick := range []func(transfer) bool{
+		func(t transfer) bool { return t.aged && !a.pinned(t) },
+		func(t transfer) bool { return !t.aged && !a.pinned(t) },
+		a.pinned,
+	} {
+		for i, t := range out {
+			if pick(t) {
+				order = append(order, i)
+			}
+		}
+	}
+	left := credit
 	for _, i := range order {
-		t := &out[i]
 		if left == 0 {
 			break
 		}
+		t := &out[i]
 		if t.amount == 0 || (t.amount > 0) != (left > 0) {
 			continue
 		}
-		if (left > 0 && t.amount > left) || (left < 0 && t.amount < left) {
-			t.amount = left
+		take := t.amount
+		if (left > 0 && take > left) || (left < 0 && take < left) {
+			take = left
 		}
-		left -= t.amount
-		t.aged = t.aged || !a.pinned(*t)
-		keep[i] = true
+		t.amount -= take
+		left -= take
 	}
 	kept := out[:0]
-	for i, t := range out {
-		if keep[i] {
+	for _, t := range out {
+		switch {
+		case t.amount == 0:
+		case a.pinned(t):
+			kept = append(kept, t)
+		case !t.aged:
+			t.aged = true
 			kept = append(kept, t)
 		}
 	}

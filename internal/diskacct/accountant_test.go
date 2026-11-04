@@ -645,3 +645,24 @@ func TestAgentSkipNeighbours(t *testing.T) {
 		}
 	}
 }
+
+// Transfers of opposite signs are not netted against each other while they
+// wait: each stays with its origin, so a child that was only skipped takes
+// back exactly its own, whatever its sibling's did.
+func TestAgentMixedSignTransfersKeepOrigin(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	W := plain(11, 10, 100*mib)
+	C := plain(12, 10, -50*mib)
+	for name, snaps := range map[string][]platform.DiskSnapshot{
+		"W reaped, C skipped and back": {procs(A(0)), procs(A(0), W, C), procs(A(0)), procs(A(100*mib), C), procs(A(100*mib), C)},
+		"C reaped, W skipped and back": {procs(A(0)), procs(A(0), W, C), procs(A(0)), procs(A(-50*mib), W), procs(A(-50*mib), W)},
+		"both reaped at once":          {procs(A(0)), procs(A(0), W, C), procs(A(50 * mib)), procs(A(50 * mib))},
+		"both reaped a sample late":    {procs(A(0)), procs(A(0), W, C), procs(A(0)), procs(A(50 * mib))},
+	} {
+		total, steps := agentTotal(t, key, snaps...)
+		if total != 50*mib {
+			t.Errorf("%s: agent total = %d (steps %v), want 50M", name, total, steps)
+		}
+	}
+}
