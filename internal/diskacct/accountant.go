@@ -37,29 +37,44 @@ type Accountant struct {
 	procs   map[procKey]*proc
 }
 
-// procKey identifies a process across PID reuse.
+// procKey identifies a process across PID reuse: a key that reappears is
+// the same process, never reaped.
 type procKey struct {
 	pid   int
 	start uint64
 }
 
+// tombstoneSamples is how many consecutive samples a vanished process may be
+// missing (a failed read, a skipped cgroup, a pass cut short) and still
+// resume from its last counter. It outlives every transfer, which lives two.
+const tombstoneSamples = 10
+
 // proc is the ledger entry of one process seen in an agent's cgroup.
 //
 // last is its counter at the last sample and is also what aq has credited of
 // it: every interval credits exactly raw = cur - last, part as growth and part
-// as a covered transfer. A process that vanishes hands last plus its
-// uncovered inherited transfer to its last known parent, whose counter gets
-// the total when it reaps the child.
+// as a covered transfer. A process that vanishes hands last, and the
+// transfers it still holds, to its last known parent, whose counter gets
+// them when it reaps the child.
 type proc struct {
-	last   int64
-	parent procKey // last known parent; zero when it was outside the snapshot
-	member bool    // once in an agent tree, always in it
-	root   procKey // the agent root it was first seen under
-	key    string  // the root's agent key, as last seen
-	within string  // the root's source, as last seen
-	// waiting is the uncovered transfer from the previous interval: its last
-	// chance before it is dropped. fresh is the transfer of this interval.
-	waiting, fresh int64
+	last    int64
+	parent  procKey // last known parent; zero when it was outside the snapshot
+	member  bool    // once in an agent tree, always in it
+	root    procKey // the agent root it was first seen under
+	key     string  // the root's agent key, as last seen
+	within  string  // the root's source, as last seen
+	pending []transfer
+	gone    int // samples since it vanished; 0 while alive
+}
+
+// transfer is credited counter handed over by a vanished process, kept by
+// origin and route so that a process that reappears takes back exactly what
+// is still pending.
+type transfer struct {
+	origin   procKey   // whose last counter this is
+	carriers []procKey // who held it before the current holder, first holder first
+	amount   int64
+	aged     bool // waited one interval already: dropped after this one
 }
 
 // New returns an Accountant whose first Step is a baseline.
@@ -121,7 +136,11 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 	alive := make(map[procKey]bool, len(ps))
 	for i, p := range ps {
 		index[p.PID] = i
-		alive[procKey{p.PID, p.Start}] = true
+		k := procKey{p.PID, p.Start}
+		alive[k] = true
+		if st := a.procs[k]; st != nil && st.gone > 0 {
+			a.revive(k)
+		}
 	}
 	a.handOver(alive)
 
@@ -168,14 +187,8 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 		}
 
 		raw := p.Bytes - st.last
-		transfer := st.waiting + st.fresh
-		credit := min(transfer, max(0, raw))
-		left := transfer - credit
-		st.waiting = 0
-		if left > 0 { // only this interval's transfer may wait one more
-			st.waiting = min(left, max(0, st.fresh))
-		}
-		st.fresh, st.last = 0, p.Bytes
+		credit, rest := settle(st.pending, raw)
+		st.pending, st.last = rest, p.Bytes
 		if growth := raw - credit; st.member && growth != 0 {
 			sums[sum{st.key, st.within}] += growth
 		}
@@ -183,6 +196,7 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 	for i := range ps {
 		visit(i)
 	}
+	a.age()
 
 	var out []AgentDelta
 	for s, b := range sums {
@@ -196,46 +210,148 @@ func (a *Accountant) procStep(ps []platform.ProcIO) []AgentDelta {
 	return out
 }
 
-// handOver drops the processes that vanished since the last sample. Bottom-up
-// through every generation that vanished in this interval, each hands what
-// was credited for it (last) plus what it inherited and its counter did not
-// yet cover to its last known parent, as that parent's fresh transfer.
-func (a *Accountant) handOver(alive map[procKey]bool) {
-	kids := map[procKey][]procKey{}
-	var tops []procKey
-	for k, st := range a.procs {
-		if alive[k] {
+// settle credits a live process's pending transfers against its counter's
+// change raw and returns the credit and what may wait one more interval.
+// A positive total is credited up to the positive part of raw, a negative
+// one down to the negative part: a transfer the counter has not caught up
+// with waits instead of turning into growth, so a child that was only
+// skipped, not reaped, takes it back without a trace.
+func settle(pending []transfer, raw int64) (int64, []transfer) {
+	var total int64
+	for _, t := range pending {
+		total += t.amount
+	}
+	credit := max(total, min(0, raw))
+	if total >= 0 {
+		credit = min(total, max(0, raw))
+	}
+	// The oldest is credited first: of the remainder, only this interval's
+	// transfers of its sign wait, the freshest first; the aged rest is dropped.
+	left := total - credit
+	var out []transfer
+	for i := len(pending) - 1; i >= 0 && left != 0; i-- {
+		t := pending[i]
+		if t.aged || t.amount == 0 || (t.amount > 0) != (left > 0) {
 			continue
 		}
-		if _, tracked := a.procs[st.parent]; tracked && !alive[st.parent] {
-			kids[st.parent] = append(kids[st.parent], k)
-		} else {
-			tops = append(tops, k)
+		if (left > 0 && t.amount > left) || (left < 0 && t.amount < left) {
+			t.amount = left
+		}
+		left -= t.amount
+		t.aged = true
+		out = append(out, t)
+	}
+	slices.Reverse(out)
+	return credit, out
+}
+
+// handOver turns the processes that vanished since the last sample into
+// tombstones. Bottom-up through every generation that vanished together, each
+// hands its last counter and the transfers it holds to its last known parent
+// while that one is tracked and was alive; otherwise the transfers stay with
+// the tombstone and expire there.
+func (a *Accountant) handOver(alive map[procKey]bool) {
+	var gone []procKey
+	for k, st := range a.procs {
+		if st.gone == 0 && !alive[k] {
+			gone = append(gone, k)
 		}
 	}
-	seen := map[procKey]bool{}
-	var total func(k procKey) int64
-	total = func(k procKey) int64 {
-		if seen[k] { // a stale link loop; cannot happen with start times
-			return 0
+	vanishing := make(map[procKey]bool, len(gone))
+	for _, k := range gone {
+		vanishing[k] = true
+	}
+	depth := map[procKey]int{}
+	var depthOf func(k procKey, hops int) int
+	depthOf = func(k procKey, hops int) int {
+		if d, ok := depth[k]; ok {
+			return d
 		}
-		seen[k] = true
+		d := 0
+		if p := a.procs[k].parent; vanishing[p] && hops < len(gone) { // hops: a stale link loop cannot recurse forever
+			d = 1 + depthOf(p, hops+1)
+		}
+		depth[k] = d
+		return d
+	}
+	slices.SortFunc(gone, func(x, y procKey) int {
+		return cmp.Or(cmp.Compare(depthOf(y, 0), depthOf(x, 0)), compareKeys(x, y))
+	})
+	for _, k := range gone {
 		st := a.procs[k]
-		t := st.last + st.waiting + st.fresh
-		for _, c := range kids[k] {
-			t += total(c)
+		st.gone = 1
+		h := a.procs[st.parent]
+		if h == nil || h.gone > 0 {
+			continue
 		}
-		return t
-	}
-	for _, k := range tops {
-		t := total(k)
-		if pst, ok := a.procs[a.procs[k].parent]; ok {
-			pst.fresh += t
+		for _, t := range st.pending {
+			t.carriers = append(slices.Clone(t.carriers), k)
+			t.aged = false // the hand-over is news of this interval
+			h.pending = append(h.pending, t)
+		}
+		st.pending = nil
+		if st.last != 0 {
+			h.pending = append(h.pending, transfer{origin: k, amount: st.last})
 		}
 	}
-	for k := range a.procs {
-		if !alive[k] {
+}
+
+// revive brings back a process that was missing from earlier samples but
+// never reaped. It takes back what it handed over and is still pending: its
+// own counter goes nowhere, and transfers it carried return to it, since
+// its counter, not its parent's, covers them. What a parent already credited
+// stays credited.
+func (a *Accountant) revive(k procKey) {
+	st := a.procs[k]
+	st.gone = 0
+	keys := make([]procKey, 0, len(a.procs))
+	for hk := range a.procs {
+		if hk != k {
+			keys = append(keys, hk)
+		}
+	}
+	slices.SortFunc(keys, compareKeys)
+	for _, hk := range keys {
+		h := a.procs[hk]
+		kept := h.pending[:0]
+		for _, t := range h.pending {
+			i := slices.Index(t.carriers, k)
+			switch {
+			case t.origin == k:
+			case i >= 0:
+				t.carriers = t.carriers[:i:i]
+				st.pending = append(st.pending, t)
+			default:
+				kept = append(kept, t)
+			}
+		}
+		h.pending = kept
+	}
+}
+
+// age ends the interval for tombstones: their aged transfers are dropped,
+// the rest wait one more, and a tombstone missing too long is forgotten.
+func (a *Accountant) age() {
+	for k, st := range a.procs {
+		if st.gone == 0 {
+			continue
+		}
+		if st.gone > tombstoneSamples {
 			delete(a.procs, k)
+			continue
 		}
+		st.gone++
+		kept := st.pending[:0]
+		for _, t := range st.pending {
+			if !t.aged {
+				t.aged = true
+				kept = append(kept, t)
+			}
+		}
+		st.pending = kept
 	}
+}
+
+func compareKeys(x, y procKey) int {
+	return cmp.Or(cmp.Compare(x.pid, y.pid), cmp.Compare(x.start, y.start))
 }

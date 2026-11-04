@@ -340,3 +340,102 @@ func TestAgentKeyFollowsRoot(t *testing.T) {
 		t.Errorf("after the root left: Agents = %+v, want %+v", d.Agents, want)
 	}
 }
+
+// A live agent skipped for one sample (a failed read, a timed-out pass)
+// reappears with the same PID+Start: it was never reaped, so it resumes from
+// its last counter instead of counting its whole life again.
+func TestAgentMissedSampleResumes(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := agentProc(10, 1, "claude", "/p", "session:s.scope", 20*gib)
+	total, steps := agentTotal(t, key, procs(A), procs(A), procs(), procs(A))
+	if total != 0 {
+		t.Errorf("agent total = %d (steps %v), want 0", total, steps)
+	}
+}
+
+// A member child skipped for one sample takes back the transfer it handed
+// its parent.
+func TestAgentMissedChildTakesTransferBack(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := agentProc(10, 1, "claude", "/p", "session:s.scope", 0)
+	C := plain(11, 10, 10*gib)
+	total, steps := agentTotal(t, key, procs(A, C), procs(A), procs(A, C), procs(A, C))
+	if total != 0 {
+		t.Errorf("agent total = %d (steps %v), want 0", total, steps)
+	}
+	// The parent's own writes while the child is back are not taken for the
+	// child's transfer.
+	total, steps = agentTotal(t, key, procs(A, C), procs(A), procs(agentProc(10, 1, "claude", "/p", "session:s.scope", 5*gib), C))
+	if total != 5*gib {
+		t.Errorf("with the parent writing: agent total = %d (steps %v), want 5G", total, steps)
+	}
+	// The same after the transfer waited its interval and was dropped: the
+	// child still resumes from its last counter.
+	total, steps = agentTotal(t, key, procs(A, C), procs(A), procs(A), procs(A), procs(A, C))
+	if total != 0 {
+		t.Errorf("after the transfer expired: agent total = %d (steps %v), want 0", total, steps)
+	}
+}
+
+// A skipped process gets back the transfers it carried for its own reaped
+// children: its counter, not its parent's, covers them.
+func TestAgentMissedCarrierGetsTransfersBack(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := agentProc(10, 1, "claude", "/p", "session:s.scope", 0)
+	total, steps := agentTotal(t, key,
+		procs(A),
+		procs(A, plain(11, 10, 0), plain(12, 11, gib)),
+		procs(A, plain(11, 10, 0)), // B was read before it reaped C: C's 1G waits at B
+		procs(A),                   // B skipped: what it carried went up to A
+		procs(A, plain(11, 10, gib)),
+	)
+	if total != gib {
+		t.Errorf("agent total = %d (steps %v), want 1G", total, steps)
+	}
+}
+
+// The whole tree skipped for one sample (its cgroup dropped from the pass).
+func TestAgentMissedTreeResumes(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := agentProc(10, 1, "claude", "/p", "session:s.scope", 5*gib)
+	B := plain(11, 10, 3*gib)
+	total, steps := agentTotal(t, key, procs(), procs(A, B), procs(), procs(A, B), procs(A, plain(11, 10, 4*gib)))
+	if want := []int64{8 * gib, 0, 0, gib}; !slices.Equal(steps, want) || total != 9*gib {
+		t.Errorf("steps = %v, want %v", steps, want)
+	}
+}
+
+// A child with a negative net counter (it cancelled dirty pages of others)
+// is netted when its parent reaps it, now or one interval later, and a skip
+// of it adds no phantom writes.
+func TestAgentNegativeTransfer(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	R := plain(11, 10, -10*mib)
+	for name, snaps := range map[string][]platform.DiskSnapshot{
+		"reaped at once":    {procs(A(0)), procs(A(0), R), procs(A(-10 * mib)), procs(A(-10 * mib))},
+		"reaped next":       {procs(A(0)), procs(A(0), R), procs(A(0)), procs(A(-10 * mib))},
+		"skipped, not gone": {procs(A(0)), procs(A(0), R), procs(A(0)), procs(A(0), R)},
+	} {
+		total, steps := agentTotal(t, key, snaps...)
+		if total != -10*mib {
+			t.Errorf("%s: agent total = %d (steps %v), want -10M", name, total, steps)
+		}
+	}
+}
+
+// Vanished processes are kept only a bounded number of samples.
+func TestAgentTombstonesExpire(t *testing.T) {
+	A := agentProc(10, 1, "claude", "/p", "session:s.scope", 0)
+	a := New()
+	a.Step(procs(A))
+	for pid := 100; pid < 100+3*tombstoneSamples; pid++ {
+		a.Step(procs(A, plain(pid, 10, 1)))
+	}
+	for range tombstoneSamples + 1 {
+		a.Step(procs(A))
+	}
+	if len(a.procs) != 1 {
+		t.Errorf("ledger holds %d entries, want only the agent", len(a.procs))
+	}
+}
