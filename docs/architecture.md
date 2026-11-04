@@ -266,6 +266,21 @@ picked up.
 `aq top` separates physical memory use from scheduler commitments. These answer
 different questions—what is using RAM now, and what has been promised—and must
 not be added together. `aq stats` summarizes recorded work and host samples.
+
+Disk writes are accounted in two levels. Every host sample, the accountant in
+`internal/diskacct` diffs the physical-disk counter and the per-source counters
+(aq slice, docker projects, system and user units, login sessions) and keeps the
+deltas as hourly sums in the `disk_writes` table. Level one (sources) adds up to
+the host figure. Level two (agents) is a per-process estimate from
+`/proc/PID/io` inside a source; it is stored with the source it lived in and
+never added to a sum. `other` is not stored per sample: per-sample deltas can run
+backward (cgroups are re-created, units end), so a per-sample remainder would be
+noisy and sometimes negative; the report computes it over the period as the host
+total minus the named sources. The alarm is a small state machine over the same
+deltas (rate over a window, one event per episode, an all-clear when the rate
+has stayed low) and emits `disk_writes_high`/`disk_writes_normal` through the
+usual event delivery.
+
 Retention removes old logs and history while preserving active items, including
 reservations whose cleanup failed. Defaults and controls are in the
 [configuration example](../deploy/config.example.toml).

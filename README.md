@@ -96,8 +96,8 @@ For shell expansion and `$AQ_CPUS`, see [running tasks](docs/guide.md#running-ta
 | Stop a job | `aq cancel ID` |
 | See a snapshot of the machine and pool | `aq top` |
 | Summarize the last week | `aq stats --since 7d` |
-| Find the jobs that write the most to disk | `aq stats --since 1d` ("Disk writes") |
-| Find reservations that hold memory they never use | `aq stats` ("Reservation fit") |
+| See who wrote to the disk, by source | `aq stats disk` |
+| Find reservations that hold memory they never use | `aq stats reservations` |
 | Learn a command's options | `aq help COMMAND` |
 
 Use `--json` on viewing commands for structured output. If a job fails, start
@@ -138,7 +138,10 @@ So aq now:
   toward the job's `--memory`, and a full `/tmp` holds the queue instead of
   failing tests ([details](docs/guide.md#temp-files-live-in-ram-and-count-as-task-memory));
 - records the bytes each job wrote to disk and lists the heaviest writers in
-  `aq stats` ([details](docs/guide.md#disk-writes)).
+  `aq stats` ([details](docs/guide.md#disk-writes));
+- shows what the whole host wrote to disk, by source (aq, docker projects,
+  system services, agent sessions), and sends a notification when the host
+  writes heavily, so you can stop it while it is still running.
 
 If you run many agents on one machine, also: keep `TMPDIR` and pytest
 `--basetemp` in tmpfs rather than moving them to disk when `/tmp` fills up

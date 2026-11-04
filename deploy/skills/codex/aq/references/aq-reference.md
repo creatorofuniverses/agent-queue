@@ -78,11 +78,15 @@ with usable history; timeout is optional. Backfill uses the same admission pass.
 
 `aq top [--json]` is one memory/pressure/queue snapshot. Physical categories
 agents/docker/tasks/other and scheduler commitments are separate views.
-`aq stats [--since 7d] [--profile P] [--json]` summarizes history, including
-`disk` (per profile: runs, written, p50, max bytes written to physical disks).
+`aq stats [AREA] [--all] [--since 7d] [--profile P] [--json]` prints a one-screen
+overview; AREA (tasks, profiles, disk, memory, reservations, notify, incidents)
+opens one area, `--all` everything; `--json` is always the full summary. It
+includes `disk`: bytes written to physical disks per profile (runs, written,
+p50, max) and by source for the whole host (aq, docker:PROJECT, system:/user:
+units, session:, other; agent figures marked ≈ are estimates, not in the sum).
 Finished tasks carry optional `io_write_bytes`/`io_read_bytes` (absent =
 unknown: the io controller is not delegated; `aq doctor` warns
-IO_NOT_DELEGATED). Stand containers' writes are not counted.
+IO_NOT_DELEGATED). A reservation has no disk-write counter of its own.
 `aq stats export --since 7d --format jsonl|csv [--table T]` exports raw rows
 (items/runs/host/incidents/events/disk/hook). CSV requires a table. No commands,
 env, cwd, session IDs or delivery error text are exported. Logs of terminal

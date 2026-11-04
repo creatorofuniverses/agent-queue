@@ -311,19 +311,28 @@ is slow", start with this snapshot. "Agents" are the agent processes themselves
 (`[stats] agent_processes`); "run by agents" is what they started outside aq and
 docker, such as a test suite or a build run directly (`spawned` in `--json`, per
 agent); "other" is the rest: the system, a terminal multiplexer, the kernel.
-`aq stats` keeps the same split over time in "Host memory".
+`aq stats` keeps the same split over time in "Host memory" (area `memory`).
 
 ```sh
-aq stats --since 7d
+aq stats                      # one-screen overview and "Worth a look"
+aq stats disk                 # one area in detail
+aq stats --all --since 7d     # every section, untruncated
 aq stats --since 30d --profile /path/to/repo:tests-unit --json
 aq stats export --since 7d --format jsonl
 aq stats export --since 7d --format csv --table host
 ```
 
-The summaries cover task outcomes and waiting, profile accuracy, queue and host,
-reservations, delivery, hook hits and OOM/PSI incidents. A profile filter
-returns only the items and runs of that profile. Export tables are `items`,
-`runs`, `host`, `incidents`, `events`, `disk`, `hook`; CSV requires `--table`. Commands,
+`aq stats` alone prints an overview that fits one screen: queue, outcomes,
+memory, disk and agents for the period, then a short "Worth a look" list. Each
+item names the area to open. `aq stats AREA` prints that area's tables cut to the
+top rows (`N more: aq stats AREA --all`); the areas are `tasks`, `profiles`,
+`disk`, `memory`, `reservations`, `notify` and `incidents`. `aq stats --all`
+prints every section in full. `--json` is always the whole summary, whatever the
+area. The summaries cover task outcomes and waiting, profile accuracy, queue and
+host, disk writes, reservations, delivery, hook hits and OOM/PSI incidents. A
+profile filter returns only the items and runs of that profile. Export tables are `items`,
+`runs`, `host`, `incidents`, `events`, `disk`, `hook`; CSV requires `--table`
+(`disk` holds the hourly writes by source, see "Disk writes"). Commands,
 environment, cwd, session identifiers and delivery error texts are not included
 in statistics or exports.
 
@@ -369,7 +378,58 @@ sudo systemctl daemon-reload
 # then reboot (or systemctl --user daemon-reexec) and restart aq.service
 ```
 
-Containers of a stand run outside aq; their writes are not counted yet.
+#### Writes of the whole host, by source
+
+Task counters miss most of what a machine writes. Every sample (30 s) the daemon
+also reads the host's physical-disk counter and splits the bytes by who wrote
+them, in two levels. The sources add up to the host figure:
+
+- `aq`: tasks and reservations run by aq;
+- `docker:PROJECT`: containers, grouped by compose project (the label a stand's
+  `--docker-project` binds to its reservation);
+- `system:UNIT` and `user:UNIT`: services such as journald and apps;
+- `session:NAME`: a login session, which is where agents run commands outside aq;
+- `other`: the rest, computed for the period as the host figure minus the named
+  sources, so it never double counts.
+
+The second level names agents. Inside a source, `aq stats disk` can put
+`≈ claude ~/proj` next to it: the agent process tree (`[stats] agent_processes`)
+and its project directory. This is an estimate and is not part of the sum. It
+counts a write when the page is dirtied, while the source is counted when the
+bytes go to the device, so over seconds the two differ and over hours they
+agree. Known limits: writes from descendants an agent handed to init since the
+last sample are in the source but not in the agent's estimate; a deleted file's
+cancelled write is charged to the process that deleted it, not the one that
+wrote it; and writes made while the daemon was down are lost.
+
+`aq stats disk` shows the period's total and rate, the sources, the heaviest
+hours and the tasks whose runs wrote the most; `aq stats export --table disk`
+gives the hourly rows. `aq top` has a `disk:` line with the current rate and the
+heaviest writer; it is marked stale when the last sample is older than 3
+minutes.
+
+Writes need the same `io` delegation as above. Hourly rows are kept
+for `history_max_age`.
+
+#### Disk-write alarm
+
+When the host writes faster than `alert_rate` for the whole `alert_window`, aq
+sends one `disk_writes_high` notification through the webhook, naming the rate,
+how long it lasted, the bytes and the top sources (with the agent estimate):
+
+```
+disk writes at 120 GiB/h for 10m (20 GiB): session:session-3.scope 118 GiB/h (≈ claude ~/proj)
+```
+
+It fires once per episode. When the rate falls below the threshold for a window,
+`disk_writes_normal` follows with the episode's total and the main writer. aq
+only reports; it does not stop or throttle anything. Set it in `config.toml`:
+
+```toml
+[disk]
+alert_rate = "50G"     # bytes per hour; "0" turns the alarm off
+alert_window = "10m"   # at least 5 x stats.sample_interval
+```
 
 ## Retention
 

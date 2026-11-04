@@ -168,7 +168,11 @@ earlier reservations of that name used (never more than declared).
 records it. A suite writing gigabytes per run wears the SSD and slows everyone:
 report it to the user and look for the cause (a test database without
 `fsync=off`, an uncached dependency install, a fresh build directory every run).
-`aq stats` lists the heaviest writers by name.
+`aq stats` prints a one-screen overview with a "Worth a look" list; `aq stats disk` names who wrote
+to the disk (aq tasks, docker projects, system units, agent sessions; "≈ claude
+~/proj" is an estimate, not part of the sum), and `aq stats AREA --all` shows an
+area in full. The host sends a disk-write alarm to the user on heavy writing;
+if you caused it, stop that work.
 
 Submission success means queued, not that the command passed. If it cannot
 start at once, `submit` (and `reserve`, `wait`) prints `queued: position N,

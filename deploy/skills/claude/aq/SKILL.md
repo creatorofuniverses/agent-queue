@@ -158,8 +158,12 @@ of that name used (never more than declared), as it does for tasks. On
 `aq result` also shows `disk:` (bytes written to physical disks) when the host
 records it. Gigabytes per run for a test suite wears the SSD and slows everyone:
 tell the user and look for the cause (a test database without `fsync=off`, an
-uncached dependency install, a fresh build directory every run). `aq stats`
-lists the heaviest writers by name.
+uncached dependency install, a fresh build directory every run). `aq stats` prints a
+one-screen overview with a "Worth a look" list; `aq stats disk` names who wrote
+to the disk (aq tasks, docker projects, system units, agent sessions; "≈ claude
+~/proj" is an estimate, not part of the sum), and `aq stats AREA --all` shows an
+area in full. The host sends a disk-write alarm to the user on heavy writing;
+if you caused it, stop that work.
 
 ## 6. Clean up before you finish
 
