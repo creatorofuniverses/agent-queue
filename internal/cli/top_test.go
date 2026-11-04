@@ -30,8 +30,8 @@ func TestTopDiskLine(t *testing.T) {
 		want string
 	}{
 		{nil, "no samples yet"},
-		{&daemon.DiskRate{At: now, BytesPerSec: 12 << 20, Top: "session:session-3.scope", TopBytesPerSec: 9 << 20, TopAgent: "agent:claude:/home/u/sber/auto-evolve"},
-			"12 MiB/s — session:session-3.scope 9 MiB/s (≈ claude ~/sber/auto-evolve)"},
+		{&daemon.DiskRate{At: now, BytesPerSec: 12 << 20, Top: "session:session-3.scope", TopBytesPerSec: 9 << 20, TopAgent: "agent:claude:/home/u/src/shop"},
+			"12 MiB/s — session:session-3.scope 9 MiB/s (≈ claude ~/src/shop)"},
 		{&daemon.DiskRate{At: now, BytesPerSec: 1 << 20}, "1 MiB/s"},
 	} {
 		if got := c.diskText(tc.d, now); got != tc.want {

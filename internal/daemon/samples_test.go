@@ -108,10 +108,10 @@ func setDisk(disk *fake.DiskMeter, usage *fake.UsageMeter, session, docker, agen
 	disk.Set(platform.DiskSnapshot{Host: session + docker,
 		Cgroups: []platform.CgroupIO{
 			{Source: "session:session-3.scope", ID: "user.slice/user-1000.slice/session-3.scope", Parent: "session", Bytes: session},
-			{Source: "docker:runi", ID: "system.slice/docker-abc.scope", Bytes: docker}},
+			{Source: "docker:shop", ID: "system.slice/docker-abc.scope", Bytes: docker}},
 		Parents: map[string]uint64{"session": session}})
 	if usage != nil {
-		usage.Set(platform.Usage{IO: []platform.ProcIO{{PID: 10, PPID: 1, Start: 10, Agent: "claude", Project: "/home/u/sber/auto-evolve", Within: "session:session-3.scope", Bytes: int64(agent)}}})
+		usage.Set(platform.Usage{IO: []platform.ProcIO{{PID: 10, PPID: 1, Start: 10, Agent: "claude", Project: "/home/u/src/shop", Within: "session:session-3.scope", Bytes: int64(agent)}}})
 	}
 }
 
@@ -134,18 +134,18 @@ func TestStatsSamplerDisk(t *testing.T) {
 	step(1)
 	rows, err := d.Store.DiskWritesSince(ctx, time.Time{})
 	const g = int64(gib)
-	want := map[string]int64{"host": 2 * g, "session:session-3.scope": 3 * g / 2, "docker:runi": g / 2, "agent:claude:/home/u/sber/auto-evolve": g}
+	want := map[string]int64{"host": 2 * g, "session:session-3.scope": 3 * g / 2, "docker:shop": g / 2, "agent:claude:/home/u/src/shop": g}
 	if err != nil || len(rows) != len(want) {
 		t.Fatal(rows, err)
 	}
 	for _, r := range rows {
-		if !r.Hour.Equal(t0) || want[r.Source] != r.Bytes || (r.Source == "agent:claude:/home/u/sber/auto-evolve") != (r.Within == "session:session-3.scope") {
+		if !r.Hour.Equal(t0) || want[r.Source] != r.Bytes || (r.Source == "agent:claude:/home/u/src/shop") != (r.Within == "session:session-3.scope") {
 			t.Fatalf("%+v", r)
 		}
 	}
 	r := d.LastDisk.Load()
 	if r == nil || !r.At.Equal(at) || r.BytesPerSec != float64(2*gib)/60 || r.Top != "session:session-3.scope" ||
-		r.TopBytesPerSec != float64(3*gib/2)/60 || r.TopAgent != "agent:claude:/home/u/sber/auto-evolve" {
+		r.TopBytesPerSec != float64(3*gib/2)/60 || r.TopAgent != "agent:claude:/home/u/src/shop" {
 		t.Fatalf("%+v", r)
 	}
 	// 2 GiB a minute is 120 GiB/h, over the 60 GiB/h threshold: the alarm rises
@@ -158,7 +158,7 @@ func TestStatsSamplerDisk(t *testing.T) {
 	}
 	ev := (*evs)[0]
 	if ev.Kind != model.EventDiskWritesHigh || ev.Audience != model.AudienceOperator || ev.ID == "" || !ev.CreatedAt.Equal(t0.Add(5*time.Minute)) ||
-		ev.Detail != "disk writes at 120.0 GiB/h for 5m (10.0 GiB): session:session-3.scope 90.0 GiB/h (≈ claude ~/sber/auto-evolve), docker:runi 30.0 GiB/h" {
+		ev.Detail != "disk writes at 120.0 GiB/h for 5m (10.0 GiB): session:session-3.scope 90.0 GiB/h (≈ claude ~/src/shop), docker:shop 30.0 GiB/h" {
 		t.Fatalf("%+v", ev)
 	}
 	// Writing stops: the all-clear comes once the window average drops below half.
@@ -204,7 +204,7 @@ func TestStatsSamplerDiskFailedUsageStepsSources(t *testing.T) {
 		return out
 	}
 	const g = int64(gib)
-	if got := sum(); got["host"] != 10*g || got["session:session-3.scope"] != 15*g/2 || got["docker:runi"] != 5*g/2 || got["agent:claude:/home/u/sber/auto-evolve"] != 0 {
+	if got := sum(); got["host"] != 10*g || got["session:session-3.scope"] != 15*g/2 || got["docker:shop"] != 5*g/2 || got["agent:claude:/home/u/src/shop"] != 0 {
 		t.Fatalf("rows while the usage scan fails: %v", got)
 	}
 	if r := d.LastDisk.Load(); r == nil || !r.At.Equal(at) || r.BytesPerSec != float64(2*gib)/60 {
@@ -214,7 +214,7 @@ func TestStatsSamplerDiskFailedUsageStepsSources(t *testing.T) {
 	at = t0.Add(6 * time.Minute)
 	setDisk(disk, usage, 6*3*gib/2, 6*gib/2, 6*gib)
 	sampleStep(ctx, &d, time.Minute)
-	if got := sum(); got["agent:claude:/home/u/sber/auto-evolve"] != 6*g || got["host"] != 12*g {
+	if got := sum(); got["agent:claude:/home/u/src/shop"] != 6*g || got["host"] != 12*g {
 		t.Fatalf("rows after the scan is back: %v", got)
 	}
 }

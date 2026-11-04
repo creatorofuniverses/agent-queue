@@ -145,16 +145,16 @@ func weekSummary() stats.Summary {
 		Incidents: &stats.IncidentStats{PSIEpisodes: 2, PSIClosedSeconds: 140,
 			GuardEngaged: 1, GuardSnapshots: []stats.GuardSnapshot{{At: at, Detail: "available 3.0 GiB"}}},
 		DiskHost: &stats.DiskHostStats{Written: 3 << 40, Hours: 150, Sources: []stats.DiskSourceStats{
-			{Source: "session:session-3.scope", Written: 1 << 40, Agents: []stats.DiskAgentStats{{Agent: "agent:claude:" + home + "/sber/auto-evolve", Written: 1 << 40}}},
+			{Source: "session:session-3.scope", Written: 1 << 40, Agents: []stats.DiskAgentStats{{Agent: "agent:claude:" + home + "/src/shop", Written: 1 << 40}}},
 			{Source: "aq", Written: 60 << 30},
-		}, Busiest: []stats.DiskHourStats{{Hour: at, Written: 200 << 30, Top: "session:session-3.scope", TopWritten: 150 << 30, TopAgent: "agent:claude:" + home + "/sber/auto-evolve"}}},
+		}, Busiest: []stats.DiskHourStats{{Hour: at, Written: 200 << 30, Top: "session:session-3.scope", TopWritten: 150 << 30, TopAgent: "agent:claude:" + home + "/src/shop"}}},
 		Overview: &stats.Overview{Tasks: 1061, Reservations: 263, WaitedOverMinute: 27, WaitP50: 0.002, WaitP90: 0.042,
 			Succeeded: 617, Failed: 362, KilledOwnLimit: 7, KilledHostGuard: 7, Rejected: 32,
 			TasksPeak: 11 << 30, AvailableMin: 3 << 30, PressureClosures: 2, PressureSeconds: 140,
 			DiskWritten: 3 << 40, DiskPerHour: 20 << 30, AQShare: 0.02, TopWriter: "session:session-3.scope", TopWriterBytes: 1 << 40,
-			TopWriterAgent: "agent:claude:" + home + "/sber/auto-evolve", HookNudges: 259, DeliveredShare: 0.99},
+			TopWriterAgent: "agent:claude:" + home + "/src/shop", HookNudges: 259, DeliveredShare: 0.99},
 		Findings: []stats.Finding{
-			{Area: "disk", Text: "session:session-3.scope wrote 1.0 TiB, ≈ all of it claude ~/sber/auto-evolve"},
+			{Area: "disk", Text: "session:session-3.scope wrote 1.0 TiB, ≈ all of it claude ~/src/shop"},
 			{Area: "profiles", Text: "12 profiles peak >20% over their --memory"},
 			{Area: "reservations", Text: "guardrails-qualification-full held 7 GiB·h it never used"},
 		},
@@ -180,7 +180,7 @@ func TestStatsOverviewFitsScreen(t *testing.T) {
 			t.Fatalf("%d columns: %q", n, l)
 		}
 	}
-	for _, want := range []string{"Queue ", "Outcomes ", "Memory ", "Disk ", "Agents ", "Worth a look", "  ! disk ", "More: aq stats tasks|profiles|disk|memory|reservations|notify|incidents · aq stats --all", "≈ claude ~/sber/auto-evolve"} {
+	for _, want := range []string{"Queue ", "Outcomes ", "Memory ", "Disk ", "Agents ", "Worth a look", "  ! disk ", "More: aq stats tasks|profiles|disk|memory|reservations|notify|incidents · aq stats --all", "≈ claude ~/src/shop"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("no %q in\n%s", want, out)
 		}

@@ -43,7 +43,7 @@ func diskTree(t *testing.T, io map[string]int) DiskMeterConfig {
 		ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg"),
 		DevRoot: filepath.Join(root, "dev"), Slices: []string{"aqtest.slice"},
 		Containers: func(context.Context) (map[string]string, error) {
-			return map[string]string{"abc": "docker:runi-x"}, nil
+			return map[string]string{"abc": "docker:shop-x"}, nil
 		},
 	}
 }
@@ -75,7 +75,7 @@ func TestDiskMeterSnapshot(t *testing.T) {
 	dev := func(n uint64) map[string]uint64 { return map[string]uint64{"259:0": n} }
 	want := []platform.CgroupIO{
 		{Source: "aq", ID: diskManager + "/aqtest.slice", Parent: "user", Bytes: 200, Devices: dev(200)},
-		{Source: "docker:runi-x", ID: "system.slice/docker-abc.scope", Parent: "system", Bytes: 300, Devices: dev(300)},
+		{Source: "docker:shop-x", ID: "system.slice/docker-abc.scope", Parent: "system", Bytes: 300, Devices: dev(300)},
 		{Source: "system:systemd-journald.service", ID: "system.slice/systemd-journald.service", Parent: "system", Bytes: 100, Devices: dev(100)},
 		{Source: "user:app-tmux.scope", ID: diskManager + "/app.slice/app-tmux.scope", Parent: "user", Bytes: 50, Devices: dev(50)},
 		{Source: "user:ai-memory.service", ID: diskManager + "/app.slice/ai-memory.service", Parent: "user", Bytes: 40, Devices: dev(40)},
@@ -123,7 +123,7 @@ func TestDiskMeterSystemChildren(t *testing.T) {
 		}
 		got[c.Source] += c.Bytes
 	}
-	want := map[string]uint64{"system:system-getty.slice": 30, `system:system-systemd\x2dcoredump.slice`: 400, "system:home.mount": 5, "docker:runi-x": 300}
+	want := map[string]uint64{"system:system-getty.slice": 30, `system:system-systemd\x2dcoredump.slice`: 400, "system:home.mount": 5, "docker:shop-x": 300}
 	if !maps.Equal(got, want) {
 		t.Fatalf("sources = %v, want %v", got, want)
 	}
@@ -163,18 +163,18 @@ func TestDiskMeterNoIOController(t *testing.T) {
 
 func TestSourceKey(t *testing.T) {
 	aq := []string{diskManager + "/aqtest.slice"}
-	c := map[string]string{"abc": "docker:runi-x"}
+	c := map[string]string{"abc": "docker:shop-x"}
 	for rel, want := range map[string]string{
 		diskManager + "/aqtest.slice/aqtest-1.service/x":     "aq",
 		diskManager + "/app.slice/app-tmux.scope":            "user:app-tmux.scope",
 		diskManager + "/app.slice/foo.service/sub/leaf":      "user:foo.service",
 		diskManager + "/app.slice":                           "",
-		"system.slice/docker-abc.scope/x":                    "docker:runi-x",
+		"system.slice/docker-abc.scope/x":                    "docker:shop-x",
 		"system.slice/docker-def456789012345.scope":          "docker:def456789012",
 		"system.slice/sshd.service":                          "system:sshd.service",
 		"system.slice/system-getty.slice/getty@tty1.service": "system:system-getty.slice",
 		"system.slice/home.mount":                            "system:home.mount",
-		"docker/abc":                                         "docker:runi-x",
+		"docker/abc":                                         "docker:shop-x",
 		"user.slice/user-1000.slice/session-3.scope/a":       "session:session-3.scope",
 		"init.scope": "",
 	} {

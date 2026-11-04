@@ -173,11 +173,11 @@ func TestSummarizeGuardEngagements(t *testing.T) {
 }
 func TestAgentLabel(t *testing.T) {
 	for key, want := range map[string]string{
-		"agent:claude:/home/u/sber/auto-evolve": "claude ~/sber/auto-evolve",
-		"agent:codex:/home/u":                   "codex ~",
-		"agent:codex:/home/user2/x":             "codex /home/user2/x",
-		"agent:kimi:":                           "kimi",
-		"docker:runi":                           "docker:runi",
+		"agent:claude:/home/u/src/shop": "claude ~/src/shop",
+		"agent:codex:/home/u":           "codex ~",
+		"agent:codex:/home/user2/x":     "codex /home/user2/x",
+		"agent:kimi:":                   "kimi",
+		"docker:shop":                   "docker:shop",
 	} {
 		if got := AgentLabel(key, "/home/u"); got != want {
 			t.Errorf("%s: %q, want %q", key, got, want)
@@ -195,16 +195,16 @@ func TestSummarizeDiskHost(t *testing.T) {
 	h0 := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 	h1 := h0.Add(time.Hour)
 	in := Input{Since: h0, Until: h1.Add(time.Hour), Items: []*model.Item{
-		{Kind: model.KindReservation, Project: "P", Name: "old", DockerProject: "runi", CreatedAt: h0},
-		{Kind: model.KindReservation, Project: "P", Name: "new", DockerProject: "runi", CreatedAt: h1},
+		{Kind: model.KindReservation, Project: "P", Name: "old", DockerProject: "shop", CreatedAt: h0},
+		{Kind: model.KindReservation, Project: "P", Name: "new", DockerProject: "shop", CreatedAt: h1},
 	}, DiskWrites: []store.DiskWrite{
 		dw(h0, "host", "", 100*gib), dw(h1, "host", "", 50*gib),
-		dw(h0, "docker:runi", "", 60*gib), dw(h1, "docker:runi", "", 20*gib),
+		dw(h0, "docker:shop", "", 60*gib), dw(h1, "docker:shop", "", 20*gib),
 		dw(h0, "aq", "", 10*gib), dw(h1, "aq", "", -2*gib), // total 8
 		dw(h0, "session:ended", "", 5*gib),
-		dw(h0, "agent:claude:/p", "docker:runi", 70*gib), dw(h1, "agent:claude:/p", "docker:runi", 20*gib), // 90 > 80: clamped
-		dw(h0, "agent:codex:/q", "docker:runi", 3*gib),
-		dw(h0, "agent:neg:/q", "docker:runi", -5*gib), // negative: dropped
+		dw(h0, "agent:claude:/p", "docker:shop", 70*gib), dw(h1, "agent:claude:/p", "docker:shop", 20*gib), // 90 > 80: clamped
+		dw(h0, "agent:codex:/q", "docker:shop", 3*gib),
+		dw(h0, "agent:neg:/q", "docker:shop", -5*gib), // negative: dropped
 	}}
 	s := Summarize(in)
 	d := s.DiskHost
@@ -216,7 +216,7 @@ func TestSummarizeDiskHost(t *testing.T) {
 		got = append(got, x.Source)
 	}
 	// other = 150 - (80 + 8 + 5) = 57
-	if !reflect.DeepEqual(got, []string{"docker:runi", "other", "aq", "session:ended"}) {
+	if !reflect.DeepEqual(got, []string{"docker:shop", "other", "aq", "session:ended"}) {
 		t.Fatal(got)
 	}
 	if d.Sources[1].Written != 57*gib || d.Sources[2].Written != 8*gib {
@@ -226,7 +226,7 @@ func TestSummarizeDiskHost(t *testing.T) {
 	if r.Written != 80*gib || r.Reservation != "P:new" || len(r.Agents) != 2 || r.Agents[0].Agent != "agent:claude:/p" || r.Agents[0].Written != 80*gib || r.Agents[1].Written != 3*gib {
 		t.Fatalf("%+v", r)
 	}
-	if len(d.Busiest) != 2 || d.Busiest[0].Hour != h0 || d.Busiest[0].Written != 100*gib || d.Busiest[0].Top != "docker:runi" || d.Busiest[0].TopWritten != 60*gib || d.Busiest[0].TopAgent != "agent:claude:/p" || d.Busiest[1].Written != 50*gib {
+	if len(d.Busiest) != 2 || d.Busiest[0].Hour != h0 || d.Busiest[0].Written != 100*gib || d.Busiest[0].Top != "docker:shop" || d.Busiest[0].TopWritten != 60*gib || d.Busiest[0].TopAgent != "agent:claude:/p" || d.Busiest[1].Written != 50*gib {
 		t.Fatalf("%+v", d.Busiest)
 	}
 }
