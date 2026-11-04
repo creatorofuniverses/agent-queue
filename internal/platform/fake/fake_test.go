@@ -161,3 +161,21 @@ func TestFakeStopHookAndTeardownSlice(t *testing.T) {
 		t.Fatalf("ensured %d %d", pool, td)
 	}
 }
+
+// The fake hands out copies: the accountant may keep a snapshot's maps.
+func TestFakeDiskMeterCopies(t *testing.T) {
+	m := &fake.DiskMeter{}
+	m.Set(platform.DiskSnapshot{Host: 10, Devices: map[string]uint64{"259:0": 10},
+		Cgroups:       []platform.CgroupIO{{Source: "aq", ID: "a", Bytes: 4, Devices: map[string]uint64{"259:0": 4}}},
+		Parents:       map[string]uint64{"user": 7},
+		ParentDevices: map[string]map[string]uint64{"user": {"259:0": 7}}})
+	s, err := m.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Devices["259:0"], s.Cgroups[0].Devices["259:0"], s.ParentDevices["user"]["259:0"] = 0, 0, 0
+	s, _ = m.Snapshot(context.Background())
+	if s.Devices["259:0"] != 10 || s.Cgroups[0].Devices["259:0"] != 4 || s.ParentDevices["user"]["259:0"] != 7 {
+		t.Fatalf("the fake's snapshot changed through a copy: %+v", s)
+	}
+}

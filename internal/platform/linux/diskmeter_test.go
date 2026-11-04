@@ -3,8 +3,10 @@ package linux
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"testing"
@@ -67,28 +69,32 @@ func TestDiskMeterSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Host != 1000*512 {
-		t.Fatalf("host = %d", s.Host)
+	if s.Host != 1000*512 || !maps.Equal(s.Devices, map[string]uint64{"259:0": 1000 * 512}) {
+		t.Fatalf("host = %d %v", s.Host, s.Devices)
 	}
+	dev := func(n uint64) map[string]uint64 { return map[string]uint64{"259:0": n} }
 	want := []platform.CgroupIO{
-		{Source: "aq", ID: diskManager + "/aqtest.slice", Bytes: 200},
-		{Source: "docker:runi-x", ID: "system.slice/docker-abc.scope", Parent: "system", Bytes: 300},
-		{Source: "system:systemd-journald.service", ID: "system.slice/systemd-journald.service", Parent: "system", Bytes: 100},
-		{Source: "user:app-tmux.scope", ID: diskManager + "/app.slice/app-tmux.scope", Parent: "user", Bytes: 50},
-		{Source: "user:ai-memory.service", ID: diskManager + "/app.slice/ai-memory.service", Parent: "user", Bytes: 40},
-		{Source: "session:session-3.scope", ID: "user.slice/user-1000.slice/session-3.scope", Parent: "session", Bytes: 250},
+		{Source: "aq", ID: diskManager + "/aqtest.slice", Parent: "user", Bytes: 200, Devices: dev(200)},
+		{Source: "docker:runi-x", ID: "system.slice/docker-abc.scope", Parent: "system", Bytes: 300, Devices: dev(300)},
+		{Source: "system:systemd-journald.service", ID: "system.slice/systemd-journald.service", Parent: "system", Bytes: 100, Devices: dev(100)},
+		{Source: "user:app-tmux.scope", ID: diskManager + "/app.slice/app-tmux.scope", Parent: "user", Bytes: 50, Devices: dev(50)},
+		{Source: "user:ai-memory.service", ID: diskManager + "/app.slice/ai-memory.service", Parent: "user", Bytes: 40, Devices: dev(40)},
+		{Source: "session:session-3.scope", ID: "user.slice/user-1000.slice/session-3.scope", Parent: "session", Bytes: 250, Devices: dev(250)},
+		// the user manager: no source, but a child of the login slice
+		{Source: "", ID: diskManager, Parent: "session", Bytes: 700, Devices: dev(700)},
 	}
 	if len(s.Cgroups) != len(want) {
 		t.Fatalf("cgroups = %+v", s.Cgroups)
 	}
 	for _, w := range want {
-		if !slices.Contains(s.Cgroups, w) {
+		if !slices.ContainsFunc(s.Cgroups, func(c platform.CgroupIO) bool { return reflect.DeepEqual(c, w) }) {
 			t.Errorf("missing %+v in %+v", w, s.Cgroups)
 		}
 	}
-	for k, v := range map[string]uint64{"system": 900, "user": 500, "session": 300} {
-		if s.Parents[k] != v {
-			t.Errorf("parent %s = %d, want %d", k, s.Parents[k], v)
+	// Parents are the raw counters; their children are subtracted when stepping.
+	for k, v := range map[string]uint64{"system": 900, "user": 700, "session": 1000} {
+		if s.Parents[k] != v || !maps.Equal(s.ParentDevices[k], dev(v)) {
+			t.Errorf("parent %s = %d %v, want %d", k, s.Parents[k], s.ParentDevices[k], v)
 		}
 	}
 }
@@ -107,7 +113,7 @@ func TestDiskMeterDegrades(t *testing.T) {
 		docker = docker || c.Source == "docker:abc"
 		mem = mem || c.Source == "user:ai-memory.service"
 	}
-	if !docker || mem || len(s.Cgroups) != 5 {
+	if !docker || mem || len(s.Cgroups) != 6 {
 		t.Fatalf("cgroups = %+v", s.Cgroups)
 	}
 }

@@ -6,6 +6,7 @@ package diskacct
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
@@ -19,9 +20,11 @@ type AgentDelta struct {
 	Bytes  int64
 }
 
-// Delta is what was written between two snapshots. Every value is signed: a
-// counter that went backwards (a cgroup re-created under the same path, or
-// cancelled process writes) yields a negative delta; reports clamp.
+// Delta is what was written between two snapshots. Host and the cgroup
+// sources are never negative (a counter that went backwards was re-created
+// and counts from zero). An "*:ended" remainder and an agent delta are signed:
+// a cgroup's writes counted as ended while it was missing are taken back, and
+// cancelled process writes shrink an agent; reports clamp.
 type Delta struct {
 	Host    int64
 	Sources map[string]int64 // level 1 and "*:ended"; "other" is the report's
@@ -31,10 +34,44 @@ type Delta struct {
 // Accountant remembers the previous snapshot and the agent-tree ledger.
 type Accountant struct {
 	started bool
-	host    uint64
-	cgroups map[string]uint64 // by CgroupIO.ID
-	parents map[string]uint64
+	host    counter
+	cgroups map[string]*cgroup // by CgroupIO.ID, the missing ones too
+	parents map[string]counter
 	procs   map[procKey]*proc
+}
+
+// counter is a cumulative write counter by physical disk; the key "" stands
+// for the sum when the disks are not known.
+type counter map[string]uint64
+
+func counterOf(devices map[string]uint64, sum uint64) counter {
+	if devices == nil {
+		return counter{"": sum}
+	}
+	return maps.Clone(devices)
+}
+
+// since is what was written from prev to c, disk by disk. A disk whose
+// counter went backwards belongs to a counter re-created since (a cgroup
+// re-created under the same path, a disk re-attached) and counts from zero,
+// as does a disk new to it; a disk that went away adds nothing.
+func (c counter) since(prev counter) int64 {
+	var d int64
+	for dev, cur := range c {
+		if p, ok := prev[dev]; ok && cur >= p {
+			d += int64(cur - p)
+		} else {
+			d += int64(cur)
+		}
+	}
+	return d
+}
+
+// cgroup is the last counter of a cgroup and how many samples it has been
+// missing from.
+type cgroup struct {
+	last    counter
+	missing int
 }
 
 // procKey identifies a process across PID reuse: a key that reappears is
@@ -49,6 +86,10 @@ type procKey struct {
 // resume from its last counter and take back the transfers it handed over or
 // carried: those wait as long as it is a tombstone.
 const tombstoneSamples = 10
+
+// missSamples is how many consecutive samples a cgroup may be missing (a
+// failed io.stat read) and still continue from its last counter.
+const missSamples = 10
 
 // proc is the ledger entry of one process seen in an agent's cgroup.
 //
@@ -95,44 +136,62 @@ func (a *Accountant) Step(s platform.DiskSnapshot) (Delta, bool) {
 	if !a.started {
 		a.started = true
 		a.procStep(s.Procs)
-		a.remember(s)
+		a.sources(s)
 		return Delta{}, false
 	}
-	d := Delta{Host: int64(s.Host) - int64(a.host), Sources: a.sources(s), Agents: a.procStep(s.Procs)}
-	a.remember(s)
+	host := counterOf(s.Devices, s.Host)
+	d := Delta{Host: host.since(a.host), Sources: a.sources(s), Agents: a.procStep(s.Procs)}
 	return d, true
 }
 
-func (a *Accountant) remember(s platform.DiskSnapshot) {
-	a.host = s.Host
-	a.cgroups = make(map[string]uint64, len(s.Cgroups))
-	for _, c := range s.Cgroups {
-		a.cgroups[c.ID] = c.Bytes
-	}
-	a.parents = make(map[string]uint64, len(s.Parents))
-	for p, b := range s.Parents {
-		a.parents[p] = b
-	}
-}
-
-// sources sums cgroup deltas by source key. A cgroup new since the last
-// snapshot counts from zero; one that disappeared adds nothing here, its tail
-// shows in "<parent>:ended" = Δparent − Σ Δ of the parent's live children.
+// sources sums cgroup deltas by source key and remembers the counters. A
+// cgroup new since the last snapshot counts from zero; one that disappeared
+// adds nothing here, its tail shows in "<parent>:ended" = Δparent − Σ Δ of
+// the parent's live children. A cgroup missing from up to missSamples
+// snapshots continues from its last counter when it is back: its writes
+// meanwhile showed in ended and are taken back from ended now.
 func (a *Accountant) sources(s platform.DiskSnapshot) map[string]int64 {
+	a.host = counterOf(s.Devices, s.Host)
+	if a.cgroups == nil {
+		a.cgroups = map[string]*cgroup{}
+	}
 	out := map[string]int64{}
 	children := map[string]int64{}
+	seen := make(map[string]bool, len(s.Cgroups))
 	for _, c := range s.Cgroups {
-		d := int64(c.Bytes) - int64(a.cgroups[c.ID])
-		out[c.Source] += d
+		cur := counterOf(c.Devices, c.Bytes)
+		var d int64
+		if g := a.cgroups[c.ID]; g != nil {
+			d = cur.since(g.last)
+		} else {
+			d = cur.since(nil)
+		}
+		a.cgroups[c.ID] = &cgroup{last: cur}
+		seen[c.ID] = true
+		if c.Source != "" { // "": no source, only a child of its parent
+			out[c.Source] += d
+		}
 		if c.Parent != "" {
 			children[c.Parent] += d
 		}
 	}
-	for p, cur := range s.Parents {
-		if prev, ok := a.parents[p]; ok {
-			out[p+":ended"] = int64(cur) - int64(prev) - children[p]
+	for id, g := range a.cgroups {
+		if seen[id] {
+			continue
+		}
+		if g.missing++; g.missing > missSamples {
+			delete(a.cgroups, id)
 		}
 	}
+	parents := make(map[string]counter, len(s.Parents))
+	for p, sum := range s.Parents {
+		cur := counterOf(s.ParentDevices[p], sum)
+		parents[p] = cur
+		if prev, ok := a.parents[p]; ok {
+			out[p+":ended"] = cur.since(prev) - children[p]
+		}
+	}
+	a.parents = parents
 	return out
 }
 

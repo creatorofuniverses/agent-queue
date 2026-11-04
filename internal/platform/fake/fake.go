@@ -3,6 +3,7 @@ package fake
 
 import (
 	"context"
+	"maps"
 	"math"
 	"sync"
 
@@ -450,12 +451,17 @@ func (m *DiskMeter) Snapshot(ctx context.Context) (platform.DiskSnapshot, error)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.snap
+	s.Devices = maps.Clone(s.Devices)
 	s.Cgroups = append([]platform.CgroupIO(nil), s.Cgroups...)
+	for i := range s.Cgroups {
+		s.Cgroups[i].Devices = maps.Clone(s.Cgroups[i].Devices)
+	}
 	s.Procs = append([]platform.ProcIO(nil), s.Procs...)
-	if m.snap.Parents != nil {
-		s.Parents = map[string]uint64{}
-		for k, v := range m.snap.Parents {
-			s.Parents[k] = v
+	s.Parents = maps.Clone(s.Parents)
+	if s.ParentDevices != nil {
+		s.ParentDevices = make(map[string]map[string]uint64, len(m.snap.ParentDevices))
+		for k, v := range m.snap.ParentDevices {
+			s.ParentDevices[k] = maps.Clone(v)
 		}
 	}
 	return s, m.err

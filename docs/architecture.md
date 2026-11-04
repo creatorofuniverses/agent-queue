@@ -273,10 +273,17 @@ Disk writes are accounted in two levels. Every host sample, the accountant in
 deltas as hourly sums in the `disk_writes` table. Level one (sources) adds up to
 the host figure. Level two (agents) is a per-process estimate from
 `/proc/PID/io` inside a source; it is stored with the source it lived in and
-never added to a sum. `other` is not stored per sample: per-sample deltas can run
-backward (cgroups are re-created, units end), so a per-sample remainder would be
-noisy and sometimes negative; the report computes it over the period as the host
-total minus the named sources. The alarm is a small state machine over the same
+never added to a sum. Counters are diffed per physical disk and per cgroup: a
+disk that goes away adds nothing, a counter that went backwards belongs to a
+cgroup re-created under the same path and counts from zero, and a cgroup missing
+from a few samples (a failed read) continues from its last counter. Parents are
+read raw and their known children subtracted in the accountant, so the tail of
+the cgroups that ended between samples lands in `<parent>:ended`. `other` is not
+stored per sample: io.stat counts a request when it is issued and the disk
+counter when it completes, and a missed cgroup's writes show in `ended` first and
+are taken back later, so a per-sample remainder would be noisy and sometimes
+negative; the report computes it over the period as the host total minus the
+named sources. The alarm is a small state machine over the same
 deltas (rate over a window, one event per episode, an all-clear when the window average
 falls below half the threshold) and emits `disk_writes_high`/`disk_writes_normal` through the
 usual event delivery.

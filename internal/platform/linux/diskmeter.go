@@ -49,41 +49,39 @@ func NewDiskMeter(cfg DiskMeterConfig) *DiskMeter {
 
 var _ platform.DiskMeter = (*DiskMeter)(nil)
 
-// Snapshot reads the counters. A source without io.stat (no io controller) is
-// skipped rather than counted as zero; only an unreadable diskstats is an error.
+// Snapshot reads the counters, by physical disk. A source without io.stat (no
+// io controller) is skipped rather than counted as zero; only an unreadable
+// diskstats is an error. Parents are raw: the accountant subtracts their
+// children, so a child re-created under them (an aq slice, the user manager)
+// cannot make a parent's remainder jump.
 func (m *DiskMeter) Snapshot(ctx context.Context) (platform.DiskSnapshot, error) {
-	host, err := m.hostWrites()
+	host, devs, err := m.hostWrites()
 	if err != nil {
 		return platform.DiskSnapshot{}, err
 	}
 	containers := m.containers(ctx)
-	snap := platform.DiskSnapshot{Host: host, Parents: map[string]uint64{}}
+	snap := platform.DiskSnapshot{Host: host, Devices: devs, Parents: map[string]uint64{}, ParentDevices: map[string]map[string]uint64{}}
 	root := m.cfg.CgroupRoot
-	read := func(rel string) (uint64, bool) {
+	read := func(rel string) (uint64, map[string]uint64, bool) {
 		return physicalWrites(filepath.Join(root, rel, "io.stat"), m.cfg.DevRoot)
 	}
-	add := func(source, rel, parent string) {
-		if b, ok := read(rel); ok {
-			snap.Cgroups = append(snap.Cgroups, platform.CgroupIO{Source: source, ID: rel, Parent: parent, Bytes: b})
+	add := func(source, rel, parent string) bool {
+		b, d, ok := read(rel)
+		if ok {
+			snap.Cgroups = append(snap.Cgroups, platform.CgroupIO{Source: source, ID: rel, Parent: parent, Bytes: b, Devices: d})
 		}
+		return ok
 	}
-
-	// aq: the task and teardown slices.
-	var aqSum uint64
-	var aqRels []string
-	for _, s := range m.cfg.Slices {
-		rel := filepath.Join(m.manager, sliceCgroupPath(s))
-		aqRels = append(aqRels, rel)
-		if b, ok := read(rel); ok {
-			aqSum += b
-			snap.Cgroups = append(snap.Cgroups, platform.CgroupIO{Source: "aq", ID: rel, Bytes: b})
+	parent := func(name, rel string) bool {
+		b, d, ok := read(rel)
+		if ok {
+			snap.Parents[name], snap.ParentDevices[name] = b, d
 		}
+		return ok
 	}
 
 	// system.slice: direct children; containers under the cgroupfs driver.
-	if b, ok := read("system.slice"); ok {
-		snap.Parents["system"] = b
-	}
+	parent("system", "system.slice")
 	for _, name := range unitDirs(filepath.Join(root, "system.slice")) {
 		add(unitSource(name, containers), filepath.Join("system.slice", name), "system")
 	}
@@ -92,15 +90,21 @@ func (m *DiskMeter) Snapshot(ctx context.Context) (platform.DiskSnapshot, error)
 	}
 
 	userSlice := filepath.Dir(m.manager)
-	// the user manager: leaves below the slices, aq's own slices excluded.
-	if b, ok := read(m.manager); ok {
-		snap.Parents["user"] = sub(b, aqSum)
+	// the user manager: aq's task and teardown slices, and the leaves below
+	// the other slices.
+	if parent("user", m.manager) {
+		var aqRels []string
+		for _, s := range m.cfg.Slices {
+			rel := filepath.Join(m.manager, sliceCgroupPath(s))
+			aqRels = append(aqRels, rel)
+			add("aq", rel, "user")
+		}
 		m.walkManager(m.manager, aqRels, func(rel string) {
 			add("user:"+filepath.Base(rel), rel, "user")
 		})
 		// the login slice holds the manager and the sessions beside it.
-		if sb, ok := read(userSlice); ok {
-			snap.Parents["session"] = sub(sb, b)
+		if parent("session", userSlice) {
+			add("", m.manager, "session")
 		}
 	}
 	if userSlice != "." {
@@ -170,13 +174,6 @@ func dirNames(dir string) []string {
 		}
 	}
 	return out
-}
-
-func sub(a, b uint64) uint64 {
-	if b >= a {
-		return 0
-	}
-	return a - b
 }
 
 // unitSource is the source key of a direct child of system.slice.
@@ -257,36 +254,41 @@ func (m *DiskMeter) containers(ctx context.Context) map[string]string {
 }
 
 // hostWrites is the sum of "sectors written" (field 10) of /proc/diskstats over
-// physical disks, times 512.
-func (m *DiskMeter) hostWrites() (uint64, error) {
+// physical disks, times 512, and the same by disk ("M:m").
+func (m *DiskMeter) hostWrites() (uint64, map[string]uint64, error) {
 	b, err := os.ReadFile(filepath.Join(m.cfg.ProcRoot, "diskstats"))
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	var sectors uint64
+	var sum uint64
+	devs := map[string]uint64{}
 	for _, line := range strings.Split(string(b), "\n") {
 		f := strings.Fields(line)
 		if len(f) < 10 {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(m.cfg.DevRoot, f[0]+":"+f[1], "device")); err != nil {
+		dev := f[0] + ":" + f[1]
+		if _, err := os.Stat(filepath.Join(m.cfg.DevRoot, dev, "device")); err != nil {
 			continue
 		}
 		n, _ := strconv.ParseUint(f[9], 10, 64)
-		sectors += n
+		devs[dev] += n * 512
+		sum += n * 512
 	}
-	return sectors * 512, nil
+	return sum, devs, nil
 }
 
 // physicalWrites sums wbytes of an io.stat over physical disks (devices with a
 // device link in devRoot; device-mapper, md, loop and zram have none and are
-// counted where their bytes land). ok is false when there is no io.stat.
-func physicalWrites(path, devRoot string) (uint64, bool) {
+// counted where their bytes land), in all and by disk. ok is false when
+// there is no io.stat.
+func physicalWrites(path, devRoot string) (uint64, map[string]uint64, bool) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return 0, false
+		return 0, nil, false
 	}
 	var w uint64
+	devs := map[string]uint64{}
 	for _, line := range strings.Split(string(b), "\n") {
 		f := strings.Fields(line)
 		if len(f) == 0 {
@@ -298,9 +300,10 @@ func physicalWrites(path, devRoot string) (uint64, bool) {
 		for _, kv := range f[1:] {
 			if v, ok := strings.CutPrefix(kv, "wbytes="); ok {
 				n, _ := strconv.ParseUint(v, 10, 64)
+				devs[f[0]] += n
 				w += n
 			}
 		}
 	}
-	return w, true
+	return w, devs, true
 }

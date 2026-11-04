@@ -11,6 +11,9 @@ import (
 const (
 	mib = int64(1) << 20
 	gib = int64(1) << 30
+
+	umib = uint64(mib)
+	ugib = uint64(gib)
 )
 
 // agentProc is an agent process; Start is its PID so tests read simply.
@@ -128,21 +131,112 @@ func TestSourcesShareKey(t *testing.T) {
 	}
 }
 
-// A counter that went backwards (the cgroup was re-created under the same
-// path) is kept signed, and so is a negative ended remainder: reports clamp.
-func TestSourcesKeepSign(t *testing.T) {
+// A counter that went backwards belongs to a cgroup re-created under the
+// same path (a unit restart): it counts from zero, so the old one's lifetime
+// does not land in "<parent>:ended". The ended remainder stays signed.
+func TestSourcesRecreatedCountFromZero(t *testing.T) {
 	a := New()
 	a.Step(platform.DiskSnapshot{Host: 100,
-		Cgroups: []platform.CgroupIO{{Source: "user:x.service", ID: "u/x.service", Parent: "user", Bytes: 500}},
-		Parents: map[string]uint64{"user": 1000}})
-	d, _ := a.Step(platform.DiskSnapshot{Host: 90,
-		Cgroups: []platform.CgroupIO{{Source: "user:x.service", ID: "u/x.service", Parent: "user", Bytes: 20}},
-		Parents: map[string]uint64{"user": 1010}})
-	if want := map[string]int64{"user:x.service": -480, "user:ended": 490}; !maps.Equal(d.Sources, want) {
+		Cgroups: []platform.CgroupIO{{Source: "system:j.service", ID: "system.slice/j.service", Parent: "system", Bytes: 104 * ugib}},
+		Parents: map[string]uint64{"system": 110 * ugib}})
+	d, _ := a.Step(platform.DiskSnapshot{Host: 100 + 30*umib,
+		Cgroups: []platform.CgroupIO{{Source: "system:j.service", ID: "system.slice/j.service", Parent: "system", Bytes: 20 * umib}},
+		Parents: map[string]uint64{"system": 110*ugib + 30*umib}})
+	if want := map[string]int64{"system:j.service": 20 * mib, "system:ended": 10 * mib}; !maps.Equal(d.Sources, want) {
 		t.Errorf("Sources = %v, want %v", d.Sources, want)
 	}
-	if d.Host != -10 {
-		t.Errorf("Host = %d, want -10", d.Host)
+	d, _ = a.Step(platform.DiskSnapshot{Host: 100 + 30*umib,
+		Cgroups: []platform.CgroupIO{{Source: "system:j.service", ID: "system.slice/j.service", Parent: "system", Bytes: 30 * umib}},
+		Parents: map[string]uint64{"system": 110*ugib + 30*umib}})
+	if want := map[string]int64{"system:j.service": 10 * mib, "system:ended": -10 * mib}; !maps.Equal(d.Sources, want) {
+		t.Errorf("signed ended: Sources = %v, want %v", d.Sources, want)
+	}
+}
+
+// A cgroup missing from one snapshot (a failed io.stat read) continues from
+// its last counter when it comes back, instead of counting its lifetime again;
+// what its parent showed meanwhile as ended is taken back from ended.
+func TestSourcesMissingOneSample(t *testing.T) {
+	a := New()
+	s3 := func(b uint64, ok bool, parent uint64) platform.DiskSnapshot {
+		s := platform.DiskSnapshot{Parents: map[string]uint64{"session": parent}}
+		if ok {
+			s.Cgroups = []platform.CgroupIO{{Source: "session:session-3.scope", ID: "user.slice/user-1000.slice/session-3.scope", Parent: "session", Bytes: b}}
+		}
+		return s
+	}
+	a.Step(s3(1200*ugib, true, 1300*ugib))
+	d1, _ := a.Step(s3(0, false, 1300*ugib+ugib))
+	d2, _ := a.Step(s3(1200*ugib+3*ugib, true, 1300*ugib+3*ugib))
+	if got := d2.Sources["session:session-3.scope"]; got != 3*gib {
+		t.Errorf("session-3 after a miss = %d, want %d", got, 3*gib)
+	}
+	sum := d1.Sources["session:ended"] + d2.Sources["session:ended"] + d2.Sources["session:session-3.scope"]
+	if sum != 3*gib || d1.Sources["session:ended"]+d2.Sources["session:ended"] != 0 {
+		t.Errorf("over both samples: ended %d + %d, session-3 %d; want the parent's 3 GiB, ended 0",
+			d1.Sources["session:ended"], d2.Sources["session:ended"], d2.Sources["session:session-3.scope"])
+	}
+}
+
+// A cgroup missing longer than missSamples is forgotten: when it comes back it
+// is a new cgroup and counts from zero.
+func TestSourcesMissingLongIsNew(t *testing.T) {
+	a := New()
+	c := []platform.CgroupIO{{Source: "user:x.service", ID: "u/x.service", Parent: "user", Bytes: 500}}
+	a.Step(platform.DiskSnapshot{Cgroups: c})
+	for range missSamples + 1 {
+		a.Step(platform.DiskSnapshot{})
+	}
+	d, _ := a.Step(platform.DiskSnapshot{Cgroups: []platform.CgroupIO{{Source: "user:x.service", ID: "u/x.service", Parent: "user", Bytes: 600}}})
+	if got := d.Sources["user:x.service"]; got != 600 {
+		t.Errorf("x after a long absence = %d, want 600", got)
+	}
+}
+
+// The host and the cgroups are counted per disk: a disk that goes away adds
+// nothing (its counter does not turn the total negative), one that comes back
+// re-attached counts from zero.
+func TestDevicesVanishAndReturn(t *testing.T) {
+	snap := func(nvme, usb uint64, withUSB bool) platform.DiskSnapshot {
+		dev := map[string]uint64{"259:0": nvme}
+		if withUSB {
+			dev["8:16"] = usb
+		}
+		var sum uint64
+		for _, v := range dev {
+			sum += v
+		}
+		return platform.DiskSnapshot{Host: sum, Devices: dev,
+			Cgroups: []platform.CgroupIO{{Source: "session:s.scope", ID: "user.slice/s.scope", Parent: "session", Bytes: sum, Devices: dev}},
+			Parents: map[string]uint64{"session": sum}, ParentDevices: map[string]map[string]uint64{"session": dev}}
+	}
+	a := New()
+	a.Step(snap(1000*ugib, 400*ugib, true))
+	d, _ := a.Step(snap(1000*ugib+ugib, 0, false))
+	if d.Host != gib || d.Sources["session:s.scope"] != gib || d.Sources["session:ended"] != 0 {
+		t.Errorf("disk removed: Host %d, Sources %v; want 1 GiB each, ended 0", d.Host, d.Sources)
+	}
+	d, _ = a.Step(snap(1000*ugib+2*ugib, 5*umib, true))
+	if d.Host != gib+5*mib || d.Sources["session:s.scope"] != gib+5*mib || d.Sources["session:ended"] != 0 {
+		t.Errorf("disk back: Host %d, Sources %v; want 1 GiB + 5 MiB each, ended 0", d.Host, d.Sources)
+	}
+}
+
+// aq's slices are children of the user manager: one re-created (its counter
+// back near zero) counts from zero and leaves user:ended alone, where a parent
+// pre-reduced by aq's counter would jump by aq's whole lifetime.
+func TestSourcesRecreatedChildOfParent(t *testing.T) {
+	snap := func(aq, x, user uint64) platform.DiskSnapshot {
+		return platform.DiskSnapshot{Cgroups: []platform.CgroupIO{
+			{Source: "aq", ID: "m/aq.slice", Parent: "user", Bytes: aq},
+			{Source: "user:x.service", ID: "m/app.slice/x.service", Parent: "user", Bytes: x}},
+			Parents: map[string]uint64{"user": user}}
+	}
+	a := New()
+	a.Step(snap(600*umib, 300*umib, 1000*umib))
+	d, _ := a.Step(snap(5*umib, 305*umib, 1010*umib))
+	if want := map[string]int64{"aq": 5 * mib, "user:x.service": 5 * mib, "user:ended": 0}; !maps.Equal(d.Sources, want) {
+		t.Errorf("Sources = %v, want %v", d.Sources, want)
 	}
 }
 

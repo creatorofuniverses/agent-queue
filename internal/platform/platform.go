@@ -175,16 +175,25 @@ type ProcIO struct {
 type CgroupIO struct {
 	Source string // level-1 source key, e.g. "system:systemd-journald.service"
 	ID     string // cgroup path relative to the cgroup root: unique, a source may gather several (a project's containers)
-	Parent string // "system", "user" or "session": whose "<parent>:ended" gets its tail; "" for none (aq, cgroupfs containers)
-	Bytes  uint64 // cumulative wbytes on physical disks
+	Parent string // "system", "user" or "session": whose "<parent>:ended" gets its tail; "" for none (cgroupfs containers)
+	Bytes  uint64 // cumulative wbytes on physical disks: the sum of Devices
+	// Devices is Bytes by physical disk ("M:m"), so that a disk that goes
+	// away does not look like a counter going backwards. nil: only Bytes is known.
+	Devices map[string]uint64
 }
 
 // DiskSnapshot is one raw reading of cumulative disk-write counters.
 type DiskSnapshot struct {
-	Host    uint64            // cumulative bytes written to physical disks
+	Host    uint64            // cumulative bytes written to physical disks: the sum of Devices
+	Devices map[string]uint64 // Host by physical disk ("M:m"); nil: only Host is known
 	Cgroups []CgroupIO        // sources that expose an io.stat; the rest are skipped, not counted as zero
 	Parents map[string]uint64 // "system", "user", "session" -> the parent's cumulative counter (its own writes plus its children's)
-	Procs   []ProcIO          // filled by the usage sampler, not by the DiskMeter
+	// ParentDevices is Parents by physical disk; a parent missing here has only its sum.
+	ParentDevices map[string]map[string]uint64
+	// ProcsUnknown says the usage scan failed: Procs is not empty because no
+	// process wrote, and the agent ledger is not stepped.
+	ProcsUnknown bool
+	Procs        []ProcIO // filled by the usage sampler, not by the DiskMeter
 }
 
 // DiskMeter reads the raw disk-write counters; it has no state of its own.
