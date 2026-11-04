@@ -1,0 +1,175 @@
+package diskacct
+
+import (
+	"testing"
+	"time"
+)
+
+const (
+	step    = 30 * time.Second
+	window  = 10 * time.Minute
+	thresh  = uint64(50) << 30
+	alarmT0 = 1_000_000
+)
+
+// feed runs n samples; f gives the delta for sample i (1-based, at i*step).
+func feed(a *Alarm, from, n int, f func(i int) Delta) (evs []AlarmEvent, at []int) {
+	for i := from; i < from+n; i++ {
+		t := time.Unix(alarmT0, 0).Add(time.Duration(i) * step)
+		if ev, ok := a.Observe(t, step, f(i)); ok {
+			evs = append(evs, ev)
+			at = append(at, i)
+		}
+	}
+	return
+}
+
+func host(b int64) Delta { return Delta{Host: b} }
+
+func TestAlarmSustainedBursty(t *testing.T) {
+	a := NewAlarm(thresh, window)
+	evs, at := feed(a, 1, 60, func(i int) Delta {
+		if i%4 == 0 {
+			return host(4 * gib)
+		}
+		return host(0)
+	})
+	if len(evs) != 1 || !evs[0].High {
+		t.Fatalf("events = %+v", evs)
+	}
+	if at[0] != 20 {
+		t.Errorf("raised at sample %d, want 20 (window just filled)", at[0])
+	}
+	if evs[0].Since != window {
+		t.Errorf("Since = %v", evs[0].Since)
+	}
+}
+
+func TestAlarmSplitBurst(t *testing.T) {
+	a := NewAlarm(thresh, window)
+	evs, _ := feed(a, 1, 40, func(i int) Delta {
+		if i == 25 || i == 26 {
+			return host(9 * gib / 2)
+		}
+		return host(0)
+	})
+	if len(evs) != 0 {
+		t.Fatalf("events = %+v", evs)
+	}
+}
+
+func TestAlarmAllClear(t *testing.T) {
+	a := NewAlarm(thresh, window)
+	// 100 GiB/h = 0.4167 GiB per 30 s; then 10 GiB/h.
+	hi := host(perStep(100))
+	lo := host(perStep(10))
+	evs, _ := feed(a, 1, 30, func(i int) Delta {
+		d := hi
+		d.Sources = map[string]int64{"aq": d.Host}
+		return d
+	})
+	if len(evs) != 1 || !evs[0].High {
+		t.Fatalf("raise: %+v", evs)
+	}
+	evs, at := feed(a, 31, 60, func(i int) Delta {
+		d := lo
+		d.Sources = map[string]int64{"aq": d.Host}
+		return d
+	})
+	if len(evs) != 1 || evs[0].High {
+		t.Fatalf("clear: %+v", evs)
+	}
+	// Average drops below 25 GiB/h only once most of the window is quiet:
+	// 10 min window, x min at 100, rest at 10: 10+90*x/10 < 25 => x < 1.67 min.
+	if at[0] < 31+14 {
+		t.Errorf("cleared too early at %d", at[0])
+	}
+	if evs[0].BytesPerHour >= float64(thresh)/2 {
+		t.Errorf("rate %v", evs[0].BytesPerHour)
+	}
+	if evs[0].Since <= window {
+		t.Errorf("Since = %v, want the whole episode", evs[0].Since)
+	}
+	if len(evs[0].Top) != 1 || evs[0].Top[0].Source != "aq" {
+		t.Errorf("Top = %+v", evs[0].Top)
+	}
+	if evs[0].Written < uint64(30*hi.Host) {
+		t.Errorf("Written = %d, want at least the raising samples", evs[0].Written)
+	}
+	// Episode ended: it can fire again.
+	evs, _ = feed(a, 91, 30, func(int) Delta { return hi })
+	if len(evs) != 1 || !evs[0].High {
+		t.Fatalf("second raise: %+v", evs)
+	}
+}
+
+func TestAlarmNeedsFullWindow(t *testing.T) {
+	a := NewAlarm(thresh, window)
+	hi := host(perStep(100))
+	evs, at := feed(a, 1, 19, func(int) Delta { return hi })
+	if len(evs) != 0 {
+		t.Fatalf("events before the window filled: %+v at %v", evs, at)
+	}
+	evs, _ = feed(a, 20, 1, func(int) Delta { return hi })
+	if len(evs) != 1 {
+		t.Fatalf("no raise on the full window")
+	}
+}
+
+func TestAlarmTopSources(t *testing.T) {
+	a := NewAlarm(thresh, window)
+	d := Delta{
+		Host: perStep(100),
+		Sources: map[string]int64{
+			"session:session-3.scope": 600 << 20,
+			"docker:x":                200 << 20,
+			"system:j.service":        100 << 20,
+			"system:ended":            50 << 20,
+			"user:k":                  -5,
+		},
+		Agents: []AgentDelta{
+			{Key: "agent:codex:p", Within: "session:session-3.scope", Bytes: 100 << 20},
+			{Key: "agent:claude:p", Within: "session:session-3.scope", Bytes: 400 << 20},
+			{Key: "agent:other:q", Within: "docker:x", Bytes: -3},
+		},
+	}
+	evs, _ := feed(a, 1, 20, func(int) Delta { return d })
+	if len(evs) != 1 {
+		t.Fatalf("events = %+v", evs)
+	}
+	top := evs[0].Top
+	if len(top) != 3 || top[0].Source != "session:session-3.scope" || top[1].Source != "docker:x" || top[2].Source != "system:j.service" {
+		t.Fatalf("Top = %+v", top)
+	}
+	if top[0].Agent != "agent:claude:p" || top[1].Agent != "" {
+		t.Errorf("agents = %q, %q", top[0].Agent, top[1].Agent)
+	}
+	if want := float64(600<<20) * 20 * 6; top[0].BytesPerHour < want*0.99 || top[0].BytesPerHour > want*1.01 {
+		t.Errorf("rate = %v, want %v", top[0].BytesPerHour, want)
+	}
+}
+
+func TestAlarmDisabled(t *testing.T) {
+	a := NewAlarm(0, window)
+	evs, _ := feed(a, 1, 100, func(int) Delta { return host(100 * gib) })
+	if len(evs) != 0 {
+		t.Fatalf("events = %+v", evs)
+	}
+}
+
+func TestAlarmOneEventPerEpisodeAndNegativesClamped(t *testing.T) {
+	a := NewAlarm(thresh, window)
+	hi := host(perStep(100))
+	evs, _ := feed(a, 1, 100, func(i int) Delta {
+		if i%2 == 0 {
+			return host(-50 * gib) // counter reset noise must not cancel writes
+		}
+		return host(hi.Host * 2)
+	})
+	if len(evs) != 1 || !evs[0].High {
+		t.Fatalf("events = %+v", evs)
+	}
+}
+
+// perStep is the bytes written in one 30 s step at g GiB per hour.
+func perStep(g int64) int64 { return g << 30 / 120 }
