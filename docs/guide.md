@@ -433,7 +433,8 @@ long as task history (`history_max_age`, but not less than `logs_max_age`).
 #### Disk-write alarm
 
 The window is split into five equal parts, and each sample's bytes are spread
-over the parts its interval covers. When at least four parts are at or above `alert_rate`, so a single short spike does not count, aq sends one `disk_writes_high` notification through the webhook, naming the rate,
+over the parts its interval covers; only the share inside the window counts, for
+the parts, the average, the bytes and the top sources alike. When at least four parts are at or above `alert_rate`, so a single short spike does not count, aq sends one `disk_writes_high` notification through the webhook, naming the rate,
 how long it lasted, the bytes and the top sources (with the agent estimate):
 
 ```
