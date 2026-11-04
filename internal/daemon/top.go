@@ -48,6 +48,8 @@ type TopView struct {
 	Commitments scheduler.Commitments `json:"commitments"`
 	Queue       QueueView             `json:"queue"`
 	Tmp         *TmpView              `json:"tmp,omitempty"`
+	// Disk is the write rate of the last disk sample; nil until the sampler has a delta.
+	Disk *DiskRate `json:"disk,omitempty"`
 }
 
 // TmpView is the filesystem holding task temp dirs. Root is empty when they
@@ -87,13 +89,18 @@ func (b *boundedUsage) Usage(ctx context.Context, agents []string) (platform.Usa
 	}
 }
 
-func physical(ctx context.Context, usage platform.UsageMeter, agents []string, mem platform.MemInfo) PhysicalView {
+// scanUsage is one bounded pass over /proc: the sampler feeds both the memory
+// row and the disk accountant from it.
+func scanUsage(ctx context.Context, usage platform.UsageMeter, agents []string) (platform.Usage, error) {
 	if usage == nil {
-		return PhysicalView{Error: "usage meter unavailable"}
+		return platform.Usage{}, errors.New("usage meter unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	u, e := usage.Usage(ctx, agents)
+	return usage.Usage(ctx, agents)
+}
+
+func physicalView(u platform.Usage, e error, mem platform.MemInfo) PhysicalView {
 	if e != nil {
 		return PhysicalView{Error: e.Error()}
 	}
@@ -132,5 +139,10 @@ func (d *server) top(ctx context.Context) (any, error) {
 	} else {
 		tmp.FSUsage = u
 	}
-	return TopView{At: time.Now().UTC(), Host: HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed}, Physical: physical(ctx, d.opts.Usage, d.cfg.Stats.AgentProcesses, mem), Commitments: p.Commitments, Queue: QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}, Tmp: tmp}, nil
+	u, ue := scanUsage(ctx, d.opts.Usage, d.cfg.Stats.AgentProcesses)
+	v := TopView{At: time.Now().UTC(), Host: HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed}, Physical: physicalView(u, ue, mem), Commitments: p.Commitments, Queue: QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}, Tmp: tmp}
+	if d.lastDisk != nil {
+		v.Disk = d.lastDisk.Load()
+	}
+	return v, nil
 }

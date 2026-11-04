@@ -59,9 +59,13 @@ func cmdDaemon(c *cmdCtx, args []string) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(c.stderr, nil)))
 	ctx, stop := signal.NotifyContext(c.ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return daemon.Run(ctx, paths, cfg, ex, linux.NewHost("/proc"), linux.NewDockerMeter(linux.DockerMeterConfig{}), daemon.Options{Snapshot: func() (platform.MemorySnapshot, error) {
+	docker := linux.NewDockerMeter(linux.DockerMeterConfig{})
+	aqSlices := []string{cfg.SliceName, cfg.TeardownSliceName()}
+	return daemon.Run(ctx, paths, cfg, ex, linux.NewHost("/proc"), docker, daemon.Options{Snapshot: func() (platform.MemorySnapshot, error) {
 		return linux.MemorySnapshot("/proc", "/sys/fs/cgroup", 5, cfg.Stats.AgentProcesses)
-	}, OOMKills: linux.NewOOMDJournal(filepath.Join(paths.StateDir, "oomd.cursor")), Usage: linux.NewUsageMeter(linux.UsageMeterConfig{ProcRoot: "/proc", CgroupRoot: "/sys/fs/cgroup", Slices: []string{cfg.SliceName, cfg.TeardownSliceName()}})})
+	}, OOMKills: linux.NewOOMDJournal(filepath.Join(paths.StateDir, "oomd.cursor")),
+		Usage: linux.NewUsageMeter(linux.UsageMeterConfig{ProcRoot: "/proc", CgroupRoot: "/sys/fs/cgroup", Slices: aqSlices}),
+		Disk:  linux.NewDiskMeter(linux.DiskMeterConfig{ProcRoot: "/proc", CgroupRoot: "/sys/fs/cgroup", Slices: aqSlices, Containers: docker.Sources})})
 }
 
 func cmdStatus(c *cmdCtx, args []string) error {

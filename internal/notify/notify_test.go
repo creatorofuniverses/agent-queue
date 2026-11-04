@@ -273,3 +273,18 @@ func TestTextSaysWhenDelayed(t *testing.T) {
 		t.Fatalf("%q", s)
 	}
 }
+
+// A heavy disk write episode warns the operator; its end is information.
+func TestGongDiskWrites(t *testing.T) {
+	m := message()
+	m.Item = nil
+	for kind, level := range map[model.EventKind]string{model.EventDiskWritesHigh: "warning", model.EventDiskWritesNormal: "info"} {
+		m.Event.Kind = kind
+		if gongMark(m) != "💽" || gongLevel(kind) != level {
+			t.Errorf("%s: %s %s", kind, gongMark(m), gongLevel(kind))
+		}
+	}
+	if model.EventDiskWritesHigh != "disk_writes_high" || model.EventDiskWritesNormal != "disk_writes_normal" {
+		t.Error("event kind names")
+	}
+}

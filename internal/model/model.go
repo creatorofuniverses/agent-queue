@@ -353,6 +353,10 @@ const (
 	EventStandOverDeclared        EventKind = "stand_over_declared"
 	EventReservationIdle          EventKind = "reservation_idle"
 	EventDaemonRestarted          EventKind = "daemon_restarted"
+	// EventDiskWritesHigh: the host has written to its disks above
+	// [disk] alert_rate for alert_window; EventDiskWritesNormal ends that episode.
+	EventDiskWritesHigh   EventKind = "disk_writes_high"
+	EventDiskWritesNormal EventKind = "disk_writes_normal"
 )
 
 type Audience string

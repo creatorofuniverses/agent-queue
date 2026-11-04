@@ -110,3 +110,21 @@ func stopRuntime(st *store.Store, sched *scheduler.Scheduler, started, now time.
 		slog.Warn("runtime: save lifecycle", "err", err)
 	}
 }
+
+// operatorEmitter records an operator event routed as the daemon's own events
+// are (to the webhook when there is one, else skipped) and wakes the outbox.
+func operatorEmitter(st *store.Store, router *notify.Router, kick func()) func(context.Context, model.Event) {
+	return func(ctx context.Context, ev model.Event) {
+		ev.Audience = model.AudienceOperator
+		ev.Channel = router.Route("", model.AudienceOperator)
+		ev.Status = model.EventPending
+		if ev.Channel == model.ChannelNone {
+			ev.Status = model.EventSkipped
+		}
+		if err := st.AddEvents(ctx, []model.Event{ev}); err != nil {
+			slog.Warn("record operator event", "kind", ev.Kind, "err", err)
+			return
+		}
+		kick()
+	}
+}

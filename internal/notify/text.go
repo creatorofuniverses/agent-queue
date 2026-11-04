@@ -167,6 +167,8 @@ func gongMark(m Message) string {
 		return "⏳"
 	case model.EventDaemonRestarted:
 		return "🔄"
+	case model.EventDiskWritesHigh, model.EventDiskWritesNormal:
+		return "💽"
 	case model.EventCleaningStuck, model.EventDeliveryFailed, model.EventReservationForceReleased, model.EventStandOverDeclared, model.EventReservationIdle:
 		return "⚠️"
 	}
@@ -177,7 +179,7 @@ func gongLevel(k model.EventKind) string {
 	switch k {
 	case model.EventTaskFailedInfra, model.EventCleaningStuck, model.EventDeliveryFailed, model.EventTeardownFailed, model.EventTeardownUnknown:
 		return "error"
-	case model.EventAdmissionClosed, model.EventReservationForceReleased, model.EventStandOverDeclared, model.EventReservationExpiring, model.EventReservationIdle:
+	case model.EventAdmissionClosed, model.EventReservationForceReleased, model.EventStandOverDeclared, model.EventReservationExpiring, model.EventReservationIdle, model.EventDiskWritesHigh:
 		return "warning"
 	case model.EventTeardownSucceeded, model.EventReservationGranted:
 		return "success"

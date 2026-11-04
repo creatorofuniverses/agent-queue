@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/diskacct"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/notify"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
@@ -37,6 +38,8 @@ type Options struct {
 	OOMKills platform.OOMKillLog
 	// Snapshot names who holds memory when the host guard engages; nil: not recorded.
 	Snapshot func() (platform.MemorySnapshot, error)
+	// Disk reads the disk-write counters the stats sampler accounts; nil: not sampled.
+	Disk platform.DiskMeter
 }
 
 func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platform.Executor, host platform.HostMetrics, meter platform.StandMeter, opts Options) error {
@@ -110,7 +113,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if opts.Usage != nil {
 		opts.Usage = &boundedUsage{inner: opts.Usage}
 	}
-	d := &server{host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg}
+	d := &server{host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg, lastDisk: &atomic.Pointer[DiskRate]{}}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {
 		return fmt.Errorf("recover: %w", err)
@@ -140,7 +143,10 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	go func() { defer loops.Done(); RunRetention(runCtx, st, paths, cfg, 10*time.Minute) }()
 	go func() {
 		defer loops.Done()
-		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses}, cfg.Stats.SampleInterval)
+		home, _ := os.UserHomeDir()
+		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses,
+			Disk: opts.Disk, Acct: diskacct.New(), Alarm: diskacct.NewAlarm(cfg.Disk.AlertRate, cfg.Disk.AlertWindow),
+			Emit: operatorEmitter(st, router, outbox.Kick), LastDisk: d.lastDisk, Home: home}, cfg.Stats.SampleInterval)
 	}()
 	var engaged func()
 	if opts.Snapshot != nil {
@@ -188,6 +194,7 @@ type server struct {
 	st         *store.Store
 	paths      config.Paths
 	tmp        TmpPlan
+	lastDisk   *atomic.Pointer[DiskRate]
 	recovering atomic.Bool
 }
 
