@@ -33,7 +33,8 @@ type Delta struct {
 
 // Accountant remembers the previous snapshot and the agent-tree ledger.
 type Accountant struct {
-	started bool
+	started bool // level 1 has its baseline
+	ledger  bool // the agent ledger has its baseline
 	host    counter
 	cgroups map[string]*cgroup // by CgroupIO.ID, the missing ones too
 	parents map[string]counter
@@ -132,15 +133,25 @@ func New() *Accountant {
 
 // Step accounts s against the previous snapshot. The first call only records
 // the baseline and returns false: what was written before it is nobody's.
+//
+// A snapshot with ProcsUnknown leaves the agent ledger alone (stepping it
+// with no processes would take every one for gone); the next snapshot with
+// processes covers the gap, and the first one is the ledger's baseline.
 func (a *Accountant) Step(s platform.DiskSnapshot) (Delta, bool) {
+	var agents []AgentDelta
+	if !s.ProcsUnknown {
+		agents = a.procStep(s.Procs)
+		if !a.ledger {
+			a.ledger, agents = true, nil
+		}
+	}
 	if !a.started {
 		a.started = true
-		a.procStep(s.Procs)
 		a.sources(s)
 		return Delta{}, false
 	}
 	host := counterOf(s.Devices, s.Host)
-	d := Delta{Host: host.since(a.host), Sources: a.sources(s), Agents: a.procStep(s.Procs)}
+	d := Delta{Host: host.since(a.host), Sources: a.sources(s), Agents: agents}
 	return d, true
 }
 

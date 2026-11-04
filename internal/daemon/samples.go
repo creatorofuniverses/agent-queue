@@ -93,14 +93,14 @@ func sampleStep(ctx context.Context, d *SamplerDeps, every time.Duration) {
 	if e = d.Store.AddHostSample(ctx, v); e != nil {
 		slog.Warn("stats: write host sample", "err", e)
 	}
-	// A failed scan has no process counters: stepping without them would end
-	// every agent process, so this sample is skipped and the next one covers it.
-	if uerr == nil {
-		d.sampleDisk(ctx, usage.IO, at)
-	}
+	// A failed scan (a /proc read stuck behind D-state processes, typically
+	// during heavy writing) has no process counters: the sources, the host
+	// and the alarm are still stepped, the agent estimate waits for the next
+	// scan, which covers the gap.
+	d.sampleDisk(ctx, usage.IO, uerr != nil, at)
 }
 
-func (d *SamplerDeps) sampleDisk(ctx context.Context, procs []platform.ProcIO, at time.Time) {
+func (d *SamplerDeps) sampleDisk(ctx context.Context, procs []platform.ProcIO, procsUnknown bool, at time.Time) {
 	if d.Disk == nil || d.Acct == nil {
 		return
 	}
@@ -114,7 +114,7 @@ func (d *SamplerDeps) sampleDisk(ctx context.Context, procs []platform.ProcIO, a
 		}
 		return
 	}
-	snap.Procs = procs
+	snap.Procs, snap.ProcsUnknown = procs, procsUnknown
 	delta, ok := d.Acct.Step(snap)
 	prev := d.diskAt
 	d.diskAt = at

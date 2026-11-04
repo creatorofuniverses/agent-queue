@@ -102,14 +102,17 @@ func diskDeps(t *testing.T, at *time.Time) (SamplerDeps, *fake.DiskMeter, *fake.
 }
 
 // setDisk makes the host, the session scope (whose agent wrote agent of it)
-// and a compose project hold these cumulative counters.
+// and a compose project hold these cumulative counters; a nil usage keeps
+// the usage meter as it is (failing, say).
 func setDisk(disk *fake.DiskMeter, usage *fake.UsageMeter, session, docker, agent uint64) {
 	disk.Set(platform.DiskSnapshot{Host: session + docker,
 		Cgroups: []platform.CgroupIO{
 			{Source: "session:session-3.scope", ID: "user.slice/user-1000.slice/session-3.scope", Parent: "session", Bytes: session},
 			{Source: "docker:runi", ID: "system.slice/docker-abc.scope", Bytes: docker}},
 		Parents: map[string]uint64{"session": session}})
-	usage.Set(platform.Usage{IO: []platform.ProcIO{{PID: 10, PPID: 1, Start: 10, Agent: "claude", Project: "/home/u/sber/auto-evolve", Within: "session:session-3.scope", Bytes: int64(agent)}}})
+	if usage != nil {
+		usage.Set(platform.Usage{IO: []platform.ProcIO{{PID: 10, PPID: 1, Start: 10, Agent: "claude", Project: "/home/u/sber/auto-evolve", Within: "session:session-3.scope", Bytes: int64(agent)}}})
+	}
 }
 
 func TestStatsSamplerDisk(t *testing.T) {
@@ -171,33 +174,48 @@ func TestStatsSamplerDisk(t *testing.T) {
 }
 
 // The rate's span is the real time since the last disk sample, not the
-// configured interval, and a failed usage scan skips the disk step instead of
-// feeding the accountant a snapshot without processes.
-func TestStatsSamplerDiskSkipsFailedUsage(t *testing.T) {
+// configured interval. A failed usage scan (a /proc read stuck behind D-state
+// processes during heavy writing) still steps the sources and the host, so
+// rows, the rate and the alarm keep up; only the agent estimate waits for the
+// next scan, which covers the gap.
+func TestStatsSamplerDiskFailedUsageStepsSources(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
 	at := t0
-	d, disk, usage, _ := diskDeps(t, &at)
+	d, disk, usage, evs := diskDeps(t, &at)
 	setDisk(disk, usage, 0, 0, 0)
 	sampleStep(ctx, &d, time.Minute)
-	at = t0.Add(time.Minute)
 	usage.Fail(errors.New("scan stuck"))
-	sampleStep(ctx, &d, time.Minute)
-	if rows, _ := d.Store.DiskWritesSince(ctx, time.Time{}); len(rows) != 0 || d.LastDisk.Load() != nil {
-		t.Fatal(rows)
+	// 2 GiB a minute while every scan fails: the alarm still rises at 5 minutes.
+	for k := uint64(1); k <= 5; k++ {
+		at = t0.Add(time.Duration(k) * time.Minute)
+		setDisk(disk, nil, k*3*gib/2, k*gib/2, k*gib)
+		sampleStep(ctx, &d, time.Minute)
 	}
-	at = t0.Add(2 * time.Minute)
-	setDisk(disk, usage, 3*gib, gib, 2*gib)
-	sampleStep(ctx, &d, time.Minute)
-	rows, _ := d.Store.DiskWritesSince(ctx, time.Time{})
-	agent := int64(0)
-	for _, r := range rows {
-		if r.Source == "agent:claude:/home/u/sber/auto-evolve" {
-			agent = r.Bytes
+	if len(*evs) != 1 || (*evs)[0].Kind != model.EventDiskWritesHigh {
+		t.Fatalf("alarm while the usage scan fails: %+v", *evs)
+	}
+	sum := func() map[string]int64 {
+		rows, _ := d.Store.DiskWritesSince(ctx, time.Time{})
+		out := map[string]int64{}
+		for _, r := range rows {
+			out[r.Source] += r.Bytes
 		}
+		return out
 	}
-	if r := d.LastDisk.Load(); r == nil || r.BytesPerSec != float64(4*gib)/120 || agent != 2*int64(gib) {
-		t.Fatalf("%+v %+v", r, rows)
+	const g = int64(gib)
+	if got := sum(); got["host"] != 10*g || got["session:session-3.scope"] != 15*g/2 || got["docker:runi"] != 5*g/2 || got["agent:claude:/home/u/sber/auto-evolve"] != 0 {
+		t.Fatalf("rows while the usage scan fails: %v", got)
+	}
+	if r := d.LastDisk.Load(); r == nil || !r.At.Equal(at) || r.BytesPerSec != float64(2*gib)/60 {
+		t.Fatalf("%+v", r)
+	}
+	// The scan is back: the agent's whole growth since the baseline arrives once.
+	at = t0.Add(6 * time.Minute)
+	setDisk(disk, usage, 6*3*gib/2, 6*gib/2, 6*gib)
+	sampleStep(ctx, &d, time.Minute)
+	if got := sum(); got["agent:claude:/home/u/sber/auto-evolve"] != 6*g || got["host"] != 12*g {
+		t.Fatalf("rows after the scan is back: %v", got)
 	}
 }
 

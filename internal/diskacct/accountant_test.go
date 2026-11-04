@@ -255,6 +255,45 @@ func TestEndedNeedsParentInBoth(t *testing.T) {
 	}
 }
 
+// A snapshot whose usage scan failed steps the host and the sources but not
+// the agent ledger: no process is taken for gone, and the next scan's delta
+// covers the gap. Without a ledger yet, the next scan is its baseline.
+func TestStepProcsUnknown(t *testing.T) {
+	const key = "agent:claude:/p"
+	snap := func(host uint64, agent int64, known bool) platform.DiskSnapshot {
+		s := platform.DiskSnapshot{Host: host,
+			Cgroups: []platform.CgroupIO{{Source: "session:s.scope", ID: "user.slice/s.scope", Parent: "session", Bytes: host}},
+			Parents: map[string]uint64{"session": host}}
+		if known {
+			s.Procs = []platform.ProcIO{agentProc(10, 1, "claude", "/p", "session:s.scope", agent), plain(11, 10, agent/2)}
+		} else {
+			s.ProcsUnknown = true
+		}
+		return s
+	}
+	a := New()
+	a.Step(snap(0, 0, true))
+	d, ok := a.Step(snap(3*ugib, 0, false))
+	if !ok || d.Host != 3*gib || d.Sources["session:s.scope"] != 3*gib || len(d.Agents) != 0 {
+		t.Fatalf("unknown procs: %+v %v", d, ok)
+	}
+	d, _ = a.Step(snap(4*ugib, 2*gib, true))
+	if len(d.Agents) != 1 || d.Agents[0].Key != key || d.Agents[0].Bytes != 3*gib {
+		t.Fatalf("after the gap: agents %+v, want 3 GiB for %s", d.Agents, key)
+	}
+
+	a = New()
+	a.Step(snap(100*ugib, 0, false)) // the ledger has no baseline yet
+	d, _ = a.Step(snap(101*ugib, 50*gib, true))
+	if d.Host != gib || len(d.Agents) != 0 {
+		t.Fatalf("first scan after an unknown baseline: %+v", d)
+	}
+	d, _ = a.Step(snap(102*ugib, 51*gib, true))
+	if len(d.Agents) != 1 || d.Agents[0].Bytes != gib+gib/2 {
+		t.Fatalf("second scan: %+v", d.Agents)
+	}
+}
+
 func TestAgentMultiGenerationReap(t *testing.T) {
 	const key = "agent:claude:/p"
 	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
