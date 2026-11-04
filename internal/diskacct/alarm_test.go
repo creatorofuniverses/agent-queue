@@ -198,3 +198,39 @@ func TestAlarmOneEventPerEpisodeAndNegativesClamped(t *testing.T) {
 
 // perStep is the bytes written in one 30 s step at g GiB per hour.
 func perStep(g int64) int64 { return g << 30 / 120 }
+
+// feedEvery is feed with its own sampling interval.
+func feedEvery(a *Alarm, every time.Duration, from, n int, f func(i int) Delta) (evs []AlarmEvent, at []int) {
+	for i := from; i < from+n; i++ {
+		t := time.Unix(alarmT0, 0).Add(time.Duration(i) * every)
+		if ev, ok := a.Observe(t, every, f(i)); ok {
+			evs = append(evs, ev)
+			at = append(at, i)
+		}
+	}
+	return
+}
+
+// A window that is not a multiple of five sampling intervals: each sample's
+// writes spread over the parts its interval overlaps, so a steady rate above
+// the threshold shows in every part instead of piling up in the part where
+// two samples end.
+func TestAlarmWindowNotDivisibleBySamples(t *testing.T) {
+	for name, c := range map[string]struct {
+		every, window time.Duration
+		perSample     int64
+		fire          bool
+	}{
+		// 900 MiB/min = 52.7 GiB/h over 50: five 72 s parts of one-minute samples.
+		"1m samples, 6m window, 900 MiB/min": {time.Minute, 6 * time.Minute, 900 * mib, true},
+		"1m samples, 6m window, 800 MiB/min": {time.Minute, 6 * time.Minute, 800 * mib, false},
+		"30s samples, 7m window, 52 GiB/h":   {step, 7 * time.Minute, perStep(52), true},
+		"45s samples, 10m window, 51 GiB/h":  {45 * time.Second, window, perStep(51) * 3 / 2, true},
+	} {
+		a := NewAlarm(thresh, c.window)
+		evs, _ := feedEvery(a, c.every, 1, 60, func(int) Delta { return host(c.perSample) })
+		if got := len(evs) == 1 && evs[0].High; got != c.fire {
+			t.Errorf("%s: events = %+v, want fired=%v", name, evs, c.fire)
+		}
+	}
+}

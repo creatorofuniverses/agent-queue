@@ -70,18 +70,16 @@ func (a *Alarm) Observe(at time.Time, span time.Duration, d Delta) (AlarmEvent, 
 	}
 
 	var win tally
-	var parts [alarmParts]int64
+	var parts [alarmParts]float64
 	part := a.window / alarmParts
 	for _, s := range a.samples {
 		win.add(s.d)
-		idx := int((s.at.Sub(start) - 1) / part)
-		idx = min(max(idx, 0), alarmParts-1)
-		parts[idx] += max(0, s.d.Host)
+		spread(&parts, start, part, a.window, s)
 	}
-	perHour := func(b int64, over time.Duration) float64 {
-		return float64(b) * float64(time.Hour) / float64(over)
+	perHour := func(b float64, over time.Duration) float64 {
+		return b * float64(time.Hour) / float64(over)
 	}
-	avg := perHour(win.host, a.window)
+	avg := perHour(float64(win.host), a.window)
 
 	if !a.active {
 		hot := 0
@@ -106,6 +104,32 @@ func (a *Alarm) Observe(at time.Time, span time.Duration, d Delta) (AlarmEvent, 
 		return ev, true
 	}
 	return AlarmEvent{}, false
+}
+
+// spread adds a sample's host writes to the parts of the window (start,
+// start+end] that its interval (from, at] overlaps, in proportion to the overlap:
+// the writes happened somewhere in that interval, so a steady rate fills
+// every part evenly whatever the sampling interval, and a sample no longer
+// than a part touches at most two. What fell before start is outside the
+// window.
+func spread(parts *[alarmParts]float64, start time.Time, part, end time.Duration, s alarmSample) {
+	b := float64(max(0, s.d.Host))
+	span := s.at.Sub(s.from)
+	if span <= 0 {
+		idx := min(max(int((s.at.Sub(start)-1)/part), 0), alarmParts-1)
+		parts[idx] += b
+		return
+	}
+	from, at := s.from.Sub(start), s.at.Sub(start) // offsets into the window
+	for i := range alarmParts {
+		lo, hi := time.Duration(i)*part, time.Duration(i+1)*part
+		if i == alarmParts-1 {
+			hi = end // the window may not split into five whole nanoseconds
+		}
+		if ov := min(hi, at) - max(lo, from); ov > 0 {
+			parts[i] += b * float64(ov) / float64(span)
+		}
+	}
 }
 
 // tally sums deltas: the host's clamped per sample (a counter reset must not
