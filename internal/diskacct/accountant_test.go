@@ -1,0 +1,342 @@
+package diskacct
+
+import (
+	"maps"
+	"slices"
+	"testing"
+
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+)
+
+const (
+	mib = int64(1) << 20
+	gib = int64(1) << 30
+)
+
+// agentProc is an agent process; Start is its PID so tests read simply.
+func agentProc(pid, ppid int, name, project, within string, bytes int64) platform.ProcIO {
+	return platform.ProcIO{PID: pid, PPID: ppid, Start: uint64(pid), Agent: name, Project: project, Within: within, Bytes: bytes}
+}
+
+func plain(pid, ppid int, bytes int64) platform.ProcIO {
+	return platform.ProcIO{PID: pid, PPID: ppid, Start: uint64(pid), Within: "session:session-3.scope", Bytes: bytes}
+}
+
+func procs(ps ...platform.ProcIO) platform.DiskSnapshot {
+	return platform.DiskSnapshot{Procs: ps}
+}
+
+// agentTotal steps through the snapshots after the first (the baseline) and
+// sums every agent delta, failing on a delta under another key.
+func agentTotal(t *testing.T, key string, snaps ...platform.DiskSnapshot) (total int64, steps []int64) {
+	t.Helper()
+	a := New()
+	if _, ok := a.Step(snaps[0]); ok {
+		t.Fatal("the first Step must be a baseline")
+	}
+	for i, s := range snaps[1:] {
+		d, ok := a.Step(s)
+		if !ok {
+			t.Fatalf("step %d: not ok", i+1)
+		}
+		var step int64
+		for _, ad := range d.Agents {
+			if ad.Key != key {
+				t.Fatalf("step %d: delta under %q, want only %q: %+v", i+1, ad.Key, key, d.Agents)
+			}
+			step += ad.Bytes
+		}
+		steps = append(steps, step)
+		total += step
+	}
+	return total, steps
+}
+
+func TestStepBaseline(t *testing.T) {
+	s := platform.DiskSnapshot{
+		Host:    5000,
+		Cgroups: []platform.CgroupIO{{Source: "system:a.service", ID: "system.slice/a.service", Parent: "system", Bytes: 100}, {Source: "aq", ID: "aq.slice", Bytes: 70}},
+		Parents: map[string]uint64{"system": 900},
+		Procs:   []platform.ProcIO{agentProc(10, 1, "claude", "/p", "session:s.scope", 300), plain(11, 10, 40)},
+	}
+	a := New()
+	if d, ok := a.Step(s); ok {
+		t.Fatalf("first Step = %+v, true; want a baseline", d)
+	}
+	d, ok := a.Step(s)
+	if !ok {
+		t.Fatal("second Step not ok")
+	}
+	if d.Host != 0 {
+		t.Errorf("Host = %d", d.Host)
+	}
+	want := map[string]int64{"system:a.service": 0, "aq": 0, "system:ended": 0}
+	if !maps.Equal(d.Sources, want) {
+		t.Errorf("Sources = %v, want %v", d.Sources, want)
+	}
+	for _, ad := range d.Agents {
+		if ad.Bytes != 0 {
+			t.Errorf("agent delta %+v, want 0", ad)
+		}
+	}
+}
+
+func TestSourcesAndEnded(t *testing.T) {
+	prev := platform.DiskSnapshot{
+		Host: 10000,
+		Cgroups: []platform.CgroupIO{
+			{Source: "docker:a", ID: "system.slice/docker-a.scope", Parent: "system", Bytes: 300},
+			{Source: "system:j", ID: "system.slice/j.service", Parent: "system", Bytes: 100},
+			{Source: "system:old", ID: "system.slice/old.service", Parent: "system", Bytes: 50},
+		},
+		Parents: map[string]uint64{"system": 900},
+	}
+	cur := platform.DiskSnapshot{
+		Host: 11000,
+		Cgroups: []platform.CgroupIO{
+			{Source: "docker:a", ID: "system.slice/docker-a.scope", Parent: "system", Bytes: 500},
+			{Source: "system:j", ID: "system.slice/j.service", Parent: "system", Bytes: 150},
+			{Source: "docker:b", ID: "system.slice/docker-b.scope", Parent: "system", Bytes: 120},
+		},
+		Parents: map[string]uint64{"system": 1500},
+	}
+	a := New()
+	a.Step(prev)
+	d, _ := a.Step(cur)
+	want := map[string]int64{"docker:a": 200, "system:j": 50, "docker:b": 120, "system:ended": 230}
+	if !maps.Equal(d.Sources, want) {
+		t.Errorf("Sources = %v, want %v", d.Sources, want)
+	}
+	if d.Host != 1000 {
+		t.Errorf("Host = %d, want 1000", d.Host)
+	}
+}
+
+// Several containers of one compose project share a source key: their deltas add up.
+func TestSourcesShareKey(t *testing.T) {
+	snap := func(x, y uint64) platform.DiskSnapshot {
+		return platform.DiskSnapshot{Cgroups: []platform.CgroupIO{
+			{Source: "docker:proj", ID: "system.slice/docker-x.scope", Parent: "system", Bytes: x},
+			{Source: "docker:proj", ID: "system.slice/docker-y.scope", Parent: "system", Bytes: y},
+		}}
+	}
+	a := New()
+	a.Step(snap(10, 20))
+	d, _ := a.Step(snap(15, 60))
+	if want := map[string]int64{"docker:proj": 45}; !maps.Equal(d.Sources, want) {
+		t.Errorf("Sources = %v, want %v", d.Sources, want)
+	}
+}
+
+// A counter that went backwards (the cgroup was re-created under the same
+// path) is kept signed, and so is a negative ended remainder: reports clamp.
+func TestSourcesKeepSign(t *testing.T) {
+	a := New()
+	a.Step(platform.DiskSnapshot{Host: 100,
+		Cgroups: []platform.CgroupIO{{Source: "user:x.service", ID: "u/x.service", Parent: "user", Bytes: 500}},
+		Parents: map[string]uint64{"user": 1000}})
+	d, _ := a.Step(platform.DiskSnapshot{Host: 90,
+		Cgroups: []platform.CgroupIO{{Source: "user:x.service", ID: "u/x.service", Parent: "user", Bytes: 20}},
+		Parents: map[string]uint64{"user": 1010}})
+	if want := map[string]int64{"user:x.service": -480, "user:ended": 490}; !maps.Equal(d.Sources, want) {
+		t.Errorf("Sources = %v, want %v", d.Sources, want)
+	}
+	if d.Host != -10 {
+		t.Errorf("Host = %d, want -10", d.Host)
+	}
+}
+
+// No ended bucket when the parent is missing from either snapshot, and none
+// for children without a parent (aq, cgroupfs containers).
+func TestEndedNeedsParentInBoth(t *testing.T) {
+	a := New()
+	a.Step(platform.DiskSnapshot{
+		Cgroups: []platform.CgroupIO{{Source: "aq", ID: "aq.slice", Bytes: 5}, {Source: "session:s.scope", ID: "user.slice/s.scope", Parent: "session", Bytes: 10}},
+		Parents: map[string]uint64{"system": 100}})
+	d, _ := a.Step(platform.DiskSnapshot{
+		Cgroups: []platform.CgroupIO{{Source: "aq", ID: "aq.slice", Bytes: 9}, {Source: "session:s.scope", ID: "user.slice/s.scope", Parent: "session", Bytes: 30}},
+		Parents: map[string]uint64{"session": 400}})
+	if want := map[string]int64{"aq": 4, "session:s.scope": 20}; !maps.Equal(d.Sources, want) {
+		t.Errorf("Sources = %v, want %v", d.Sources, want)
+	}
+}
+
+func TestAgentMultiGenerationReap(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	total, steps := agentTotal(t, key,
+		procs(A(0)),
+		procs(A(0), plain(11, 10, 0), plain(12, 11, gib)),
+		procs(A(gib)), // B and C were reaped: C's 1G reached A through B
+	)
+	if total != gib {
+		t.Errorf("agent total = %d (steps %v), want 1G", total, steps)
+	}
+}
+
+func TestAgentReapDuringScan(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	total, steps := agentTotal(t, key,
+		procs(A(0)),
+		procs(A(0), plain(11, 10, gib)),
+		procs(A(0)),   // A was read before it reaped B, B was gone when its turn came
+		procs(A(gib)), // the transfer waited one interval
+	)
+	if total != gib {
+		t.Errorf("agent total = %d (steps %v), want 1G", total, steps)
+	}
+}
+
+// A process that vanishes while it still waits for a child's transfer hands
+// that transfer on together with its own credited counter.
+func TestAgentInheritedTransferMovesUp(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	total, steps := agentTotal(t, key,
+		procs(A(0)),
+		procs(A(0), plain(11, 10, 0), plain(12, 11, gib)),
+		procs(A(0), plain(11, 10, 0)), // B was read before it reaped C: C's 1G waits at B
+		procs(A(gib)),                 // A reaped B, whose total held C's 1G
+	)
+	if total != gib {
+		t.Errorf("agent total = %d (steps %v), want 1G", total, steps)
+	}
+}
+
+// A transfer the parent's counter never covers waits one interval, then is dropped.
+func TestAgentUncoveredTransferExpires(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	total, steps := agentTotal(t, key,
+		procs(A(0)),
+		procs(A(0), plain(11, 10, gib)),
+		procs(A(0)), // B vanished: 1G transferred, uncovered
+		procs(A(0)), // still uncovered: dropped after this interval
+		procs(A(gib)),
+	)
+	if total != 2*gib || steps[3] != gib {
+		t.Errorf("agent total = %d (steps %v), want 2G with the last step 1G", total, steps)
+	}
+}
+
+// A partly covered transfer is credited only up to the parent's growth; the
+// rest waits.
+func TestAgentPartialCover(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	_, steps := agentTotal(t, key,
+		procs(A(0)),
+		procs(A(0), plain(11, 10, 100*mib)),
+		procs(A(40*mib)),  // 40M of B's 100M arrived (e.g. a second reaped child), 60M waits
+		procs(A(160*mib)), // 60M of the rest is credited, 60M are A's own new writes
+	)
+	if want := []int64{100 * mib, 0, 60 * mib}; !slices.Equal(steps, want) {
+		t.Errorf("steps = %v, want %v", steps, want)
+	}
+}
+
+func TestAgentCancellation(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	total, steps := agentTotal(t, key, procs(), procs(A(100*mib)), procs(A(0)))
+	if total != 0 || steps[1] != -100*mib {
+		t.Errorf("agent total = %d (steps %v), want 0 with the second step -100M", total, steps)
+	}
+}
+
+func TestAgentReparentedKeepsAttribution(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := agentProc(10, 1, "claude", "/p", "session:s.scope", 0)
+	total, steps := agentTotal(t, key,
+		procs(),
+		procs(A, plain(12, 10, 0)),
+		procs(A, plain(12, 1, 50*mib)), // setsid nohup: C now belongs to init
+	)
+	if total != 50*mib || steps[1] != 50*mib {
+		t.Errorf("agent total = %d (steps %v), want 50M in the second step", total, steps)
+	}
+}
+
+func TestAgentUnseenChildViaParent(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	total, _ := agentTotal(t, key, procs(A(0)), procs(A(30*mib)))
+	if total != 30*mib {
+		t.Errorf("agent total = %d, want 30M", total)
+	}
+}
+
+func TestAgentPIDReuse(t *testing.T) {
+	const key = "agent:claude:/p"
+	A := func(b int64) platform.ProcIO { return agentProc(10, 1, "claude", "/p", "session:s.scope", b) }
+	reused := func(ppid int, b int64) platform.ProcIO {
+		return platform.ProcIO{PID: 20, PPID: ppid, Start: 999, Within: "session:s.scope", Bytes: b}
+	}
+	// The new process under A counts from zero, not from the old one's 100M.
+	// A has not reaped the old one yet: its 100M wait as a transfer.
+	_, steps := agentTotal(t, key,
+		procs(A(0)),
+		procs(A(0), plain(20, 10, 100*mib)),
+		procs(A(0), reused(10, 10*mib)),
+	)
+	if want := []int64{100 * mib, 10 * mib}; !slices.Equal(steps, want) {
+		t.Errorf("under A: steps = %v, want %v", steps, want)
+	}
+	// Outside the tree, the new process does not inherit the old one's membership.
+	_, steps = agentTotal(t, key,
+		procs(A(0)),
+		procs(A(0), plain(20, 10, 100*mib)),
+		procs(A(0), reused(1, 300*mib)),
+	)
+	if want := []int64{100 * mib, 0}; !slices.Equal(steps, want) {
+		t.Errorf("outside the tree: steps = %v, want %v", steps, want)
+	}
+}
+
+// A process outside every agent tree is ignored, even in an agent's cgroup.
+func TestAgentStrangerIgnored(t *testing.T) {
+	a := New()
+	a.Step(procs(agentProc(10, 1, "claude", "/p", "session:s.scope", 0), plain(30, 1, 0)))
+	d, _ := a.Step(procs(agentProc(10, 1, "claude", "/p", "session:s.scope", 0), plain(30, 1, gib)))
+	if len(d.Agents) != 0 {
+		t.Errorf("Agents = %+v, want none", d.Agents)
+	}
+}
+
+// An agent started by another agent heads its own tree.
+func TestAgentNestedAgentOwnTree(t *testing.T) {
+	a := New()
+	a.Step(procs())
+	d, _ := a.Step(procs(
+		agentProc(10, 1, "claude", "/p", "session:s.scope", 1*mib),
+		agentProc(11, 10, "codex", "/q", "session:s.scope", 2*mib),
+		plain(12, 11, 4*mib),
+		plain(13, 10, 8*mib),
+	))
+	want := []AgentDelta{
+		{Key: "agent:claude:/p", Within: "session:s.scope", Bytes: 9 * mib},
+		{Key: "agent:codex:/q", Within: "session:s.scope", Bytes: 6 * mib},
+	}
+	if !slices.Equal(d.Agents, want) {
+		t.Errorf("Agents = %+v, want %+v", d.Agents, want)
+	}
+}
+
+// The key and Within follow the root agent as it is now: a descendant's
+// writes go to the root's current project and source.
+func TestAgentKeyFollowsRoot(t *testing.T) {
+	a := New()
+	a.Step(procs(agentProc(10, 1, "claude", "/p", "session:s.scope", 0), plain(11, 10, 0)))
+	d, _ := a.Step(procs(agentProc(10, 1, "claude", "/q", "user:tmux.scope", 0), plain(11, 10, 5*mib)))
+	want := []AgentDelta{{Key: "agent:claude:/q", Within: "user:tmux.scope", Bytes: 5 * mib}}
+	if !slices.Equal(d.Agents, want) {
+		t.Errorf("Agents = %+v, want %+v", d.Agents, want)
+	}
+	// The root is gone: an orphan keeps the root's last key.
+	d, _ = a.Step(procs(platform.ProcIO{PID: 11, PPID: 1, Start: 11, Within: "session:s.scope", Bytes: 7 * mib}))
+	want = []AgentDelta{{Key: "agent:claude:/q", Within: "user:tmux.scope", Bytes: 2 * mib}}
+	if !slices.Equal(d.Agents, want) {
+		t.Errorf("after the root left: Agents = %+v, want %+v", d.Agents, want)
+	}
+}
