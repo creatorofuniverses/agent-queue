@@ -323,7 +323,7 @@ aq stats export --since 7d --format csv --table host
 The summaries cover task outcomes and waiting, profile accuracy, queue and host,
 reservations, delivery, hook hits and OOM/PSI incidents. A profile filter
 returns only the items and runs of that profile. Export tables are `items`,
-`runs`, `host`, `incidents`, `events`, `hook`; CSV requires `--table`. Commands,
+`runs`, `host`, `incidents`, `events`, `disk`, `hook`; CSV requires `--table`. Commands,
 environment, cwd, session identifiers and delivery error texts are not included
 in statistics or exports.
 

@@ -33,7 +33,7 @@ func (s *Store) EventsSince(ctx context.Context, since time.Time) ([]model.Event
 	return queryEvents(ctx, s.db, `SELECT `+eventCols+` FROM events WHERE created_at>=? ORDER BY created_at,rowid`, fmtTime(since))
 }
 
-var ExportTables = []string{"items", "runs", "host", "incidents", "events", "hook"}
+var ExportTables = []string{"items", "runs", "host", "incidents", "events", "disk", "hook"}
 var itemExportColumns = strings.Split("id,kind,name,profile,project,client_type,priority,state,reason,created_at,admitted_at,started_at,ended_at,memory_limit,memory_expected,cpus,timeout_seconds,estimated_seconds,memory_from_profile,memory_peak,exit_code,within,task_memory,task_cpus,docker_project,extend_count,teardown_attempt,expired_at,logs_pruned,io_write_bytes,io_read_bytes,task_memory_peak", ",")
 var runExportColumns = strings.Split("item_id,profile,ended_at,state,reason,usable,cpus,memory_limit,memory_expected,memory_from_profile,estimated_seconds,duration_seconds,memory_peak,samples,sample_p90,io_write_bytes", ",")
 
@@ -88,6 +88,11 @@ func (s *Store) Export(ctx context.Context, table string, since time.Time, emit 
 		cols = []string{"id", "item_id", "kind", "audience", "client_type", "channel", "status", "attempts", "created_at", "sent_at", "acked_at"}
 		from = "events"
 		at = "created_at"
+		selectSQL = strings.Join(cols, ",")
+	case "disk":
+		cols = []string{"hour", "source", "within", "bytes"}
+		from = "disk_writes"
+		at = "hour"
 		selectSQL = strings.Join(cols, ",")
 	default:
 		return fmt.Errorf("unknown export table %q", table)

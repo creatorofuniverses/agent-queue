@@ -84,7 +84,7 @@ Finished tasks carry optional `io_write_bytes`/`io_read_bytes` (absent =
 unknown: the io controller is not delegated; `aq doctor` warns
 IO_NOT_DELEGATED). Stand containers' writes are not counted.
 `aq stats export --since 7d --format jsonl|csv [--table T]` exports raw rows
-(items/runs/host/incidents/events/hook). CSV requires a table. No commands,
+(items/runs/host/incidents/events/disk/hook). CSV requires a table. No commands,
 env, cwd, session IDs or delivery error text are exported. Logs of terminal
 items expire after 7d or oldest first above 5G; active logs are preserved.
 A pruned item has logs_pruned=true; logs exits 1 and result reports removal.
