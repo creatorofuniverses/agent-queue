@@ -82,7 +82,10 @@ run in the submit cwd. `--cpus` (default 1) is a real CPU quota: size workers
 with `"$AQ_CPUS"`, never a fixed `-n 8` over fewer `--cpus` (submit warns with
 `hint: the command starts N workers …`). Read your own `CODEX_THREAD_ID` from the session shell;
 never borrow another session's identity. Explicit client/session also resolves
-ambiguity when an inherited `CLAUDE_CODE_SESSION_ID` is set.
+ambiguity when an inherited `CLAUDE_CODE_SESSION_ID` is set. In a multi-agent v2
+sub-agent pass your own thread too: Codex refuses messages into a sub-agent's
+thread, so aq files the item under the thread that spawned you and notifies it.
+If you need the outcome before you finish, wait for it with `aq wait ID`.
 
 **Tests needing containers or a stand** (testcontainers, compose, e2e): containers
 live outside the task cgroup. Reserve both stand memory and a test budget first.
@@ -128,7 +131,8 @@ and captured environment. `queue_estimate` needs no session identity.
 
 After submit/reserve, the daemon sends events through **`codex queue`**, including
 for MCP submissions. **Do not start `aq wait`, an expiry waiter, or a separate
-background-tasks runner.** Reservation grants, expiry and stand warnings use the
+background-tasks runner** (a v2 sub-agent waiting for its own result, step 3,
+is the exception). Reservation grants, expiry and stand warnings use the
 same delivery; extending a reservation needs no waiter to be re-armed.
 
 Before ending the turn, save a receipt and continuation checkpoint: item ID,

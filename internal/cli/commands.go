@@ -317,6 +317,8 @@ func cmdList(c *cmdCtx, args []string) error {
 			return usagef("list: --mine needs a session (CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID or --session)")
 		}
 		*session = id.SessionID
+	} else {
+		*session = client.ListSession(c.clientConfig().Agents, c.env, *session)
 	}
 	var views []daemon.ItemView
 	if err := c.call(c.ctx, "list", map[string]any{"session_id": *session, "all": *all}, &views); err != nil {

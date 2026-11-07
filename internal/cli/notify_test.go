@@ -167,3 +167,48 @@ func TestDoctorAdapterUnavailableOutput(t *testing.T) {
 		t.Fatal(code, out, err)
 	}
 }
+
+// codexSubagentHome writes the rollout of a Codex multi-agent v2 sub-agent "sub" spawned by
+// thread "root", the way Codex records it under $CODEX_HOME/sessions.
+func codexSubagentHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, "sessions", "2026", "11", "06")
+	os.MkdirAll(dir, 0o755)
+	meta := `{"type":"session_meta","payload":{"id":"sub","session_id":"root","parent_thread_id":"root","thread_source":"subagent","multi_agent_version":"v2"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-06T17-09-19-sub.jsonl"), []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// A Codex sub-agent's own thread refuses queued messages; its stands notify the root thread
+// and its listings find them there.
+func TestCodexSubagentFilesUnderRootThread(t *testing.T) {
+	var sessions []string
+	h := socketHarness(t, func(ctx context.Context, op string, raw json.RawMessage, w protocol.StreamWriter) (any, error) {
+		var a map[string]any
+		json.Unmarshal(raw, &a)
+		sessions = append(sessions, op+":"+a["session_id"].(string))
+		if op == "list" {
+			return []daemon.ItemView{}, nil
+		}
+		return daemon.ItemView{ID: "r", State: model.StateGranted}, nil
+	})
+	h.vars["CODEX_HOME"] = codexSubagentHome(t)
+	h.vars["CODEX_THREAD_ID"] = "sub"
+	p := filepath.Join(h.cwd, "teardown")
+	os.WriteFile(p, []byte("true"), 0600)
+	for _, args := range [][]string{
+		{"reserve", "--client", "codex", "--session", "sub", "--memory", "64M", "--ttl", "1h", "--teardown", p},
+		{"list", "--session", "sub"},
+		{"list", "--mine"},
+	} {
+		if code, _, err := h.run(args...); code != 0 {
+			t.Fatal(args, code, err)
+		}
+	}
+	if want := []string{"reserve:root", "list:root", "list:root"}; strings.Join(sessions, " ") != strings.Join(want, " ") {
+		t.Fatal(sessions)
+	}
+}

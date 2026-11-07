@@ -31,6 +31,9 @@ func DetectIdentity(agents []config.AgentConfig, env func(string) string, flagCl
 				if a.Delivery == config.DeliveryPush && id.SessionID == "" {
 					return Identity{}, &UsageError{Message: fmt.Sprintf("--client %s needs a session (--session or %s)", flagClient, a.IdentityEnv)}
 				}
+				if isCodex(a) {
+					id.SessionID = codexRootThread(env, id.SessionID)
+				}
 				break
 			}
 		}
@@ -56,6 +59,9 @@ func DetectIdentity(agents []config.AgentConfig, env func(string) string, flagCl
 		id.ClientType = found[0].Name
 		if flagSession == "" {
 			id.SessionID = env(found[0].IdentityEnv)
+		}
+		if isCodex(found[0]) {
+			id.SessionID = codexRootThread(env, id.SessionID)
 		}
 	}
 	return id, nil

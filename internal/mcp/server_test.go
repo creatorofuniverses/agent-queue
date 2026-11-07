@@ -10,6 +10,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -276,5 +277,21 @@ func TestQueueEstimate(t *testing.T) {
 	out = serveText(t, tool("queue_estimate", map[string]any{}), nil, nil)
 	if out[0]["result"].(map[string]any)["isError"] != true {
 		t.Fatal(out)
+	}
+}
+func TestListCodexSubagentSession(t *testing.T) {
+	home := t.TempDir()
+	dir := home + "/sessions/2026/11/06"
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(dir+"/rollout-2026-11-06T17-09-19-sub.jsonl", []byte(`{"type":"session_meta","payload":{"id":"sub","session_id":"root","thread_source":"subagent","multi_agent_version":"v2"}}`+"\n"), 0o600)
+	for _, args := range []map[string]any{{"session_id": "sub"}, {"mine": true}} {
+		var got any
+		serveText(t, tool("queue_list", args), func(ctx context.Context, op string, a, out any) error {
+			got = a.(map[string]any)["session_id"]
+			return json.Unmarshal([]byte(`[]`), out)
+		}, map[string]string{"CODEX_HOME": home, "CODEX_THREAD_ID": "sub"})
+		if got != "root" {
+			t.Fatal(args, got)
+		}
 	}
 }

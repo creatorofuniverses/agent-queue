@@ -281,6 +281,8 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 				return toolError(errors.New("list: --mine needs a session (CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID or --session)"))
 			}
 			a.SessionID = id.SessionID
+		} else {
+			a.SessionID = client.ListSession(agents, env, a.SessionID)
 		}
 		args = map[string]any{"session_id": a.SessionID, "all": a.All}
 	case "queue_logs":

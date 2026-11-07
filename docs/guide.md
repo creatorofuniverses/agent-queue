@@ -768,6 +768,16 @@ error; a delivery command missing from the daemon's PATH rejects the request
 before it is saved. The service PATH includes
 `%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
 
+A Codex multi-agent v2 sub-agent has its own `CODEX_THREAD_ID`, but Codex
+refuses `codex queue` into a sub-agent's thread. When the session (detected or
+given with `--session`) is such a sub-agent, aq records the thread above it in
+the sub-agent tree instead, read from the `session_meta` line of its rollout in
+`$CODEX_HOME/sessions` (default `~/.codex`). The parent session then receives
+the item's notifications; `aq list --mine` and `aq list --session` from the
+sub-agent find its items under that thread, alongside the parent's own. A
+sub-agent that needs the outcome before it finishes waits with `aq wait ID`.
+When the rollout cannot be read the id is kept as given.
+
 A new push client is added without changing the core:
 
 ```toml

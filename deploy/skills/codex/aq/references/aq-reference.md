@@ -26,6 +26,9 @@ Notification identity: `--client NAME --session S` overrides discovery. Otherwis
 the one configured adapter with a nonempty identity_env is used (Codex
 CODEX_THREAD_ID, Claude CLAUDE_CODE_SESSION_ID); when several are set the
 environment is ambiguous and submit/reserve need an explicit client.
+A Codex multi-agent v2 sub-agent's thread is replaced with the thread above it
+(from the rollout's session_meta in $CODEX_HOME/sessions), because Codex refuses
+`codex queue` into a sub-agent; listings by the sub-agent's thread map the same way.
 Claude Code passes CLAUDE_CODE_SESSION_ID to `aq mcp` itself.
 `--no-notify` suppresses session events, while operator alerts remain enabled.
 Codex MCP 0.164 does not propagate session identity by default: pass `client` and
