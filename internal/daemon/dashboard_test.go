@@ -9,6 +9,7 @@ import (
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 )
 
 func (e *env) end(t *testing.T, id model.ItemID, info platform.ExitInfo, want model.State) {
@@ -41,7 +42,7 @@ func TestDashboardView(t *testing.T) {
 		if err := e.call(t, "dashboard", nil, &v); err != nil {
 			t.Fatal(err)
 		}
-		if len(v.Items) == 2 && v.Items[0].MemoryCurrent != nil && *v.Items[0].MemoryCurrent == 700*mib && v.Items[1].Position == 1 {
+		if len(v.Items) == 2 && v.Items[0].MemoryCurrent != nil && *v.Items[0].MemoryCurrent == 700*mib && v.Items[1].Position == 1 && v.Host.GuardCeiling != 0 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -51,6 +52,9 @@ func TestDashboardView(t *testing.T) {
 	}
 	if v.Version != 1 || v.At.IsZero() || v.Pool.PoolMemory != 4*gib || v.Queue.Running != 1 || v.Queue.Queued != 1 || v.Host.MemTotal != 64*gib {
 		t.Fatalf("%+v", v)
+	}
+	if v.Host.GuardCeiling != 4*gib || v.Host.GuardActive || v.Host.GuardCutting {
+		t.Fatalf("guard: %+v", v.Host)
 	}
 	if v.Items[0].ID != run.ID || v.Items[1].ID != queued.ID || v.Items[1].MemoryCurrent != nil || v.Items[1].BlockedBy == "" {
 		t.Fatalf("items %+v", v.Items)
@@ -164,6 +168,27 @@ func TestDayCacheFresh(t *testing.T) {
 	}{{"a,b", 5 * time.Second, true}, {"a", 5 * time.Second, false}, {"a,b,c", time.Second, false}, {"a,b", heartbeatEvery, false}} {
 		if got := c.fresh(tc.key, t0.Add(tc.at)); got != tc.want {
 			t.Fatalf("%+v: %v", tc, got)
+		}
+	}
+}
+
+// The guard is cutting aq only when its ceiling is below what aq promised to the work in its
+// slice: tasks' expected memory and reservations' task budgets. Stands run outside the slice.
+func TestGuardCutting(t *testing.T) {
+	c := scheduler.Commitments{TasksExpected: 3 * gib, Budgets: 5 * gib, Stands: 10 * gib, PoolMemory: 27 * gib}
+	for _, tc := range []struct {
+		ceiling uint64
+		want    bool
+	}{
+		{0, false},        // no ceiling written yet
+		{27 * gib, false}, // the pool
+		{20 * gib, false}, // below the pool, above the promises: armed, not cutting
+		{8 * gib, false},  // exactly the promises
+		{7 * gib, true},   // below them
+		{256 * mib, true}, // the guard's floor
+	} {
+		if got := guardCutting(tc.ceiling, c); got != tc.want {
+			t.Errorf("ceiling %d: cutting %v, want %v", tc.ceiling>>20, got, tc.want)
 		}
 	}
 }

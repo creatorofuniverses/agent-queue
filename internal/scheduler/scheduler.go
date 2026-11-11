@@ -94,6 +94,7 @@ type Scheduler struct {
 	d              Deps
 	kick           chan struct{}
 	guard          atomic.Bool
+	guardCeiling   atomic.Uint64  // the slice ceiling the guard last wrote; 0 before its first write
 	bg             sync.WaitGroup // background stops and temp dir removals
 
 	// mu guards everything below and serializes every state transition.
@@ -962,6 +963,10 @@ func (s *Scheduler) Pressure() (closed bool, avg10 float64) {
 }
 
 func (s *Scheduler) GuardActive() bool { return s.guard.Load() }
+
+// GuardCeiling is the slice ceiling the host guard last wrote, 0 before its first write.
+func (s *Scheduler) GuardCeiling() uint64     { return s.guardCeiling.Load() }
+func (s *Scheduler) SetGuardCeiling(v uint64) { s.guardCeiling.Store(v) }
 func (s *Scheduler) SetGuardActive(v bool) {
 	s.guardMu.Lock()
 	defer s.guardMu.Unlock()

@@ -328,6 +328,15 @@ it removes the file. A panel can watch that file instead of polling: if the file
 is missing, the daemon is not running, and an `at` older than a minute means it
 died.
 
+The host fields need care. `guard_active` only says that the host guard holds
+the slice ceiling below the pool; with a pool close to the host's memory that is
+true whenever other programs use more than a little, so it is no warning.
+`guard_ceiling` is the ceiling the guard last wrote (0 before its first write),
+and `guard_cutting` is true when that ceiling is below what aq promised to the
+work in its slice: running tasks' expected memory plus reservations' task
+budgets. Then a task can be killed before it reaches the memory it was admitted
+with; that is the flag a panel should warn on.
+
 ```sh
 aq stats                      # one-screen overview and "Worth a look"
 aq stats disk                 # one area in detail

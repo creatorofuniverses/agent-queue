@@ -18,6 +18,8 @@ type guard struct {
 	host      platform.HostMetrics
 	cfg       config.Config
 	setActive func(bool)
+	// setCeiling, if set, receives each ceiling the guard wrote.
+	setCeiling func(uint64)
 	// engaged is called when the guard's ceiling made the kernel OOM in the
 	// slice, so the cause of the shortage can be recorded.
 	engaged func()
@@ -29,8 +31,8 @@ type guard struct {
 
 // RunGuard keeps the slice ceiling below what the host can spare, so that
 // under memory shortage managed tasks are killed first. It blocks until ctx ends.
-func RunGuard(ctx context.Context, exec platform.Executor, host platform.HostMetrics, cfg config.Config, setActive func(bool), engaged func(), every time.Duration) {
-	g := &guard{exec: exec, host: host, cfg: cfg, setActive: setActive, engaged: engaged}
+func RunGuard(ctx context.Context, exec platform.Executor, host platform.HostMetrics, cfg config.Config, setActive func(bool), setCeiling func(uint64), engaged func(), every time.Duration) {
+	g := &guard{exec: exec, host: host, cfg: cfg, setActive: setActive, setCeiling: setCeiling, engaged: engaged}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -86,7 +88,11 @@ func (g *guard) step() {
 		g.setActive(g.have && g.applied < g.cfg.PoolMemory)
 		return
 	}
+	changed := !g.have || target != g.applied
 	g.applied, g.have = target, true
+	if changed && g.setCeiling != nil {
+		g.setCeiling(target)
+	}
 	if !active {
 		g.setActive(false)
 	}

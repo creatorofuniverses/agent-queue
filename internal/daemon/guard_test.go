@@ -150,3 +150,20 @@ func TestGuardReportsCutsThatHitTheCeiling(t *testing.T) {
 		t.Fatalf("engaged %d times after an OOM at the pool limit", n)
 	}
 }
+
+// The guard reports each ceiling it wrote, so a panel can tell its ceiling from the pool.
+func TestGuardReportsAppliedCeiling(t *testing.T) {
+	g, ex, host, _ := newGuardTest(4*gib, 2*gib)
+	var got []uint64
+	g.setCeiling = func(c uint64) { got = append(got, c) }
+	ex.FailSetCeiling(errTest)
+	g.step() // a failed write is not reported
+	ex.FailSetCeiling(nil)
+	g.step()
+	g.step() // steady: nothing new to report
+	host.Set(platform.MemInfo{Total: 30 * gib, Available: 20 * gib})
+	g.step()
+	if !slices.Equal(got, []uint64{3 * gib, 16 * gib}) {
+		t.Fatalf("reported %v", got)
+	}
+}

@@ -47,7 +47,18 @@ type DashboardHost struct {
 	MemAvailable   uint64  `json:"mem_available"`
 	PSIFullAvg10   float64 `json:"psi_full_avg10"`
 	PressureClosed bool    `json:"pressure_closed"`
-	GuardActive    bool    `json:"guard_active"`
+	// GuardActive: the guard's ceiling is below the pool. With a pool close to the host's
+	// memory that holds almost always, so it does not mean aq is being cut; GuardCutting does.
+	GuardActive  bool   `json:"guard_active"`
+	GuardCeiling uint64 `json:"guard_ceiling"` // the slice ceiling the guard last wrote, 0 before its first write
+	GuardCutting bool   `json:"guard_cutting"`
+}
+
+// guardCutting reports that the guard's ceiling is below what aq promised to the work inside its
+// slice (tasks' expected memory and reservations' task budgets; stands and teardowns run outside),
+// so a task can be killed before it reaches what it was admitted with.
+func guardCutting(ceiling uint64, c scheduler.Commitments) bool {
+	return ceiling > 0 && ceiling < c.TasksExpected+c.Budgets
 }
 
 // DayView counts the tasks (not reservations) that ended since Since. Failed includes OOM and Timeout.
@@ -79,6 +90,8 @@ func (d *server) dashboardWith(ctx context.Context, now time.Time, c *dayCache) 
 	v.Host.GuardActive = d.sched.GuardActive()
 	p := d.sched.LastPass()
 	v.Pool = p.Commitments
+	v.Host.GuardCeiling = d.sched.GuardCeiling()
+	v.Host.GuardCutting = guardCutting(v.Host.GuardCeiling, v.Pool)
 	v.Queue = QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}
 
 	active, err := d.st.ListActive(ctx)
@@ -218,11 +231,11 @@ func dashShape(v DashboardView) []byte {
 		Blocked  string
 	}
 	s := struct {
-		Items, Recent []item
-		Queue         QueueView
-		Day           DayView
-		Closed, Guard bool
-	}{Queue: v.Queue, Day: v.Day, Closed: v.Host.PressureClosed, Guard: v.Host.GuardActive}
+		Items, Recent          []item
+		Queue                  QueueView
+		Day                    DayView
+		Closed, Guard, Cutting bool
+	}{Queue: v.Queue, Day: v.Day, Closed: v.Host.PressureClosed, Guard: v.Host.GuardActive, Cutting: v.Host.GuardCutting}
 	s.Queue.BlockedDetail = ""
 	s.Day.Since, s.Day.WaitMedianSeconds, s.Day.WaitMaxSeconds, s.Day.RunSeconds = time.Time{}, 0, 0, 0
 	for _, list := range []struct {

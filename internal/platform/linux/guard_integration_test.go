@@ -86,7 +86,7 @@ func TestIntegGuardHoldsCeilingAcrossSiblingStart(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		daemon.RunGuard(ctx, e, staticHost{platform.MemInfo{Total: 4 << 30, Available: 600 << 20}}, cfg, func(bool) {}, nil, 100*time.Millisecond)
+		daemon.RunGuard(ctx, e, staticHost{platform.MemInfo{Total: 4 << 30, Available: 600 << 20}}, cfg, func(bool) {}, nil, nil, 100*time.Millisecond)
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 	const limit = 700 << 20 // 600 MiB available + small slice usage

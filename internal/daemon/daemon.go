@@ -156,7 +156,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	}
 	go func() {
 		defer loops.Done()
-		RunGuard(runCtx, exec, host, cfg, sched.SetGuardActive, engaged, time.Second)
+		RunGuard(runCtx, exec, host, cfg, sched.SetGuardActive, sched.SetGuardCeiling, engaged, time.Second)
 	}()
 	go func() {
 		defer loops.Done()

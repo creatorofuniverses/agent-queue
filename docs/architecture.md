@@ -172,7 +172,10 @@ kernel OOM in the slice (the slice's own `memory.events.local`, so a task's own
 limit does not count), it records a `guard_engaged` incident naming who held
 memory (largest cgroups and
 processes, memory in no cgroup), at most every 5 minutes: the shortage usually
-comes from outside aq and is gone before anyone looks. Task and pool limits help
+comes from outside aq and is gone before anyone looks. The dashboard reports
+the guard as cutting only when its ceiling falls below the tasks' expected memory
+plus the reservations' task budgets: a ceiling below the pool alone is the
+guard's normal state when the pool is close to the host's memory. Task and pool limits help
 contain memory exhaustion, but they are not a guarantee against every host OOM.
 
 The pressure gate serves a different purpose: it pauses new work when Linux
