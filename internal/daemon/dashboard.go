@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
@@ -65,6 +66,11 @@ type DayView struct {
 }
 
 func (d *server) dashboard(ctx context.Context, now time.Time) (DashboardView, error) {
+	return d.dashboardWith(ctx, now, nil)
+}
+
+// dashboardWith builds the view, taking the day's part from c while it is fresh (c may be nil).
+func (d *server) dashboardWith(ctx context.Context, now time.Time, c *dayCache) (DashboardView, error) {
 	v := DashboardView{Version: DashboardVersion, At: now.UTC(), Daemon: DashboardDaemon{Version}, Items: []ItemView{}, Recent: []ItemView{}}
 	if mem, err := d.host.Memory(); err == nil {
 		v.Host.MemTotal, v.Host.MemAvailable = mem.Total, mem.Available
@@ -93,47 +99,82 @@ func (d *server) dashboard(ctx context.Context, now time.Time) (DashboardView, e
 		v.Items = append(v.Items, iv)
 	}
 
-	v.Day.Since = now.Add(-dashboardWindow).UTC()
-	ended, err := d.st.EndedSince(ctx, v.Day.Since, 0)
-	if err != nil {
+	ids := make([]string, len(active))
+	for i, it := range active {
+		ids[i] = string(it.ID)
+	}
+	key := strings.Join(ids, ",")
+	if c.fresh(key, now) {
+		v.Recent, v.Day = c.recent, c.day
+		return v, nil
+	}
+	if v.Recent, v.Day, err = d.dayPart(ctx, now); err != nil {
 		return v, err
+	}
+	if c != nil {
+		*c = dayCache{key: key, at: now, recent: v.Recent, day: v.Day}
+	}
+	return v, nil
+}
+
+// dayCache keeps the ended part of the dashboard between the loop's builds: it changes only when
+// an item leaves the active set (or a submit is rejected) and as the window slides, while reading
+// a busy day's items every second would cost the daemon a few percent of a core.
+type dayCache struct {
+	key    string
+	at     time.Time
+	recent []ItemView
+	day    DayView
+}
+
+func (c *dayCache) fresh(key string, now time.Time) bool {
+	return c != nil && !c.at.IsZero() && c.key == key && now.Sub(c.at) < heartbeatEvery
+}
+
+// dayPart is the items that ended within the window, the latest first, and the tasks' outcomes among them.
+func (d *server) dayPart(ctx context.Context, now time.Time) ([]ItemView, DayView, error) {
+	recent := []ItemView{}
+	day := DayView{Since: now.Add(-dashboardWindow).UTC()}
+	ended, err := d.st.EndedSince(ctx, day.Since, 0)
+	if err != nil {
+		return recent, day, err
 	}
 	var waits []float64
 	for _, it := range ended {
-		if len(v.Recent) < dashboardRecent {
-			v.Recent = append(v.Recent, d.view(it, now))
+		if len(recent) < dashboardRecent {
+			recent = append(recent, d.view(it, now))
 		}
 		if it.IsReservation() {
-			v.Day.Reservations++
+			day.Reservations++
 			continue
 		}
 		switch it.State {
 		case model.StateSucceeded:
-			v.Day.Succeeded++
+			day.Succeeded++
 		case model.StateFailed:
-			v.Day.Failed++
+			day.Failed++
 			switch it.Reason {
 			case model.ReasonOOM, model.ReasonOOMGroup, model.ReasonOOMHostGuard:
-				v.Day.OOM++
+				day.OOM++
 			case model.ReasonTimeout:
-				v.Day.Timeout++
+				day.Timeout++
 			}
 		case model.StateCancelled:
-			v.Day.Cancelled++
+			day.Cancelled++
 		default:
 			continue // rejected: never ran
 		}
-		v.Day.Finished++
+		day.Finished++
 		if !it.StartedAt.IsZero() {
 			waits = append(waits, nonNeg(it.StartedAt.Sub(it.CreatedAt)))
-			v.Day.RunSeconds += nonNeg(it.EndedAt.Sub(it.StartedAt))
+			day.RunSeconds += nonNeg(it.EndedAt.Sub(it.StartedAt))
 		}
 	}
 	if len(waits) > 0 {
 		slices.Sort(waits)
-		v.Day.WaitMedianSeconds, v.Day.WaitMaxSeconds = waits[len(waits)/2], waits[len(waits)-1]
+		day.WaitMedianSeconds, day.WaitMaxSeconds = waits[len(waits)/2], waits[len(waits)-1]
 	}
-	return v, nil
+	return recent, day, nil
 }
 
 // dashWriter rewrites the dashboard file: at once when what is queued, running or ended changes,
@@ -239,13 +280,14 @@ func writeAtomic(path string, b []byte) error {
 // a missing file means no daemon, a stale "at" one that died.
 func runDashboard(ctx context.Context, d *server, path string) {
 	w := &dashWriter{path: path}
+	c := &dayCache{}
 	defer os.Remove(path)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	failing := false
 	for {
 		now := time.Now()
-		v, err := d.dashboard(ctx, now)
+		v, err := d.dashboardWith(ctx, now, c)
 		if err == nil {
 			_, err = w.offer(v, now)
 		}

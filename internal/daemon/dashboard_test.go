@@ -147,3 +147,23 @@ func TestDashboardWriterPolicy(t *testing.T) {
 		t.Fatalf("temp files left: %v", entries)
 	}
 }
+
+// The loop reuses the day's part while no item left the active set, for at most a heartbeat.
+func TestDayCacheFresh(t *testing.T) {
+	t0 := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	var none *dayCache
+	c := &dayCache{}
+	if none.fresh("a", t0) || c.fresh("", t0) {
+		t.Fatal("an empty cache is never fresh")
+	}
+	c.key, c.at = "a,b", t0
+	for _, tc := range []struct {
+		key  string
+		at   time.Duration
+		want bool
+	}{{"a,b", 5 * time.Second, true}, {"a", 5 * time.Second, false}, {"a,b,c", time.Second, false}, {"a,b", heartbeatEvery, false}} {
+		if got := c.fresh(tc.key, t0.Add(tc.at)); got != tc.want {
+			t.Fatalf("%+v: %v", tc, got)
+		}
+	}
+}
