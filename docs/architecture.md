@@ -47,6 +47,7 @@ The default locations are:
 | Configuration | `~/.config/agent-queue/config.toml` |
 | Database and job files | `~/.local/state/agent-queue/` |
 | Client socket | `$XDG_RUNTIME_DIR/agent-queue/aq.sock` |
+| Panel snapshot (`aq dashboard`) | `$XDG_RUNTIME_DIR/agent-queue/dashboard.json` |
 
 `AQ_CONFIG`, `AQ_STATE_DIR`, and `AQ_RUNTIME_DIR` override these locations.
 Startup locks prevent two daemons from managing the same runtime directory or slice.

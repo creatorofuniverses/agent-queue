@@ -20,6 +20,17 @@ func (s *Store) ItemsSince(ctx context.Context, since time.Time, name string) ([
 	}
 	return s.queryItems(ctx, q+` ORDER BY created_at,rowid`, args...)
 }
+
+// EndedSince returns items that ended at or after since, the latest first, at most limit (0: all).
+func (s *Store) EndedSince(ctx context.Context, since time.Time, limit int) ([]*model.Item, error) {
+	q := `SELECT ` + itemCols + ` FROM items WHERE ended_at<>'' AND ended_at>=? ORDER BY ended_at DESC, rowid DESC`
+	args := []any{fmtTime(since)}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	return s.queryItems(ctx, q, args...)
+}
 func (s *Store) RunsSince(ctx context.Context, since time.Time, name string) ([]profile.Run, error) {
 	q := `SELECT ` + runCols + ` FROM profile_runs WHERE ended_at>=?`
 	args := []any{fmtTime(since)}

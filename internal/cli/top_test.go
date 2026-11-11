@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"strings"
 	"testing"
@@ -55,5 +56,21 @@ func TestTopDiskLine(t *testing.T) {
 	c.prettyTop(v)
 	if !strings.Contains(b.String(), "no samples yet") {
 		t.Fatal(b.String())
+	}
+}
+
+// aq dashboard prints the panel snapshot as JSON, with or without --json.
+func TestDashboardJSON(t *testing.T) {
+	h := newHarness(t)
+	h.startDaemon(t)
+	for _, args := range [][]string{{"dashboard"}, {"dashboard", "--json"}} {
+		code, out, errout := h.run(args...)
+		var v daemon.DashboardView
+		if code != 0 || json.Unmarshal([]byte(out), &v) != nil || v.Version != daemon.DashboardVersion || v.Items == nil {
+			t.Fatal(args, code, out, errout)
+		}
+	}
+	if code, _, _ := h.run("dashboard", "extra"); code != 64 {
+		t.Fatal(code)
 	}
 }

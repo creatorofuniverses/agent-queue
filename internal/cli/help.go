@@ -19,7 +19,7 @@ var helpGroups = []struct {
 }{
 	{"Tasks", []string{"submit", "wait", "status", "result", "logs", "cancel", "list"}},
 	{"Reservations (docker stands and other long-lived memory)", []string{"reserve", "extend", "release", "teardown"}},
-	{"Planning and insight", []string{"top", "estimate", "profile", "stats"}},
+	{"Planning and insight", []string{"top", "dashboard", "estimate", "profile", "stats"}},
 	{"Setup and integration", []string{"doctor", "daemon", "ack", "hook", "mcp", "version", "help"}},
 }
 
@@ -45,6 +45,9 @@ var helps = map[string]cmdHelp{
 	"release":  {"aq release [--force] ID", "free a reservation whose stand you have shut down (no teardown script runs)", "With --docker-project, prints the stand's measured peak against --memory when it missed.", []string{"aq release RES_ID"}},
 	"teardown": {"aq teardown --retry ID", "run a failed teardown again", "", []string{"aq teardown --retry RES_ID"}},
 	"top":      {"aq top [--json]", "host memory, what uses it, and what aq has committed", "", []string{"aq top"}},
+	"dashboard": {"aq dashboard [--json]", "the queue, what it uses now and the last day, as JSON for panels",
+		"Always JSON (version 1): host and pool, queue counts, items not finished yet in queue order\n(memory_current for running ones), items ended in the last 24 h (recent, at most 20) and the\nday's task outcomes. The daemon keeps the same JSON in $XDG_RUNTIME_DIR/agent-queue/dashboard.json\n(tmpfs): rewritten at once when an item changes state, at most every 10 s when only figures\nmove, at least every 30 s; removed when the daemon stops.",
+		[]string{"aq dashboard | jq .day"}},
 	"estimate": {"aq estimate [flags]", "forecast when a task would start, without submitting it", "",
 		[]string{"aq estimate --memory 8G --timeout 1h", "aq estimate --name tests --timeout 30m"}},
 	"profile": {"aq profile list | aq profile show NAME", "memory and duration history of named tasks",

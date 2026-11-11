@@ -139,7 +139,8 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 			meter.Run(runCtx)
 		}()
 	}
-	loops.Add(4)
+	loops.Add(5)
+	go func() { defer loops.Done(); runDashboard(runCtx, d, paths.Dashboard()) }()
 	go func() { defer loops.Done(); RunRetention(runCtx, st, paths, cfg, 10*time.Minute) }()
 	go func() {
 		defer loops.Done()

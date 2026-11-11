@@ -61,6 +61,9 @@ func (p Paths) DB() string     { return filepath.Join(p.StateDir, "aq.db") }
 func (p Paths) Socket() string { return filepath.Join(p.RuntimeDir, "aq.sock") }
 func (p Paths) Lock() string   { return filepath.Join(p.RuntimeDir, "daemon.lock") }
 
+// Dashboard is the snapshot the daemon keeps for panels (aq dashboard); the runtime dir is tmpfs.
+func (p Paths) Dashboard() string { return filepath.Join(p.RuntimeDir, "dashboard.json") }
+
 func (p Paths) SliceLock(slice string) string {
 	return filepath.Join(p.SliceLockDir, "agent-queue."+slice+".lock")
 }

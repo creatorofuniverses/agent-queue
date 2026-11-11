@@ -563,6 +563,15 @@ func (s *Scheduler) AfterNextPass(ctx context.Context) error {
 }
 
 // StandUsage is the fresh stand measurement of reservation id seen by the last pass.
+// MemoryCurrent is what id used when the last pass looked: a running task's cgroup, or a held
+// reservation's stand, nested tasks and teardown together. False for anything else.
+func (s *Scheduler) MemoryCurrent(id model.ItemID) (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.live[id]
+	return v, ok
+}
+
 func (s *Scheduler) StandUsage(id model.ItemID) (uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

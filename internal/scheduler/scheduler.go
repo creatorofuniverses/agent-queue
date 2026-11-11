@@ -112,6 +112,7 @@ type Scheduler struct {
 	waiters        map[model.ItemID]chan struct{} // closed once waitDone
 	passDone       chan struct{}                  // closed and replaced at the end of every pass
 	standUsage     map[model.ItemID]uint64        // fresh stand measurements seen by the last pass
+	live           map[model.ItemID]uint64        // memory in use now per running task and held reservation, as the last pass saw it
 	standPeak      map[model.ItemID]uint64        // highest stand measurement of each held reservation
 	budgetPeak     map[model.ItemID]uint64        // highest memory of each held reservation's nested tasks at once
 	idleSince      map[model.ItemID]time.Time     // when each held reservation was last seen busy
@@ -162,6 +163,7 @@ func New(d Deps) *Scheduler {
 		waiters:      map[model.ItemID]chan struct{}{},
 		passDone:     make(chan struct{}),
 		standUsage:   map[model.ItemID]uint64{},
+		live:         map[model.ItemID]uint64{},
 		standPeak:    map[model.ItemID]uint64{},
 		budgetPeak:   map[model.ItemID]uint64{},
 		idleSince:    map[model.ItemID]time.Time{},
@@ -533,6 +535,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		PressureClosed: s.pressureClosed, Recovering: s.recovering,
 	}
 	s.holderLive = map[model.ItemID]uint64{}
+	s.live = map[model.ItemID]uint64{}
 	s.commitments = Commitments{PoolMemory: s.d.Cfg.PoolMemory, PoolCPUs: s.d.Cfg.PoolCPUs}
 	nestedCur := map[model.ItemID]uint64{}
 	nestedRunning := map[model.ItemID]int{}
@@ -547,6 +550,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 		case model.StateStarting, model.StateRunning:
 			cur, _ := s.d.Exec.MemoryCurrent(it.ID)
 			s.sampleLocked(it, cur)
+			s.live[it.ID] = cur
 			nestedCur[it.ParentID] += cur
 			nestedRunning[it.ParentID]++
 		}
@@ -586,6 +590,7 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			s.commitments.BudgetsUnconsumed += budget
 			s.commitments.TeardownUnconsumed += td
 			s.holderLive[it.ID] = budget + stand + td + nestedCur[it.ID] + s.standUsage[it.ID] + tdCur
+			s.live[it.ID] = nestedCur[it.ID] + s.standUsage[it.ID] + tdCur
 
 			if it.DockerProject != "" {
 				projects = append(projects, it.DockerProject)
@@ -595,12 +600,14 @@ func (s *Scheduler) snapshotLocked(ctx context.Context, items []*model.Item, mem
 			case model.StateStarting, model.StateRunning:
 				cur, _ := s.d.Exec.MemoryCurrent(it.ID)
 				s.sampleLocked(it, cur)
+				s.live[it.ID] = cur
 				unc := satSub(it.Expected, cur)
 				snap.Unconsumed += unc
 				s.commitments.TasksUnconsumed += unc
 				s.holderLive[it.ID] = unc + cur
 			case model.StateCleaning, model.StateRecovering:
 				cur, _ := s.d.Exec.MemoryCurrent(it.ID)
+				s.live[it.ID] = cur
 				s.holderLive[it.ID] = cur
 			default:
 				continue // finalized by reapLocked in this pass

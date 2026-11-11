@@ -168,6 +168,12 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 		return d.stats(ctx, args)
 	case "stats_export":
 		return d.statsExport(ctx, args, w)
+	case "dashboard":
+		var empty struct{}
+		if err := decode(args, &empty); err != nil {
+			return nil, err
+		}
+		return d.dashboard(ctx, time.Now())
 	case "top":
 		var empty struct{}
 		if err := decode(args, &empty); err != nil {
@@ -327,6 +333,9 @@ func (d *server) logDir(it *model.Item) string {
 // view is viewOf plus the stand measurement of a reservation.
 func (d *server) view(it *model.Item, now time.Time) ItemView {
 	v := viewOf(it, now)
+	if cur, ok := d.sched.MemoryCurrent(it.ID); ok && !it.State.Terminal() {
+		v.MemoryCurrent = &cur
+	}
 	if it.IsReservation() {
 		if used, ok := d.sched.StandUsage(it.ID); ok {
 			v.StandMeasured = &used

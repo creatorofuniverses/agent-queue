@@ -32,6 +32,24 @@ func cmdTop(c *cmdCtx, args []string) error {
 	printTop(c, v)
 	return nil
 }
+
+// cmdDashboard prints the snapshot panels read (the runtime dir's dashboard.json) as JSON.
+func cmdDashboard(c *cmdCtx, args []string) error {
+	fs := c.newFlagSet("dashboard")
+	fs.Bool("json", true, "JSON output (always)")
+	pos, e := parseFlags(fs, args)
+	if e != nil {
+		return e
+	}
+	if len(pos) != 0 {
+		return usagef("dashboard: unexpected arguments")
+	}
+	var v daemon.DashboardView
+	if e = c.call(c.ctx, "dashboard", nil, &v); e != nil {
+		return e
+	}
+	return printJSON(c, v)
+}
 func printTop(c *cmdCtx, v daemon.TopView) {
 	fmt.Fprintf(c.stdout, "memory: %s total, %s available, swap %s used, PSI %.2f (closed=%t)\n", units.FormatSize(v.Host.MemTotal), units.FormatSize(v.Host.MemAvailable), units.FormatSize(v.Host.SwapTotal-v.Host.SwapFree), v.Host.PSIFullAvg10, v.Host.PressureClosed)
 	if v.Physical.Error != "" {

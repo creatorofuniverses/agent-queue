@@ -313,6 +313,21 @@ docker, such as a test suite or a build run directly (`spawned` in `--json`, per
 agent); "other" is the rest: the system, a terminal multiplexer, the kernel.
 `aq stats` keeps the same split over time in "Host memory" (area `memory`).
 
+For panels and status bars, `aq dashboard` prints one JSON document (`version`
+1): host memory and the pressure and guard flags, the pool's commitments, the
+queue counts, every item not finished yet in queue order (with `position`,
+`blocked_by` and `expected_start` while queued, and `memory_current`, what it
+uses now, while running or held), the items that ended in the last 24 hours
+(`recent`, at most 20) and that day's task outcomes (`day`: finished,
+succeeded, failed, cancelled, OOM, timeout, median and longest wait). Items have
+the fields of `aq list --json`. The daemon keeps the same document in
+`$XDG_RUNTIME_DIR/agent-queue/dashboard.json` (tmpfs, so no disk writes). It
+rewrites the file at once when an item changes state or place, at most every 10
+seconds when only figures move, and at least every 30 seconds. On a clean stop
+it removes the file. A panel can watch that file instead of polling: if the file
+is missing, the daemon is not running, and an `at` older than a minute means it
+died.
+
 ```sh
 aq stats                      # one-screen overview and "Worth a look"
 aq stats disk                 # one area in detail

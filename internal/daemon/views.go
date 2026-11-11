@@ -37,6 +37,7 @@ type ItemView struct {
 	ExitCode          *int         `json:"exit_code,omitempty"`
 	Signal            string       `json:"signal,omitempty"`
 	MemoryPeak        uint64       `json:"memory_peak"`
+	MemoryCurrent     *uint64      `json:"memory_current,omitempty"` // in use now, as the last pass saw it; running tasks and held reservations only
 	MemoryFit         string       `json:"memory_fit,omitempty"`     // feedback on the memory estimate of a finished task
 	KnownNames        []string     `json:"known_names,omitempty"`    // submit of a name without history: names in the same repo that have it
 	CPUHint           string       `json:"cpu_hint,omitempty"`       // submit whose command starts more workers than it gets CPUs
