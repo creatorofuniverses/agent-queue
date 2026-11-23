@@ -6,7 +6,7 @@ import "time"
 // Event is a raise (High) or an all-clear.
 type Event struct {
 	High      bool
-	Value     float64 // window average (Level) or latest pass value (Pass)
+	Value     float64 // window average (Level) or latest complete pass value (Pass)
 	Threshold float64
 	Since     time.Time // episode start
 }
@@ -21,6 +21,7 @@ type sample struct {
 type Level struct {
 	threshold float64
 	window    time.Duration
+	interval  time.Duration
 	samples   []sample
 
 	started bool
@@ -29,10 +30,10 @@ type Level struct {
 	active  Event
 }
 
-// NewLevel returns an alarm for a positive window length. A threshold of zero
-// disables the alarm.
-func NewLevel(threshold float64, window time.Duration) *Level {
-	return &Level{threshold: threshold, window: window}
+// NewLevel returns an alarm for a positive window length and sample interval.
+// A threshold of zero disables the alarm.
+func NewLevel(threshold float64, window, interval time.Duration) *Level {
+	return &Level{threshold: threshold, window: window, interval: interval}
 }
 
 // Observe records a sample at an increasing timestamp. Missing samples count
@@ -44,7 +45,7 @@ func (l *Level) Observe(at time.Time, v float64, ok bool) (Event, bool) {
 	if !l.started {
 		l.started, l.first = true, at
 	}
-	interval := at.Sub(l.last)
+	advancing := at.After(l.last)
 	l.last = at
 
 	if ok {
@@ -58,10 +59,10 @@ func (l *Level) Observe(at time.Time, v float64, ok bool) (Event, bool) {
 	l.samples = l.samples[i:]
 
 	count := len(l.samples)
-	if l.first.After(start) || interval <= 0 || count == 0 {
+	if l.first.After(start) || !advancing || count == 0 {
 		return Event{}, false
 	}
-	expected := float64(l.window) / float64(interval)
+	expected := float64(l.window) / float64(l.interval)
 	if float64(count) < expected/2 {
 		return Event{}, false
 	}
@@ -106,16 +107,13 @@ func NewPass(threshold float64) *Pass {
 	return &Pass{threshold: threshold}
 }
 
-// Observe records a pass. Incomplete passes leave both streaks unchanged.
+// Observe records a pass. Incomplete passes leave the streaks and the active episode unchanged.
 func (p *Pass) Observe(at time.Time, v float64, complete bool) (Event, bool) {
-	if p.threshold == 0 {
+	if p.threshold == 0 || !complete {
 		return Event{}, false
 	}
 	if p.active.High {
 		p.active.Value = v
-	}
-	if !complete {
-		return Event{}, false
 	}
 
 	switch {
@@ -140,7 +138,7 @@ func (p *Pass) Observe(at time.Time, v float64, complete bool) (Event, bool) {
 	return Event{}, false
 }
 
-// Active returns the open episode with its latest pass value.
+// Active returns the open episode with its latest complete pass value.
 func (p *Pass) Active() (Event, bool) {
 	return p.active, p.active.High
 }

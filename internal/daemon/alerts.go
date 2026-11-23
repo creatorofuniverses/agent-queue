@@ -34,13 +34,13 @@ type alertSet struct {
 }
 
 func newAlertSet(cfg config.Config) *alertSet {
-	window := cfg.Alerts.Window
+	window, interval := cfg.Alerts.Window, cfg.Stats.SampleInterval
 	return &alertSet{
 		levels: map[model.EventKind]*levelalarm.Level{
-			model.EventTmpFull:       levelalarm.NewLevel(cfg.TmpScan.AlertFull, window),
-			model.EventSwapFull:      levelalarm.NewLevel(cfg.Host.AlertSwap, window),
-			model.EventSessionsHeavy: levelalarm.NewLevel(float64(cfg.Sessions.AlertMemory), window),
-			model.EventSessionsIdle:  levelalarm.NewLevel(float64(cfg.Sessions.AlertIdleCount), window),
+			model.EventTmpFull:       levelalarm.NewLevel(cfg.TmpScan.AlertFull, window, interval),
+			model.EventSwapFull:      levelalarm.NewLevel(cfg.Host.AlertSwap, window, interval),
+			model.EventSessionsHeavy: levelalarm.NewLevel(float64(cfg.Sessions.AlertMemory), window, interval),
+			model.EventSessionsIdle:  levelalarm.NewLevel(float64(cfg.Sessions.AlertIdleCount), window, interval),
 		},
 		orphans:   levelalarm.NewPass(float64(cfg.TmpScan.AlertOrphans)),
 		idleAfter: cfg.Sessions.IdleAfter,

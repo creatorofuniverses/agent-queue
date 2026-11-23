@@ -27,7 +27,7 @@ func expectLevel(t *testing.T, l *Level, i int, v float64, valid bool, want Even
 
 func openLevel(t *testing.T) (*Level, Event) {
 	t.Helper()
-	l := NewLevel(testThreshold, testWindow)
+	l := NewLevel(testThreshold, testWindow, testInterval)
 	for i := range 20 {
 		expectLevel(t, l, i, 80, true, Event{}, false)
 	}
@@ -46,7 +46,7 @@ func TestLevelRaisesOnWindowAverage(t *testing.T) {
 	}
 
 	// The first sample is outside the full window, whose average is exactly 70.
-	l = NewLevel(testThreshold, testWindow)
+	l = NewLevel(testThreshold, testWindow, testInterval)
 	expectLevel(t, l, 0, 0, true, Event{}, false)
 	for i := 1; i < 20; i++ {
 		expectLevel(t, l, i, 70, true, Event{}, false)
@@ -97,7 +97,7 @@ func TestLevelSpikeDoesNotClear(t *testing.T) {
 }
 
 func TestLevelSkipsMissing(t *testing.T) {
-	l := NewLevel(testThreshold, testWindow)
+	l := NewLevel(testThreshold, testWindow, testInterval)
 	for i := range 20 {
 		expectLevel(t, l, i, 80*float64(i%2), i%2 == 1, Event{}, false)
 	}
@@ -112,15 +112,24 @@ func TestLevelSkipsMissing(t *testing.T) {
 	}
 }
 
+func TestLevelMissedSamplesDoNotReduceExpectedCount(t *testing.T) {
+	l := NewLevel(testThreshold, testWindow, testInterval)
+	expectLevel(t, l, 0, 0, true, Event{}, false)
+	expectLevel(t, l, 20, 82, true, Event{}, false)
+	if got, active := l.Active(); active {
+		t.Fatalf("one sample opened an alert: %+v", got)
+	}
+}
+
 func TestLevelZeroThresholdNeverFires(t *testing.T) {
-	l := NewLevel(0, testWindow)
+	l := NewLevel(0, testWindow, testInterval)
 	for i := range 40 {
 		expectLevel(t, l, i, 80, true, Event{}, false)
 	}
 }
 
 func TestLevelFreshStartNoClear(t *testing.T) {
-	l := NewLevel(testThreshold, testWindow)
+	l := NewLevel(testThreshold, testWindow, testInterval)
 	for i := range 40 {
 		expectLevel(t, l, i, 10, true, Event{}, false)
 	}
@@ -153,7 +162,11 @@ func TestPassTwoInARow(t *testing.T) {
 			High: true, Value: threshold, Threshold: threshold, Since: sampleTime(12),
 		}},
 	}
+	var lastComplete float64
 	for i, step := range steps {
+		if step.complete {
+			lastComplete = step.value
+		}
 		wantEvent := step.event != (Event{})
 		got, emitted := p.Observe(sampleTime(i), step.value, step.complete)
 		if got != step.event || emitted != wantEvent {
@@ -163,7 +176,7 @@ func TestPassTwoInARow(t *testing.T) {
 		switch {
 		case i >= 3 && i < 9:
 			wantActive = raise
-			wantActive.Value = step.value
+			wantActive.Value = lastComplete
 		case i == 12:
 			wantActive = step.event
 		}
