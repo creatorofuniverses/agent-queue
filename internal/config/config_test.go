@@ -454,7 +454,7 @@ func TestDiskDefaults(t *testing.T) {
 	}
 }
 
-func loadDisk(t *testing.T, body string) (Config, error) {
+func loadConfigTOML(t *testing.T, body string) (Config, error) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "c.toml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -464,7 +464,7 @@ func loadDisk(t *testing.T, body string) (Config, error) {
 }
 
 func TestDiskParse(t *testing.T) {
-	c, err := loadDisk(t, "[disk]\nalert_rate = \"20G\"\nalert_window = \"15m\"\n")
+	c, err := loadConfigTOML(t, "[disk]\nalert_rate = \"20G\"\nalert_window = \"15m\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestDiskParse(t *testing.T) {
 	if err := c.Validate(64*gib, 16); err != nil {
 		t.Fatal(err)
 	}
-	c, err = loadDisk(t, "[disk]\nalert_rate = \"0\"\n")
+	c, err = loadConfigTOML(t, "[disk]\nalert_rate = \"0\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +487,7 @@ func TestDiskParse(t *testing.T) {
 }
 
 func TestDiskWindowTooShort(t *testing.T) {
-	c, err := loadDisk(t, "[disk]\nalert_window = \"2m\"\n[stats]\nsample_interval = \"30s\"\n")
+	c, err := loadConfigTOML(t, "[disk]\nalert_window = \"2m\"\n[stats]\nsample_interval = \"30s\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func TestDiskWindowTooShort(t *testing.T) {
 // the window follows a long sample_interval, and an alarm turned off needs
 // no window at all.
 func TestDiskWindowDefaultFollowsInterval(t *testing.T) {
-	c, err := loadDisk(t, "[stats]\nsample_interval = \"3m\"\n")
+	c, err := loadConfigTOML(t, "[stats]\nsample_interval = \"3m\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,15 +511,144 @@ func TestDiskWindowDefaultFollowsInterval(t *testing.T) {
 	if c.Disk.AlertWindow != 15*time.Minute {
 		t.Fatalf("window = %v, want 5 x 3m", c.Disk.AlertWindow)
 	}
-	c, err = loadDisk(t, "[stats]\nsample_interval = \"30s\"\n")
+	c, err = loadConfigTOML(t, "[stats]\nsample_interval = \"30s\"\n")
 	if err != nil || c.Disk.AlertWindow != 10*time.Minute {
 		t.Fatalf("window = %v, %v; want the 10m default", c.Disk.AlertWindow, err)
 	}
-	c, err = loadDisk(t, "[disk]\nalert_rate = \"0\"\nalert_window = \"1m\"\n[stats]\nsample_interval = \"3m\"\n")
+	c, err = loadConfigTOML(t, "[disk]\nalert_rate = \"0\"\nalert_window = \"1m\"\n[stats]\nsample_interval = \"3m\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Validate(64*gib, 16); err != nil {
 		t.Fatalf("alarm off, window unused: %v", err)
+	}
+}
+
+func TestDefaultsTmpSessions(t *testing.T) {
+	c := Default()
+	if want := (TmpScanConfig{10 * time.Minute, 24 * time.Hour, 70, 2 << 30}); c.TmpScan != want {
+		t.Errorf("tmp defaults = %+v, want %+v", c.TmpScan, want)
+	}
+	if want := (SessionsConfig{12 * time.Hour, 6 << 30, 3}); c.Sessions != want {
+		t.Errorf("sessions defaults = %+v, want %+v", c.Sessions, want)
+	}
+	if c.Host.AlertSwap != 75 || c.Alerts.Window != 10*time.Minute {
+		t.Errorf("host and alerts defaults = %+v and %+v, want 75%% and 10m", c.Host, c.Alerts)
+	}
+}
+
+func TestLoadTmpSessions(t *testing.T) {
+	c, err := loadConfigTOML(t, `tmp_dir = "/dev/shm"
+[tmp]
+scan_interval = "5m"
+orphan_after = "36h"
+alert_full = "0"
+alert_orphans = "0"
+[sessions]
+idle_after = "18h"
+alert_memory = "4G"
+alert_idle_count = 0
+[host]
+alert_swap = "81.5%"
+[alerts]
+window = "15m"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TmpDir != "/dev/shm" {
+		t.Errorf("tmp_dir = %q, want /dev/shm", c.TmpDir)
+	}
+	if want := (TmpScanConfig{5 * time.Minute, 36 * time.Hour, 0, 0}); c.TmpScan != want {
+		t.Errorf("tmp = %+v, want %+v", c.TmpScan, want)
+	}
+	if want := (SessionsConfig{18 * time.Hour, 4 << 30, 0}); c.Sessions != want {
+		t.Errorf("sessions = %+v, want %+v", c.Sessions, want)
+	}
+	if c.Host.AlertSwap != 81.5 || c.Alerts.Window != 15*time.Minute {
+		t.Errorf("host and alerts = %+v and %+v, want 81.5%% and 15m", c.Host, c.Alerts)
+	}
+
+	c, err = loadConfigTOML(t, "[sessions]\nalert_memory = \"0\"\n[tmp]\nalert_orphans = \"3G\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Sessions.AlertMemory != 0 || c.TmpScan.AlertOrphans != 3<<30 {
+		t.Errorf("alert_memory and alert_orphans = %d and %d, want 0 and 3 GiB", c.Sessions.AlertMemory, c.TmpScan.AlertOrphans)
+	}
+}
+
+func TestPercentValidation(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  float64
+	}{
+		{"70%", 70},
+		{"70", 70},
+		{"100%", 100},
+		{"0%", 0},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			body := fmt.Sprintf("[tmp]\nalert_full = %q\n[host]\nalert_swap = %q\n", tc.value, tc.value)
+			c, err := loadConfigTOML(t, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.TmpScan.AlertFull != tc.want || c.Host.AlertSwap != tc.want {
+				t.Errorf("alert_full and alert_swap = %v and %v, want both %v", c.TmpScan.AlertFull, c.Host.AlertSwap, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct{ table, key, value string }{
+		{"tmp", "alert_full", "170%"},
+		{"tmp", "alert_full", "-1%"},
+		{"tmp", "alert_full", "abc"},
+		{"host", "alert_swap", "NaN"},
+		{"host", "alert_swap", "+Inf"},
+	} {
+		key := tc.table + "." + tc.key
+		t.Run(key+"/"+tc.value, func(t *testing.T) {
+			body := fmt.Sprintf("[%s]\n%s = %q\n", tc.table, tc.key, tc.value)
+			if _, err := loadConfigTOML(t, body); err == nil || !strings.Contains(err.Error(), key+":") {
+				t.Fatalf("want invalid value error for %s, got %v", key, err)
+			}
+		})
+	}
+}
+
+func TestAlertsWindowFloor(t *testing.T) {
+	for _, tc := range []struct {
+		window  string
+		wantErr bool
+	}{
+		{"149s", true},
+		{"150s", false},
+	} {
+		t.Run(tc.window, func(t *testing.T) {
+			body := fmt.Sprintf("[stats]\nsample_interval = \"30s\"\n[alerts]\nwindow = %q\n", tc.window)
+			c, err := loadConfigTOML(t, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = c.Validate(64*gib, 16)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "alerts.window must be at least 5 sample intervals") {
+					t.Fatalf("want window error, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	c, err := loadConfigTOML(t, "[stats]\nsample_interval = \"3m\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Alerts.Window != 15*time.Minute {
+		t.Errorf("omitted alerts.window = %s, want 15m", c.Alerts.Window)
+	}
+	if err := c.Validate(64*gib, 16); err != nil {
+		t.Fatal(err)
 	}
 }

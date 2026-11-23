@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,12 +94,31 @@ type DiskConfig struct {
 	AlertWindow time.Duration
 }
 
+type TmpScanConfig struct {
+	ScanInterval, OrphanAfter time.Duration
+	AlertFull                 float64 // percent, 0 off
+	AlertOrphans              uint64  // bytes, 0 off
+}
+
+type SessionsConfig struct {
+	IdleAfter      time.Duration
+	AlertMemory    uint64 // bytes, 0 off
+	AlertIdleCount int    // 0 off
+}
+
+type HostAlertsConfig struct{ AlertSwap float64 } // percent, 0 off
+type AlertsConfig struct{ Window time.Duration }
+
 type Config struct {
 	Profiles            ProfilesConfig
 	Scheduler           SchedulerConfig
 	Retention           RetentionConfig
 	Stats               StatsConfig
 	Disk                DiskConfig
+	TmpScan             TmpScanConfig
+	Sessions            SessionsConfig
+	Host                HostAlertsConfig
+	Alerts              AlertsConfig
 	Agents              []AgentConfig
 	Notify              NotifyConfig
 	Webhook             WebhookConfig
@@ -130,6 +150,10 @@ func Default() Config {
 		Retention:           RetentionConfig{7 * 24 * time.Hour, 5 * gib, 90 * 24 * time.Hour, 30 * 24 * time.Hour, 2 * 24 * time.Hour},
 		Stats:               StatsConfig{30 * time.Second, []string{"claude", "codex"}},
 		Disk:                DiskConfig{50 * gib, 10 * time.Minute},
+		TmpScan:             TmpScanConfig{10 * time.Minute, 24 * time.Hour, 70, 2 * gib},
+		Sessions:            SessionsConfig{12 * time.Hour, 6 * gib, 3},
+		Host:                HostAlertsConfig{75},
+		Alerts:              AlertsConfig{10 * time.Minute},
 		Agents:              []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}},
 		Notify:              NotifyConfig{time.Second, 5 * time.Minute, 30 * time.Second, 24 * time.Hour, 10 * time.Minute, 5 * time.Minute},
 		Webhook:             WebhookConfig{Timeout: 10 * time.Second, Format: WebhookFormatAQ},
@@ -194,6 +218,23 @@ type rawConfig struct {
 		AlertRate   *string `toml:"alert_rate"`
 		AlertWindow *string `toml:"alert_window"`
 	} `toml:"disk"`
+	TmpScan struct {
+		ScanInterval *string `toml:"scan_interval"`
+		OrphanAfter  *string `toml:"orphan_after"`
+		AlertFull    *string `toml:"alert_full"`
+		AlertOrphans *string `toml:"alert_orphans"`
+	} `toml:"tmp"`
+	Sessions struct {
+		IdleAfter      *string `toml:"idle_after"`
+		AlertMemory    *string `toml:"alert_memory"`
+		AlertIdleCount *int    `toml:"alert_idle_count"`
+	} `toml:"sessions"`
+	Host struct {
+		AlertSwap *string `toml:"alert_swap"`
+	} `toml:"host"`
+	Alerts struct {
+		Window *string `toml:"window"`
+	} `toml:"alerts"`
 	Agents []rawAgent `toml:"agents"`
 	Notify struct {
 		RetryMin             *string `toml:"retry_min"`
@@ -273,6 +314,13 @@ func Load(path string) (Config, error) {
 		}
 		*dst = v
 	}
+	alertSize := func(key string, src *string, dst *uint64) {
+		if src != nil && strings.TrimSpace(*src) == "0" {
+			*dst = 0 // ParseSize rejects zero; here it means "off".
+			return
+		}
+		size(key, src, dst)
+	}
 	dur := func(key string, src *string, dst *time.Duration) {
 		if src == nil {
 			return
@@ -280,6 +328,17 @@ func Load(path string) (Config, error) {
 		v, err := units.ParseDuration(*src)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", key, err))
+			return
+		}
+		*dst = v
+	}
+	percent := func(key string, src *string, dst *float64) {
+		if src == nil {
+			return
+		}
+		v, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(*src), "%"), 64)
+		if err != nil || !(v >= 0 && v <= 100) {
+			errs = append(errs, fmt.Errorf("%s: expected a percentage within 0..100, got %q", key, *src))
 			return
 		}
 		*dst = v
@@ -293,14 +352,24 @@ func Load(path string) (Config, error) {
 	if v := raw.Stats.AgentProcesses; v != nil {
 		c.Stats.AgentProcesses = *v
 	}
-	if v := raw.Disk.AlertRate; v != nil && strings.TrimSpace(*v) == "0" {
-		c.Disk.AlertRate = 0 // ParseSize rejects zero; here it means "off"
-	} else {
-		size("disk.alert_rate", v, &c.Disk.AlertRate)
-	}
+	alertSize("disk.alert_rate", raw.Disk.AlertRate, &c.Disk.AlertRate)
 	dur("disk.alert_window", raw.Disk.AlertWindow, &c.Disk.AlertWindow)
 	if raw.Disk.AlertWindow == nil { // the default follows a long sample interval
 		c.Disk.AlertWindow = max(c.Disk.AlertWindow, 5*c.Stats.SampleInterval)
+	}
+	dur("tmp.scan_interval", raw.TmpScan.ScanInterval, &c.TmpScan.ScanInterval)
+	dur("tmp.orphan_after", raw.TmpScan.OrphanAfter, &c.TmpScan.OrphanAfter)
+	percent("tmp.alert_full", raw.TmpScan.AlertFull, &c.TmpScan.AlertFull)
+	alertSize("tmp.alert_orphans", raw.TmpScan.AlertOrphans, &c.TmpScan.AlertOrphans)
+	dur("sessions.idle_after", raw.Sessions.IdleAfter, &c.Sessions.IdleAfter)
+	alertSize("sessions.alert_memory", raw.Sessions.AlertMemory, &c.Sessions.AlertMemory)
+	if v := raw.Sessions.AlertIdleCount; v != nil {
+		c.Sessions.AlertIdleCount = *v
+	}
+	percent("host.alert_swap", raw.Host.AlertSwap, &c.Host.AlertSwap)
+	dur("alerts.window", raw.Alerts.Window, &c.Alerts.Window)
+	if raw.Alerts.Window == nil {
+		c.Alerts.Window = max(c.Alerts.Window, 5*c.Stats.SampleInterval)
 	}
 	if v := raw.Profiles.Window; v != nil {
 		c.Profiles.Window = *v
@@ -585,6 +654,9 @@ func (c Config) validatePlan4() error {
 	}
 	if c.Disk.AlertRate > 0 && c.Disk.AlertWindow < 5*c.Stats.SampleInterval {
 		return fmt.Errorf("disk.alert_window must be at least 5 sample intervals (%s)", 5*c.Stats.SampleInterval)
+	}
+	if c.Alerts.Window < 5*c.Stats.SampleInterval {
+		return fmt.Errorf("alerts.window must be at least 5 sample intervals (%s)", 5*c.Stats.SampleInterval)
 	}
 	for _, n := range c.Stats.AgentProcesses {
 		if n == "" || strings.Contains(n, "/") {

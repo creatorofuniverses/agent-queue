@@ -127,3 +127,31 @@ alert_rate = "50G"
 # Window the rate is judged over; at least 5 x stats.sample_interval while the
 # alarm is on. Unset: 10m, or 5 x stats.sample_interval when that is longer.
 alert_window = "10m"
+
+[tmp]
+# Time between scans of /tmp.
+scan_interval = "10m"
+# Minimum time since the last write before an item can be an orphan or candidate.
+orphan_after = "24h"
+# /tmp fullness threshold, using the higher of byte and inode usage.
+# Percent values accept an optional % suffix. "0" turns the alarm off.
+alert_full = "70%"
+# Total size threshold for orphans and candidates. "0" turns the alarm off.
+alert_orphans = "2G"
+
+[sessions]
+# How long an agent session with known idle time must be idle to count.
+idle_after = "12h"
+# Total memory threshold for agent sessions and their runs. "0" turns the alarm off.
+alert_memory = "6G"
+# Number of idle sessions that triggers an alarm. 0 turns the alarm off.
+alert_idle_count = 3
+
+[host]
+# Swap usage threshold as a percent. "0" turns the alarm off.
+alert_swap = "75%"
+
+[alerts]
+# Averaging window for the /tmp fullness, swap and session alarms.
+# At least 5 x stats.sample_interval. Unset uses 10m or five intervals if longer.
+window = "10m"
