@@ -293,15 +293,30 @@ deltas (rate over a window, one event per episode, an all-clear when the window 
 falls below half the threshold) and emits `disk_writes_high`/`disk_writes_normal` through the
 usual event delivery.
 
+Operator events for temporary storage, swap and sessions use the same delivery path.
+
+| Open event | All-clear event |
+|---|---|
+| `tmp_full` | `tmp_full_normal` |
+| `swap_full` | `swap_full_normal` |
+| `sessions_heavy` | `sessions_heavy_normal` |
+| `sessions_idle` | `sessions_idle_normal` |
+| `tmp_orphans` | `tmp_orphans_normal` |
+
 The host sampler enriches the session inventory from that same process scan
 with Claude Code's session files. Successful samples replace the published
 inventory. A failed process scan leaves the last session inventory available
-and contributes a missing measurement to the session alarms.
+for the dashboard and contributes a missing measurement to the session alarms.
+Each `top` response enriches sessions from its own physical memory scan.
 
 A separate loop inventories `/tmp` for the daemon's UID. The socket's `tmp`
 operation reads the last report or requests a scan with `{"rescan": true}`.
-Requests that arrive during a scan wait for that pass. The daemon keeps the
-latest successful report in memory, including whether the pass was complete.
+Rescan requests reuse reports under one minute old. When a fresh scan is needed,
+requests that arrive during a scan wait for that pass. Only scheduled passes
+feed the orphan alarm. The daemon keeps the latest successful report in memory,
+including the total number of partial items and whether all items stayed within
+the scan time budget. Unreadable subtrees contribute partial items without
+pausing the alarm.
 The loop logs one warning per scan still running after two scan intervals.
 On shutdown the loop waits up to five seconds for an in-flight scan. A scan
 that returns after cancellation skips report and alarm updates.

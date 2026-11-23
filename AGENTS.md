@@ -39,7 +39,7 @@ just test-install       # install/uninstall recipes into a temporary tree
 just test-integration   # integration + e2e: real systemd user manager, docker
 gofmt -l . ; go vet ./...
 aq top --sessions      # agent sessions, memory, swap and idle time
-aq tmp                 # read-only /tmp inventory; accepts --json and --rescan
+aq tmp                 # read-only /tmp inventory; accepts --all, --json and --rescan
 ```
 
 Before you finish a change: `gofmt` clean, `go vet ./...` clean, `just test`

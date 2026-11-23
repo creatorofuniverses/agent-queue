@@ -62,7 +62,8 @@ but it is a hint: ignore it for light commands (it also fires on quoted text).
    (or `--memory 6G`). If the queue is long, do other work first, or ask the
    user whether to wait. `aq top` shows who uses host memory right now, and
    `aq top --sessions` shows each agent session's memory, swap and idle time.
-   `aq tmp [--json] [--rescan]` inspects the /tmp inventory without deleting files.
+   `aq tmp [--all] [--json] [--rescan]` shows the 30 largest /tmp entries and
+   totals by state. Use `--all` for every entry or `--json` for the full report.
    The report states are `aq_task`, `in_use`, `live`, `candidate`, `orphan` and `recent`.
 
 ## 3. Pick the shape

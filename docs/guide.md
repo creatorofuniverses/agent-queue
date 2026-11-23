@@ -314,8 +314,8 @@ agent); "other" is the rest: the system, a terminal multiplexer, the kernel.
 `aq stats` keeps the same split over time in "Host memory" (area `memory`).
 
 `aq top` also shows the number of sampled agent sessions, their total agent
-and child-process memory, and up to three sessions idle longer than
-`[sessions] idle_after` (12 hours by default). `aq top --sessions` shows every
+and child-process memory, and up to three sessions idle for
+`[sessions] idle_after` or longer (12 hours by default). `aq top --sessions` shows every
 session's name (or PID), client, project directory, agent memory, child-process
 memory, swap and idle time. A dash means idle time is unknown.
 
@@ -323,9 +323,12 @@ memory, swap and idle time. A dash means idle time is unknown.
 
 The `tmp:` line in `aq top` includes orphan and candidate totals and up to three
 of the largest scanned entries. `aq tmp` shows filesystem usage, both totals,
-scan age and a table ordered by decreasing size. Entries marked `*` were only
-partly scanned. `aq tmp --json` returns the full scan report. The daemon scans
-every 10 minutes by default, and `aq tmp --rescan` requests a fresh scan.
+scan age, the number of partial items, and the 30 largest entries. Counts and
+bytes per state cover the whole inventory. Entries marked `*` were partly
+scanned. Use `aq tmp --all` to show every entry or `aq tmp --json` for the full
+report. The daemon scans every 10 minutes by default. `aq tmp --rescan` reuses a
+report under one minute old. It requests a scan when the report is at least a
+minute old or absent.
 This release only inventories files. It never deletes them.
 
 | State | Meaning |
@@ -335,21 +338,23 @@ This release only inventories files. It never deletes them.
 | `live` | A recent scratchpad for a live Claude project. |
 | `candidate` | An older scratchpad for a live Claude project with no process using the entry. |
 | `orphan` | An older entry with no process using it and no known live owner. |
-| `recent` | Any other entry written within `[tmp] orphan_after` (24 hours by default). |
+| `recent` | Any other entry with an mtime or ctime within `[tmp] orphan_after` (24 hours by default), including timestamps of entries inside a directory. |
 
-| Operator alert | Default threshold |
-|---|---|
-| `tmp_full` | 70% of /tmp bytes or inodes in use. |
-| `swap_full` | 75% of swap in use. |
-| `sessions_heavy` | 6 GiB of combined agent and child-process memory. |
-| `sessions_idle` | Three sessions with known idle times at or past `[sessions] idle_after`. |
-| `tmp_orphans` | 2 GiB of orphan and candidate entries combined. |
+| Open event | All-clear event | Default threshold |
+|---|---|---|
+| `tmp_full` | `tmp_full_normal` | 70% of /tmp bytes or inodes in use. |
+| `swap_full` | `swap_full_normal` | 75% of swap in use. |
+| `sessions_heavy` | `sessions_heavy_normal` | 6 GiB of combined agent and child-process memory. |
+| `sessions_idle` | `sessions_idle_normal` | Three sessions idle for `[sessions] idle_after` or longer. |
+| `tmp_orphans` | `tmp_orphans_normal` | 2 GiB of orphan and candidate entries combined. |
 
 The first four alerts open when the average over `[alerts] window` (10 minutes
 by default) reaches the threshold and clear when it drops below half.
-`tmp_orphans` uses two consecutive complete scans to open or clear. A threshold
-of zero disables its alert. The operator webhook receives one notification when
-an alert opens and one when it clears.
+`tmp_orphans` uses two consecutive complete scheduled scans to open or clear.
+If an item exceeds its scan time budget, the header shows
+`incomplete pass: tmp_orphans paused`. Unreadable entries count as partial and
+leave the pass complete. A threshold of zero disables its alert. The operator
+webhook receives one notification when an alert opens and one when it clears.
 
 ### Dashboard snapshot
 
@@ -362,11 +367,21 @@ uses now, while running or held), the items that ended in the last 24 hours
 succeeded, failed, cancelled, OOM, timeout, median and longest wait). Items have
 the fields of `aq list --json`. The daemon keeps the same document in
 `$XDG_RUNTIME_DIR/agent-queue/dashboard.json` (tmpfs, so no disk writes). It
-rewrites the file at once when an item changes state or place, at most every 10
-seconds when only figures move, and at least every 30 seconds. On a clean stop
-it removes the file. A panel can watch that file instead of polling: if the file
+rewrites the file at once when an item changes state or place or an alert opens
+or clears, at most every 10 seconds when only figures move, and at least every
+30 seconds. On a clean stop it removes the file. A panel can watch that file instead of polling: if the file
 is missing, the daemon is not running, and an `at` older than a minute means it
 died.
+
+- `sessions` appears after the first successful sample. It contains the
+  `agent_bytes` and `run_bytes` totals and per-session `items`, including swap
+  and idle time when known.
+- `tmp` appears after the first successful inventory. It contains filesystem
+  usage (`fs`), `scanned_at`, `orphan_bytes`, `candidate_bytes`, and up to 50
+  of the largest `items`. `complete` reports whether all items stayed within the
+  time budget. `partial_items` counts partial items across the full scan.
+- `alerts` lists open episodes with `name`, `since`, `value`, and `threshold`.
+  It is an empty array when no episodes are open.
 
 The host fields need care. `guard_active` only says that the host guard holds
 the slice ceiling below the pool; with a pool close to the host's memory that is
@@ -506,8 +521,10 @@ disk writes at 120 GiB/h for 10m (20 GiB): session:session-3.scope 118 GiB/h (�
 ```
 
 It fires once per episode. When the average over a whole window falls below half the
-threshold, `disk_writes_normal` follows with the episode's total and the main writer. aq
-only reports; it does not stop or throttle anything. Set it in `config.toml`:
+threshold, `disk_writes_normal` follows with the episode's total and the main writer.
+The operator webhook also carries the five open and five all-clear events listed in
+[Temporary files and session alerts](#temporary-files-and-session-alerts).
+aq only reports; it does not stop or throttle anything. Set it in `config.toml`:
 
 ```toml
 [disk]
@@ -907,8 +924,9 @@ request instead of its own JSON — an HTML message (kind, item, state, detail a
 `aq result ID`) led by a status mark (✅ done, ❌ failed, ⚠️ needs a look,
 ⏸️ admission closed, ⏳ expiring or held, ❓ unknown, 🔄 daemon restarted),
 `level` by severity (`error` for failed teardowns and
-infrastructure failures, `warning` for closed admission, forced releases and
-oversized stands) and the event kind as `category`. Put Gong's `api_token` in
+infrastructure failures, `warning` for closed admission, forced releases,
+oversized stands and disk, temporary storage, swap and session alerts, `info`
+for their all-clears) and the event kind as `category`. Put Gong's `api_token` in
 `token_file`.
 
 ```toml
@@ -923,7 +941,7 @@ agent session memory, idle sessions, and orphan or candidate items in `/tmp`.
 The first four alarms use the average over `[alerts].window`. The `/tmp` usage
 alarm uses the larger of the byte and inode percentages. An episode opens
 at the configured threshold and clears below half of it. The orphan alarm
-requires two complete scans to open or clear. Set an individual threshold
+requires two complete scheduled scans to open or clear. Set an individual threshold
 to zero to disable its alarm. The `[tmp]`, `[host]`, and `[sessions]` tables
 in the example config list the thresholds.
 
