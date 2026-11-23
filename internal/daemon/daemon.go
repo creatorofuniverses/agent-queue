@@ -116,8 +116,9 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if opts.Usage != nil {
 		opts.Usage = &boundedUsage{inner: opts.Usage}
 	}
+	initialUsageDone := make(chan struct{})
 	d := &server{
-		host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg,
+		host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg, initialUsageDone: initialUsageDone,
 		lastDisk:     &atomic.Pointer[DiskRate]{},
 		lastSessions: &atomic.Pointer[[]agentsess.Session]{},
 		lastTmp:      &atomic.Pointer[tmpscan.Report]{},
@@ -166,7 +167,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		home, _ := os.UserHomeDir()
 		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses,
 			Disk: opts.Disk, Acct: diskacct.New(), Alarm: diskacct.NewAlarm(cfg.Disk.AlertRate, cfg.Disk.AlertWindow),
-			Emit: emit, LastDisk: d.lastDisk, Home: home,
+			Emit: emit, LastDisk: d.lastDisk, Home: home, initialUsageDone: initialUsageDone,
 			Sessions:     agentsess.Reader{Dir: filepath.Join(home, ".claude", "sessions"), ProcRoot: "/proc"},
 			LastSessions: d.lastSessions, Alerts: d.alerts, TmpRoot: tmpRoot, LastTmp: d.lastTmp,
 		}, cfg.Stats.SampleInterval)
@@ -223,6 +224,8 @@ type server struct {
 	alerts       *alertSet
 	rescan       func(context.Context) (tmpscan.Report, error)
 	recovering   atomic.Bool
+
+	initialUsageDone <-chan struct{}
 }
 
 func lockSlice(paths config.Paths, slice string) (*os.File, error) {

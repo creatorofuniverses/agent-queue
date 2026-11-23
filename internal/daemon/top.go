@@ -77,8 +77,8 @@ func (b *boundedUsage) Usage(ctx context.Context, agents []string) (platform.Usa
 	}
 	done := make(chan result, 1)
 	go func() {
-		defer b.busy.Store(false)
 		u, e := b.inner.Usage(ctx, agents)
+		b.busy.Store(false) // Make the meter available before reporting completion.
 		done <- result{u, e}
 	}()
 	select {
@@ -90,13 +90,24 @@ func (b *boundedUsage) Usage(ctx context.Context, agents []string) (platform.Usa
 }
 
 // scanUsage is one bounded pass over /proc: the sampler feeds both the memory
-// row and the disk accountant from it.
-func scanUsage(ctx context.Context, usage platform.UsageMeter, agents []string) (platform.Usage, error) {
+// row and the disk accountant from it. At startup, top shares its time limit
+// between waiting for the initial sample's scan and making its own scan.
+func scanUsage(ctx context.Context, usage platform.UsageMeter, agents []string, initialUsageDone <-chan struct{}) (platform.Usage, error) {
 	if usage == nil {
 		return platform.Usage{}, errors.New("usage meter unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	if initialUsageDone != nil {
+		select {
+		case <-initialUsageDone:
+		case <-ctx.Done():
+			return platform.Usage{}, ctx.Err()
+		}
+		if err := ctx.Err(); err != nil {
+			return platform.Usage{}, err
+		}
+	}
 	return usage.Usage(ctx, agents)
 }
 
@@ -139,7 +150,7 @@ func (d *server) top(ctx context.Context) (any, error) {
 	} else {
 		tmp.FSUsage = u
 	}
-	u, ue := scanUsage(ctx, d.opts.Usage, d.cfg.Stats.AgentProcesses)
+	u, ue := scanUsage(ctx, d.opts.Usage, d.cfg.Stats.AgentProcesses, d.initialUsageDone)
 	v := TopView{At: time.Now().UTC(), Host: HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed}, Physical: physicalView(u, ue, mem), Commitments: p.Commitments, Queue: QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}, Tmp: tmp}
 	if d.lastDisk != nil {
 		v.Disk = d.lastDisk.Load()

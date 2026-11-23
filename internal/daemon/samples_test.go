@@ -18,6 +18,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/notify"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
@@ -78,6 +79,74 @@ func TestStatsSamplerRunsImmediately(t *testing.T) {
 			t.Fatal("no immediate sample")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+type startupSampleMeter struct {
+	started chan struct{}
+	release chan struct{}
+	disk    chan struct{}
+	calls   atomic.Int32
+}
+
+func (m *startupSampleMeter) Usage(ctx context.Context, _ []string) (platform.Usage, error) {
+	if m.calls.Add(1) != 1 {
+		return platform.Usage{Tasks: 2 * gib}, nil
+	}
+	close(m.started)
+	select {
+	case <-m.release:
+		return platform.Usage{Tasks: gib}, nil
+	case <-ctx.Done():
+		return platform.Usage{}, ctx.Err()
+	}
+}
+
+func (m *startupSampleMeter) Snapshot(ctx context.Context) (platform.DiskSnapshot, error) {
+	close(m.disk)
+	<-ctx.Done()
+	return platform.DiskSnapshot{}, ctx.Err()
+}
+
+func TestTopWaitsForInitialUsageScan(t *testing.T) {
+	e := newEnv(t)
+	m := &startupSampleMeter{started: make(chan struct{}), release: make(chan struct{}), disk: make(chan struct{})}
+	e.opts = Options{Usage: m, Disk: m}
+	e.host.Set(platform.MemInfo{Total: 32 * gib, Available: 12 * gib})
+	e.start(t)
+	await := func(ch <-chan struct{}, phase string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("sampler did not reach %s", phase)
+		}
+	}
+	await(m.started, "initial usage scan")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	type result struct {
+		view TopView
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var r result
+		r.err = protocol.Call(ctx, e.paths.Socket(), "top", nil, &r.view)
+		done <- r
+	}()
+	select {
+	case r := <-done:
+		t.Fatalf("top returned before the initial usage scan completed: physical = %+v, err = %v", r.view.Physical, r.err)
+	case <-time.After(250 * time.Millisecond): // Give top a chance to reach the held scan.
+	}
+
+	close(m.release)
+	await(m.disk, "disk sampling")
+	r := <-done
+	if r.err != nil || r.view.Physical.Error != "" || r.view.Physical.Tasks != 2*gib {
+		t.Fatalf("top did not get fresh usage while sampler was processing its first scan: physical = %+v, err = %v", r.view.Physical, r.err)
 	}
 }
 

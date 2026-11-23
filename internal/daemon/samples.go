@@ -49,6 +49,8 @@ type SamplerDeps struct {
 	TmpRoot      string
 	LastTmp      *atomic.Pointer[tmpscan.Report]
 
+	initialUsageDone chan struct{} // released before processing the first scan's result
+
 	diskAt     time.Time // the last disk sample the accountant took
 	diskWarned time.Time // the last logged disk meter error
 }
@@ -84,13 +86,15 @@ func RunStatsSampler(ctx context.Context, d SamplerDeps, every time.Duration) {
 func sampleStep(ctx context.Context, d *SamplerDeps, every time.Duration) {
 	mem, e := d.Host.Memory()
 	if e != nil {
+		d.finishInitialUsage()
 		slog.Warn("stats: host memory", "err", e)
 		return
 	}
 	closed, avg := d.Pressure()
 	p := d.Pass()
 	c := p.Commitments
-	usage, uerr := scanUsage(ctx, d.Usage, d.Agents)
+	usage, uerr := scanUsage(ctx, d.Usage, d.Agents, nil)
+	d.finishInitialUsage()
 	u := physicalView(usage, uerr, mem)
 	var agents uint64
 	for _, a := range u.Agents {
@@ -116,6 +120,13 @@ func sampleStep(ctx context.Context, d *SamplerDeps, every time.Duration) {
 	}
 	if d.Alerts != nil {
 		d.sampleAlerts(ctx, at, mem, sessions, uerr == nil)
+	}
+}
+
+func (d *SamplerDeps) finishInitialUsage() {
+	if d.initialUsageDone != nil {
+		close(d.initialUsageDone)
+		d.initialUsageDone = nil
 	}
 }
 
