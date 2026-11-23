@@ -23,9 +23,10 @@ type tmpWatch struct {
 }
 
 type tmpPass struct {
-	done   chan struct{}
-	report tmpscan.Report
-	err    error
+	done    chan struct{}
+	started time.Time
+	report  tmpscan.Report
+	err     error
 }
 
 func newTmpWatch(ctx context.Context, last *atomic.Pointer[tmpscan.Report], alerts *alertSet,
@@ -38,40 +39,82 @@ func newTmpWatch(ctx context.Context, last *atomic.Pointer[tmpscan.Report], aler
 func (w *tmpWatch) run(every time.Duration) {
 	t := time.NewTimer(0)
 	defer t.Stop()
+	defer w.waitForShutdown()
 	for {
 		select {
 		case <-w.ctx.Done():
-			// The scan may have been started by a socket request. Wait for it
-			// before the daemon closes the store used by the event emitter.
-			w.mu.Lock()
-			pass := w.current
-			w.mu.Unlock()
-			if pass != nil {
-				<-pass.done
-			}
 			return
 		case <-t.C:
-			if _, err := w.rescan(w.ctx); err != nil && w.ctx.Err() == nil {
-				slog.Warn("scan /tmp", "err", err)
+			pass, err := w.startScan()
+			if err != nil {
+				return
 			}
+			w.waitScheduled(pass, every)
 			t.Reset(every)
 		}
 	}
 }
 
-func (w *tmpWatch) rescan(ctx context.Context) (tmpscan.Report, error) {
-	w.mu.Lock()
-	if err := w.ctx.Err(); err != nil {
-		w.mu.Unlock()
-		return tmpscan.Report{}, err
+func (w *tmpWatch) waitScheduled(pass *tmpPass, every time.Duration) {
+	t := time.NewTimer(time.Until(pass.started.Add(every).Add(every)))
+	defer t.Stop()
+	warn := t.C
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-pass.done:
+			if pass.err != nil && w.ctx.Err() == nil {
+				slog.Warn("scan /tmp", "err", pass.err)
+			}
+			return
+		case <-warn:
+			warn = nil
+			select {
+			case <-w.ctx.Done():
+			case <-pass.done:
+			default:
+				slog.Warn("scan /tmp still running", "elapsed", time.Since(pass.started))
+			}
+		}
 	}
-	pass := w.current
+}
+
+func (w *tmpWatch) waitForShutdown() {
+	w.mu.Lock()
+	pass := w.current // The pass may have been started by a socket request.
+	w.mu.Unlock()
 	if pass == nil {
-		pass = &tmpPass{done: make(chan struct{})}
+		return
+	}
+	// A /proc read can block in the kernel even after cancellation.
+	t := time.NewTimer(5 * time.Second)
+	defer t.Stop()
+	select {
+	case <-pass.done:
+	case <-t.C:
+	}
+}
+
+func (w *tmpWatch) startScan() (*tmpPass, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if w.current == nil {
+		pass := &tmpPass{done: make(chan struct{}), started: time.Now()}
 		w.current = pass
 		go w.scanOnce(pass)
 	}
-	w.mu.Unlock()
+	return w.current, nil
+}
+
+func (w *tmpWatch) rescan(ctx context.Context) (tmpscan.Report, error) {
+	pass, err := w.startScan()
+	if err != nil {
+		return tmpscan.Report{}, err
+	}
 
 	// One caller leaving does not cancel the inventory shared by the others.
 	select {
@@ -84,7 +127,7 @@ func (w *tmpWatch) rescan(ctx context.Context) (tmpscan.Report, error) {
 
 func (w *tmpWatch) scanOnce(pass *tmpPass) {
 	pass.report, pass.err = w.scan(w.ctx)
-	if pass.err == nil {
+	if pass.err == nil && w.ctx.Err() == nil {
 		w.last.Store(&pass.report)
 		if w.alerts != nil {
 			if ev, fired := w.alerts.observeOrphans(pass.report); fired && w.emit != nil {

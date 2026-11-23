@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,163 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
+
+func TestTmpWatchShutdownBoundsStuckScan(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		entered, release := make(chan struct{}), make(chan struct{})
+		defer close(release) // Release the context-insensitive scan only after the assertion.
+		watch := newTmpWatch(ctx, &atomic.Pointer[tmpscan.Report]{}, nil, func(context.Context) (tmpscan.Report, error) {
+			close(entered)
+			<-release
+			return tmpscan.Report{}, nil
+		}, nil)
+		done := make(chan struct{})
+		go func() {
+			watch.run(time.Minute)
+			close(done)
+		}()
+
+		<-entered
+		cancel()
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("scan loop still running 5s after cancellation")
+		}
+	})
+}
+
+func TestTmpWatchDiscardsLateReport(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		last := &atomic.Pointer[tmpscan.Report]{}
+		alerts := newAlertSet(config.Default())
+		entered, release := make(chan struct{}), make(chan struct{})
+		var events []model.Event
+		first := tmpscan.Report{At: time.Now(), OrphanBytes: 3 * gib, Complete: true}
+		calls := 0
+		watch := newTmpWatch(ctx, last, alerts, func(context.Context) (tmpscan.Report, error) {
+			calls++
+			if calls == 1 {
+				return first, nil
+			}
+			close(entered)
+			<-release
+			late := first
+			late.At = time.Now()
+			return late, nil
+		}, func(_ context.Context, ev model.Event) { events = append(events, ev) })
+
+		if _, err := watch.rescan(ctx); err != nil {
+			t.Fatal(err)
+		}
+		go watch.run(time.Minute)
+		<-entered
+		cancel()
+		time.Sleep(6 * time.Second)
+		close(release)
+		synctest.Wait()
+		if got := last.Load(); got == nil || !got.At.Equal(first.At) {
+			t.Errorf("late scan replaced cached report: %+v", got)
+		}
+		if active := alerts.Active(); len(active) != 0 || len(events) != 0 {
+			t.Errorf("late scan fed orphan alarm: active %+v, events %+v", active, events)
+		}
+	})
+}
+
+func TestTmpWatchRunInterval(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		scans := make(chan time.Time, 2)
+		watch := newTmpWatch(ctx, &atomic.Pointer[tmpscan.Report]{}, nil, func(context.Context) (tmpscan.Report, error) {
+			scans <- time.Now()
+			return tmpscan.Report{}, nil
+		}, nil)
+		start := time.Now()
+		go watch.run(time.Minute)
+		synctest.Wait()
+		if len(scans) != 1 {
+			t.Fatalf("got %d initial scans, want one", len(scans))
+		}
+		if got := <-scans; !got.Equal(start) {
+			t.Fatalf("initial scan at %v, want %v", got, start)
+		}
+		time.Sleep(time.Minute - time.Second)
+		synctest.Wait()
+		if len(scans) != 0 {
+			t.Fatal("extra scan before one interval elapsed")
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if len(scans) != 1 {
+			t.Fatalf("got %d scans after one interval, want one", len(scans))
+		}
+		if got, want := <-scans, start.Add(time.Minute); !got.Equal(want) {
+			t.Fatalf("second scan at %v, want %v", got, want)
+		}
+	})
+}
+
+type tmpWatchLogLines chan string
+
+func (lines tmpWatchLogLines) Write(p []byte) (int, error) {
+	select {
+	case lines <- string(p):
+	default:
+	}
+	return len(p), nil
+}
+
+func TestTmpWatchWarnsOncePerStuckPass(t *testing.T) {
+	logs := make(tmpWatchLogLines, 8)
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(previous)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		release := make(chan struct{})
+		defer close(release)
+		calls := 0
+		watch := newTmpWatch(ctx, &atomic.Pointer[tmpscan.Report]{}, nil, func(context.Context) (tmpscan.Report, error) {
+			calls++
+			if calls > 1 {
+				<-release
+			}
+			return tmpscan.Report{}, nil
+		}, nil)
+		go watch.run(time.Minute)
+		time.Sleep(30 * time.Second)
+		go func() { _, _ = watch.rescan(ctx) }()
+
+		time.Sleep(2*time.Minute - time.Second)
+		synctest.Wait()
+		if len(logs) != 0 {
+			t.Fatalf("warning before two intervals elapsed: %s", <-logs)
+		}
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if len(logs) != 1 {
+			t.Fatalf("got %d warnings after two intervals, want one", len(logs))
+		}
+		if line := <-logs; !strings.Contains(line, "level=WARN") {
+			t.Fatalf("want WARN level, got %s", line)
+		}
+		time.Sleep(3 * time.Minute)
+		synctest.Wait()
+		if len(logs) != 0 {
+			t.Fatalf("repeated warning for the same pass: %s", <-logs)
+		}
+	})
+}
 
 func TestTmpWatchOrphansAlert(t *testing.T) {
 	last := &atomic.Pointer[tmpscan.Report]{}

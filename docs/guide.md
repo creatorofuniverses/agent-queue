@@ -887,6 +887,9 @@ requires two complete scans to open or clear. Set an individual threshold
 to zero to disable its alarm. The `[tmp]`, `[host]`, and `[sessions]` tables
 in the example config list the thresholds.
 
+If a `/tmp` scan stays in progress for two scan intervals, the daemon logs
+one warning for that scan. The interval is set by `tmp.scan_interval`.
+
 ## MCP
 
 The same binary works as a stdio MCP server; the daemon must be started

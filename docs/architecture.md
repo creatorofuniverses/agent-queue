@@ -302,7 +302,9 @@ A separate loop inventories `/tmp` for the daemon's UID. The socket's `tmp`
 operation reads the last report or requests a scan with `{"rescan": true}`.
 Requests that arrive during a scan wait for that pass. The daemon keeps the
 latest successful report in memory, including whether the pass was complete.
-It joins the scan on shutdown before closing the event store.
+The loop logs one warning per scan still running after two scan intervals.
+On shutdown the loop waits up to five seconds for an in-flight scan. A scan
+that returns after cancellation skips report and alarm updates.
 
 Retention removes old logs and history while preserving active items, including
 reservations whose cleanup failed. Defaults and controls are in the
