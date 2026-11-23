@@ -2,6 +2,7 @@ package tmpscan
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,6 +38,66 @@ func TestScanInUse(t *testing.T) {
 		!slices.Equal(item.PIDs, []int{101}) {
 		t.Errorf("expected venv in use by pid 101, got %+v", item)
 	}
+}
+
+func TestScanUnixSocketPaths(t *testing.T) {
+	o := fixture(t)
+	old := o.Now().Add(-30 * time.Hour)
+	bound := filepath.Join(o.Root, "bound", "server socket.sock")
+	unlinked := filepath.Join(o.Root, "unlinked", "server socket.sock")
+	listenUnix(t, bound)
+	listenUnix(t, unlinked)
+	// A listener can keep its bound address after its filesystem entry is removed.
+	must(t, os.Remove(unlinked))
+	touch(t, bound, old)
+	for _, name := range []string{"bound", "unlinked", "outside", "abstract"} {
+		dir := filepath.Join(o.Root, name)
+		makeDir(t, dir)
+		touch(t, dir, old)
+	}
+	writeFile(t, filepath.Join(o.ProcRoot, "net", "unix"), fmt.Sprintf(
+		"Num RefCount Protocol Flags Type St Inode Path\n"+
+			"0000: 00000002 00000000 00010000 0001 01 100 %s\n"+
+			"0000: 00000002 00000000 00010000 0001 01 101 %s\n"+
+			"0000: 00000002 00000000 00010000 0001 01 102 %s\n"+
+			"0000: 00000002 00000000 00010000 0001 01 103 @%s\n",
+		bound, unlinked, filepath.Join(o.Root+"-outside", "outside"), filepath.Join(o.Root, "abstract")))
+
+	r := scanFixture(t, o)
+	for name, want := range map[string]State{
+		"bound": "in_use", "unlinked": "in_use", "outside": "orphan", "abstract": "orphan",
+	} {
+		if item := itemAt(t, r, name); item.State != want || len(item.PIDs) != 0 {
+			t.Errorf("%s: state = %q, PIDs = %v, want %q and no PIDs", name, item.State, item.PIDs, want)
+		}
+	}
+}
+
+func TestScanUnixSocketBackstop(t *testing.T) {
+	o := fixture(t)
+	old := o.Now().Add(-30 * time.Hour)
+	for _, name := range []string{"top.sock", "nested/sub/server.sock"} {
+		path := filepath.Join(o.Root, name)
+		listenUnix(t, path)
+		touch(t, path, old)
+	}
+	touch(t, filepath.Join(o.Root, "nested", "sub"), old)
+	touch(t, filepath.Join(o.Root, "nested"), old)
+
+	r := scanFixture(t, o)
+	for _, name := range []string{"top.sock", "nested"} {
+		if item := itemAt(t, r, name); item.State != "in_use" || item.Partial {
+			t.Errorf("%s: state = %q, partial = %v, want complete in_use item", name, item.State, item.Partial)
+		}
+	}
+}
+
+func listenUnix(t *testing.T, path string) {
+	t.Helper()
+	makeDir(t, filepath.Dir(path))
+	l, err := net.Listen("unix", path)
+	must(t, err)
+	t.Cleanup(func() { must(t, l.Close()) })
 }
 
 func TestScanUsesSelectedProcessReferences(t *testing.T) {

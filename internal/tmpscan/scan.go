@@ -37,6 +37,8 @@ type Item struct {
 	Partial   bool      `json:"partial"`
 	Gits      []string  `json:"gits,omitempty"` // every .git below the root, relative
 	PIDs      []int     `json:"pids,omitempty"` // up to 5 processes using it
+
+	socketInUse bool
 }
 
 type Report struct {
@@ -227,6 +229,8 @@ func walkItem(ctx context.Context, o Options, path string, root fs.FileInfo, own
 		Path: path, Dev: uint64(st.Dev), Ino: uint64(st.Ino), Bytes: uint64(st.Blocks) * 512,
 		Inodes: 1, LastWrite: root.ModTime(), Kind: "other", Owner: owner,
 	}
+	// Socket entries can belong to a server in a different network namespace.
+	item.socketInUse = root.Mode()&fs.ModeSocket != 0
 	if !root.IsDir() {
 		return item, ctx.Err()
 	}
@@ -264,6 +268,7 @@ func walkItem(ctx context.Context, o Options, path string, root fs.FileInfo, own
 		}
 		item.Bytes += uint64(st.Blocks) * 512
 		item.Inodes++
+		item.socketInUse = item.socketInUse || info.Mode()&fs.ModeSocket != 0
 		if info.ModTime().After(item.LastWrite) {
 			item.LastWrite = info.ModTime()
 		}

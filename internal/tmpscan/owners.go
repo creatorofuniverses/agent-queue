@@ -109,6 +109,14 @@ func scanOwners(ctx context.Context, o Options, items []Item) (projectUsage, err
 		byPath[items[i].Path] = &items[i]
 	}
 	rootPrefix := strings.TrimSuffix(o.Root, "/") + "/"
+	findItem := func(path string) *Item {
+		for dir := path; dir != o.Root && strings.HasPrefix(dir, rootPrefix); dir = filepath.Dir(dir) {
+			if item := byPath[dir]; item != nil {
+				return item
+			}
+		}
+		return nil
+	}
 	// Keep the first five PIDs in numeric order regardless of procfs order.
 	slices.SortFunc(procs, func(a, b scanProcess) int { return a.pid - b.pid })
 	for _, p := range procs {
@@ -116,15 +124,11 @@ func scanOwners(ctx context.Context, o Options, items []Item) (projectUsage, err
 			return projects, err
 		}
 		record := func(path string) {
-			for dir := path; dir != o.Root && strings.HasPrefix(dir, rootPrefix); dir = filepath.Dir(dir) {
-				if item := byPath[dir]; item != nil {
-					if len(item.PIDs) < 5 && !slices.Contains(item.PIDs, p.pid) {
-						item.PIDs = append(item.PIDs, p.pid)
-						if item.Owner.Kind == "unknown" {
-							item.Owner = Owner{Kind: "process", PID: p.pid}
-						}
-					}
-					return
+			item := findItem(path)
+			if item != nil && len(item.PIDs) < 5 && !slices.Contains(item.PIDs, p.pid) {
+				item.PIDs = append(item.PIDs, p.pid)
+				if item.Owner.Kind == "unknown" {
+					item.Owner = Owner{Kind: "process", PID: p.pid}
 				}
 			}
 		}
@@ -133,6 +137,14 @@ func scanOwners(ctx context.Context, o Options, items []Item) (projectUsage, err
 			readProcessPaths(p.dir, record)
 		}
 	}
+	// Process fds expose socket inodes. The namespace's socket table supplies bound paths.
+	readProcPaths(filepath.Join(o.ProcRoot, "net", "unix"), 7, func(path string) {
+		if filepath.IsAbs(path) {
+			if item := findItem(filepath.Clean(path)); item != nil {
+				item.socketInUse = true
+			}
+		}
+	})
 	return projects, ctx.Err()
 }
 
@@ -181,8 +193,13 @@ func readProcessPaths(procDir string, record func(string)) {
 			record(procPath(path))
 		}
 	}
+	readProcPaths(filepath.Join(procDir, "maps"), 5, func(path string) {
+		record(procPath(path))
+	})
+}
 
-	f, err := os.Open(filepath.Join(procDir, "maps"))
+func readProcPaths(file string, fields int, record func(string)) {
+	f, err := os.Open(file)
 	if err != nil {
 		return
 	}
@@ -190,9 +207,8 @@ func readProcessPaths(procDir string, record func(string)) {
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		path := s.Text()
-		// After the five fixed fields the rest of the line is the pathname,
-		// which can include spaces.
-		for range 5 {
+		// The pathname follows the fixed fields and can include spaces.
+		for range fields {
 			i := strings.IndexAny(path, " \t")
 			if i < 0 {
 				path = ""
@@ -200,7 +216,7 @@ func readProcessPaths(procDir string, record func(string)) {
 			}
 			path = strings.TrimLeft(path[i:], " \t")
 		}
-		record(procPath(path))
+		record(path)
 	}
 }
 
@@ -223,7 +239,7 @@ func itemState(item Item, projects projectUsage, cutoff time.Time) State {
 	switch {
 	case item.Owner.Kind == "aq_task":
 		return "aq_task"
-	case item.Partial || len(item.PIDs) != 0:
+	case item.Partial || item.socketInUse || len(item.PIDs) != 0:
 		return "in_use"
 	case item.Owner.Kind == "claude_project" && (projects.cwdUnreadable || projects.alive[item.Owner.Project]):
 		if recent {
