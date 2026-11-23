@@ -1,16 +1,22 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
-	"time"
 )
 
 func cmdTop(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("top")
 	asJSON := fs.Bool("json", false, "JSON output")
+	sessions := fs.Bool("sessions", false, "show the full agent session table")
 	pos, e := parseFlags(fs, args)
 	if e != nil {
 		return e
@@ -24,6 +30,10 @@ func cmdTop(c *cmdCtx, args []string) error {
 	}
 	if *asJSON {
 		return printJSON(c, v)
+	}
+	if *sessions {
+		printSessions(c, v.Sessions)
+		return nil
 	}
 	if c.ui.pretty {
 		c.prettyTop(v)
@@ -69,9 +79,88 @@ func printTop(c *cmdCtx, v daemon.TopView) {
 	}
 	fmt.Fprintf(c.stdout, "queue: %d queued, %d running, %d held; head %s\n", v.Queue.Queued, v.Queue.Running, v.Queue.Held, head)
 	fmt.Fprintf(c.stdout, "disk: %s\n", c.diskText(v.Disk, time.Now()))
+	printSessionsLine(c, v)
+	suffix := tmpSummarySuffix(v.TmpSummary)
 	if t := v.Tmp; t != nil {
-		fmt.Fprintf(c.stdout, "tmp: %s\n", tmpText(t))
+		fmt.Fprintf(c.stdout, "tmp: %s%s\n", tmpText(t), suffix)
+	} else if suffix != "" {
+		fmt.Fprintln(c.stdout, "tmp: "+strings.TrimPrefix(suffix, "; "))
 	}
+}
+
+func printSessionsLine(c *cmdCtx, v daemon.TopView) {
+	if len(v.Sessions) == 0 && v.SessionsIdleAfterSeconds == 0 {
+		return
+	}
+	var bytes uint64
+	var idle []agentsess.Session
+	for _, s := range v.Sessions {
+		bytes += s.AgentBytes + s.RunBytes
+		if s.IdleSeconds != nil && *s.IdleSeconds > v.SessionsIdleAfterSeconds {
+			idle = append(idle, s)
+		}
+	}
+	fmt.Fprintf(c.stdout, "sessions: %d (%s)", len(v.Sessions), size(bytes))
+	if len(idle) > 0 {
+		slices.SortStableFunc(idle, func(a, b agentsess.Session) int {
+			return cmp.Compare(*b.IdleSeconds, *a.IdleSeconds)
+		})
+		entries := make([]string, 0, min(len(idle), 3))
+		for _, s := range idle[:min(len(idle), 3)] {
+			entries = append(entries, fmt.Sprintf("%s %s %s", sessionName(s), compactSize(s.AgentBytes+s.RunBytes), fmtSecs(*s.IdleSeconds)))
+		}
+		fmt.Fprintf(c.stdout, "; idle >%s: %s", fmtSecs(v.SessionsIdleAfterSeconds), strings.Join(entries, ", "))
+	}
+	fmt.Fprintln(c.stdout)
+}
+
+func printSessions(c *cmdCtx, sessions []agentsess.Session) {
+	t := table{head: []string{"NAME", "CLIENT", "PROJECT", "AGENT", "RUN", "SWAP", "IDLE"}, right: map[int]bool{3: true, 4: true, 5: true, 6: true}}
+	home := c.env("HOME")
+	for _, s := range sessions {
+		project := s.Cwd
+		switch {
+		case project == "":
+			project = "-"
+		case home != "" && home != "/" && project == home:
+			project = "~"
+		case home != "" && strings.HasPrefix(project, home+"/"):
+			project = "~" + project[len(home):]
+		}
+		idle := "-"
+		if s.IdleSeconds != nil {
+			idle = fmtSecs(*s.IdleSeconds)
+		}
+		t.add(sessionName(s), s.Client, project, size(s.AgentBytes), size(s.RunBytes), size(s.SwapBytes), idle)
+	}
+	t.write(c.ui, c.stdout)
+}
+
+func sessionName(s agentsess.Session) string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return fmt.Sprintf("pid %d", s.PID)
+}
+
+var compactSizeUnits = strings.NewReplacer(" TiB", "T", " GiB", "G", " MiB", "M", " KiB", "K", " B", "B")
+
+func compactSize(bytes uint64) string { return compactSizeUnits.Replace(size(bytes)) }
+
+func tmpSummarySuffix(summary *daemon.TmpSummary) string {
+	if summary == nil {
+		return ""
+	}
+	orphans, candidates := tmpSizes(summary.OrphanBytes, summary.CandidateBytes)
+	s := fmt.Sprintf("; orphans %s, candidates %s", orphans, candidates)
+	if len(summary.Items) > 0 {
+		items := make([]string, 0, len(summary.Items))
+		for _, item := range summary.Items {
+			items = append(items, item.Path+" "+compactSize(item.Bytes))
+		}
+		s += "; largest: " + strings.Join(items, ", ")
+	}
+	return s
 }
 
 // diskStale is how old the last disk rate may be before aq top says so.

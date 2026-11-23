@@ -19,7 +19,7 @@ var helpGroups = []struct {
 }{
 	{"Tasks", []string{"submit", "wait", "status", "result", "logs", "cancel", "list"}},
 	{"Reservations (docker stands and other long-lived memory)", []string{"reserve", "extend", "release", "teardown"}},
-	{"Planning and insight", []string{"top", "dashboard", "estimate", "profile", "stats"}},
+	{"Planning and insight", []string{"top", "tmp", "dashboard", "estimate", "profile", "stats"}},
 	{"Setup and integration", []string{"doctor", "daemon", "ack", "hook", "mcp", "version", "help"}},
 }
 
@@ -44,7 +44,10 @@ var helps = map[string]cmdHelp{
 	"extend":   {"aq extend --ttl DURATION ID", "extend a reservation's TTL", "", []string{"aq extend RES_ID --ttl 1h"}},
 	"release":  {"aq release [--force] ID", "free a reservation whose stand you have shut down (no teardown script runs)", "With --docker-project, prints the stand's measured peak against --memory when it missed.", []string{"aq release RES_ID"}},
 	"teardown": {"aq teardown --retry ID", "run a failed teardown again", "", []string{"aq teardown --retry RES_ID"}},
-	"top":      {"aq top [--json]", "host memory, what uses it, and what aq has committed", "", []string{"aq top"}},
+	"top": {"aq top [--json] [--sessions]", "host memory, agent sessions, temp space and aq commitments",
+		"--sessions shows the full agent session table with project, memory, swap and known idle time.", []string{"aq top", "aq top --sessions"}},
+	"tmp": {"aq tmp [--json] [--rescan]", "inspect /tmp usage and the latest inventory",
+		"Shows the largest items first. States are aq_task, in_use, live, candidate, orphan and recent.\n--json returns the full scan report. --rescan requests a fresh inventory. This release never deletes files.", []string{"aq tmp", "aq tmp --rescan --json"}},
 	"dashboard": {"aq dashboard [--json]", "the queue, what it uses now and the last day, as JSON for panels",
 		"Always JSON (version 1): host and pool, queue counts, items not finished yet in queue order\n(memory_current for running ones), items ended in the last 24 h (recent, at most 20) and the\nday's task outcomes. The daemon keeps the same JSON in $XDG_RUNTIME_DIR/agent-queue/dashboard.json\n(tmpfs): rewritten at once when an item changes state, at most every 10 s when only figures\nmove, at least every 30 s; removed when the daemon stops.",
 		[]string{"aq dashboard | jq .day"}},

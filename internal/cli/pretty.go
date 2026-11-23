@@ -236,18 +236,20 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 	fmt.Fprintln(w)
 	u.heading(w, "Disk writes")
 	fmt.Fprintf(w, "  %s\n", c.diskText(v.Disk, time.Now()))
+	printSessionsLine(c, v)
 
+	suffix := tmpSummarySuffix(v.TmpSummary)
 	if t := v.Tmp; t != nil {
 		fmt.Fprintln(w)
 		u.heading(w, "Temp dirs")
 		switch {
 		case t.Root == "":
-			fmt.Fprintf(w, "  %s %s\n", u.yellow("in the state dir:"), t.Reason)
+			fmt.Fprintf(w, "  %s %s%s\n", u.yellow("in the state dir:"), t.Reason, suffix)
 		case t.Error != "":
-			fmt.Fprintf(w, "  %s %s\n", t.Root, u.red(t.Error))
+			fmt.Fprintf(w, "  %s %s%s\n", t.Root, u.red(t.Error), suffix)
 		default:
 			used := t.Size - min(t.Free, t.Size)
-			fmt.Fprintf(w, "  %s %s %s used of %s · %d inodes free\n", pad("space", 14), u.bar(used, t.Size, 24), size(used), size(t.Size), t.InodesFree)
+			fmt.Fprintf(w, "  %s %s %s used of %s · %d inodes free%s\n", pad("space", 14), u.bar(used, t.Size, 24), size(used), size(t.Size), t.InodesFree, suffix)
 			note := t.Root
 			if t.Tmpfs {
 				note += " · tmpfs: temp files count as task memory"
@@ -257,6 +259,8 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 				fmt.Fprintf(w, "  %s\n", u.yellow(t.Reason))
 			}
 		}
+	} else if suffix != "" {
+		fmt.Fprintln(w, "tmp: "+strings.TrimPrefix(suffix, "; "))
 	}
 }
 

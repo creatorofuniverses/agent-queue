@@ -58,7 +58,10 @@ workload: the hint can also match quoted text or a light command.
 4. **Will it start soon?** Run `aq estimate --name tests --memory 4G --cpus 4 --timeout 30m`;
    omit memory only with usable history. Estimates can be wrong. If the queue is
    long, continue independent work. `aq top` shows host memory, pressure,
-   commitments and the blocked queue head.
+   commitments and the blocked queue head. `aq top --sessions` shows each agent
+   session's memory, swap and idle time. `aq tmp [--json] [--rescan]` inspects
+   the /tmp inventory without deleting files.
+   The report states are `aq_task`, `in_use`, `live`, `candidate`, `orphan` and `recent`.
 5. **Reservation budgets stay explicit.** Profiles learn from completed tasks,
    including named tasks submitted with `--within`, not from reservations. Aq
    does not automatically shrink a reservation's stand or task budget. Give

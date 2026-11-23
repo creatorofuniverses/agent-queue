@@ -95,6 +95,8 @@ For shell expansion and `$AQ_CPUS`, see [running tasks](docs/guide.md#running-ta
 | Read its output | `aq logs ID --tail 50` |
 | Stop a job | `aq cancel ID` |
 | See a snapshot of the machine and pool | `aq top` |
+| Inspect each agent session's memory, swap and idle time | `aq top --sessions` |
+| Inspect the latest /tmp inventory (read-only) | `aq tmp [--json] [--rescan]` |
 | Feed a panel or status bar (JSON) | `aq dashboard` |
 | Summarize the last week | `aq stats --since 7d` |
 | See who wrote to the disk, by source | `aq stats disk` |

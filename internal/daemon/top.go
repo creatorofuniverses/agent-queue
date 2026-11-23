@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 	"github.com/creatorofuniverses/agent-queue/internal/tmpdir"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
 
 type HostView struct {
@@ -49,7 +51,18 @@ type TopView struct {
 	Queue       QueueView             `json:"queue"`
 	Tmp         *TmpView              `json:"tmp,omitempty"`
 	// Disk is the write rate of the last disk sample; nil until the sampler has a delta.
-	Disk *DiskRate `json:"disk,omitempty"`
+	Disk                     *DiskRate           `json:"disk,omitempty"`
+	Sessions                 []agentsess.Session `json:"sessions,omitempty"`
+	SessionsIdleAfterSeconds float64             `json:"sessions_idle_after_seconds,omitempty"`
+	TmpSummary               *TmpSummary         `json:"tmp_summary,omitempty"`
+}
+
+// TmpSummary is the last inventory's totals and at most three largest entries.
+type TmpSummary struct {
+	OrphanBytes    uint64         `json:"orphan_bytes"`
+	CandidateBytes uint64         `json:"candidate_bytes"`
+	ScannedAt      time.Time      `json:"scanned_at"`
+	Items          []tmpscan.Item `json:"items"`
 }
 
 // TmpView is the filesystem holding task temp dirs. Root is empty when they
@@ -154,6 +167,20 @@ func (d *server) top(ctx context.Context) (any, error) {
 	v := TopView{At: time.Now().UTC(), Host: HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed}, Physical: physicalView(u, ue, mem), Commitments: p.Commitments, Queue: QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}, Tmp: tmp}
 	if d.lastDisk != nil {
 		v.Disk = d.lastDisk.Load()
+	}
+	if d.lastSessions != nil {
+		if sessions := d.lastSessions.Load(); sessions != nil {
+			v.Sessions = *sessions
+			v.SessionsIdleAfterSeconds = d.cfg.Sessions.IdleAfter.Seconds()
+		}
+	}
+	if d.lastTmp != nil {
+		if report := d.lastTmp.Load(); report != nil {
+			v.TmpSummary = &TmpSummary{
+				OrphanBytes: report.OrphanBytes, CandidateBytes: report.CandidateBytes,
+				ScannedAt: report.At.UTC(), Items: report.Items[:min(len(report.Items), 3)],
+			}
+		}
 	}
 	return v, nil
 }

@@ -313,6 +313,46 @@ docker, such as a test suite or a build run directly (`spawned` in `--json`, per
 agent); "other" is the rest: the system, a terminal multiplexer, the kernel.
 `aq stats` keeps the same split over time in "Host memory" (area `memory`).
 
+`aq top` also shows the number of sampled agent sessions, their total agent
+and child-process memory, and up to three sessions idle longer than
+`[sessions] idle_after` (12 hours by default). `aq top --sessions` shows every
+session's name (or PID), client, project directory, agent memory, child-process
+memory, swap and idle time. A dash means idle time is unknown.
+
+### Temporary files and session alerts
+
+The `tmp:` line in `aq top` includes orphan and candidate totals and up to three
+of the largest scanned entries. `aq tmp` shows filesystem usage, both totals,
+scan age and a table ordered by decreasing size. Entries marked `*` were only
+partly scanned. `aq tmp --json` returns the full scan report. The daemon scans
+every 10 minutes by default, and `aq tmp --rescan` requests a fresh scan.
+This release only inventories files. It never deletes them.
+
+| State | Meaning |
+|---|---|
+| `aq_task` | Owned by an aq task. |
+| `in_use` | A process is using the entry, or the scan was partial. |
+| `live` | A recent scratchpad for a live Claude project. |
+| `candidate` | An older scratchpad for a live Claude project with no process using the entry. |
+| `orphan` | An older entry with no process using it and no known live owner. |
+| `recent` | Any other entry written within `[tmp] orphan_after` (24 hours by default). |
+
+| Operator alert | Default threshold |
+|---|---|
+| `tmp_full` | 70% of /tmp bytes or inodes in use. |
+| `swap_full` | 75% of swap in use. |
+| `sessions_heavy` | 6 GiB of combined agent and child-process memory. |
+| `sessions_idle` | Three sessions with known idle times at or past `[sessions] idle_after`. |
+| `tmp_orphans` | 2 GiB of orphan and candidate entries combined. |
+
+The first four alerts open when the average over `[alerts] window` (10 minutes
+by default) reaches the threshold and clear when it drops below half.
+`tmp_orphans` uses two consecutive complete scans to open or clear. A threshold
+of zero disables its alert. The operator webhook receives one notification when
+an alert opens and one when it clears.
+
+### Dashboard snapshot
+
 For panels and status bars, `aq dashboard` prints one JSON document (`version`
 1): host memory and the pressure and guard flags, the pool's commitments, the
 queue counts, every item not finished yet in queue order (with `position`,

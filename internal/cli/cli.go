@@ -52,6 +52,7 @@ func init() {
 		"profile":   cmdProfile,
 		"estimate":  cmdEstimate,
 		"top":       cmdTop,
+		"tmp":       cmdTmp,
 		"dashboard": cmdDashboard,
 		"daemon":    cmdDaemon,
 		"submit":    cmdSubmit,
