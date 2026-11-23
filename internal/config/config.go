@@ -658,6 +658,16 @@ func (c Config) validatePlan4() error {
 	if c.Alerts.Window < 5*c.Stats.SampleInterval {
 		return fmt.Errorf("alerts.window must be at least 5 sample intervals (%s)", 5*c.Stats.SampleInterval)
 	}
+	switch {
+	case c.TmpScan.ScanInterval <= 0:
+		return fmt.Errorf("tmp.scan_interval must be positive")
+	case c.TmpScan.OrphanAfter <= 0:
+		return fmt.Errorf("tmp.orphan_after must be positive")
+	case c.Sessions.IdleAfter <= 0:
+		return fmt.Errorf("sessions.idle_after must be positive")
+	case c.Sessions.AlertIdleCount < 0:
+		return fmt.Errorf("sessions.alert_idle_count must be non-negative")
+	}
 	for _, n := range c.Stats.AgentProcesses {
 		if n == "" || strings.Contains(n, "/") {
 			return fmt.Errorf("stats.agent_processes must contain nonempty names without /")

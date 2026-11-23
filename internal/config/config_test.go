@@ -652,3 +652,29 @@ func TestAlertsWindowFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTmpSessionsRangeValidation(t *testing.T) {
+	for _, tc := range []struct {
+		key, toml string
+	}{
+		{"tmp.scan_interval", "[tmp]\nscan_interval = \"0s\"\n"},
+		{"tmp.orphan_after", "[tmp]\norphan_after = \"0s\"\n"},
+		{"sessions.idle_after", "[sessions]\nidle_after = \"0s\"\n"},
+		{"sessions.alert_idle_count", "[sessions]\nalert_idle_count = -1\n"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			c, err := loadConfigTOML(t, tc.toml)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Validate(64*gib, 16); err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("want validation error for %s, got %v", tc.key, err)
+			}
+		})
+	}
+	c := Default()
+	c.Sessions.AlertIdleCount = 0
+	if err := c.Validate(64*gib, 16); err != nil {
+		t.Fatalf("zero idle threshold should disable the alarm: %v", err)
+	}
+}
