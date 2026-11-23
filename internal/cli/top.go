@@ -96,7 +96,7 @@ func printSessionsLine(c *cmdCtx, v daemon.TopView) {
 	var idle []agentsess.Session
 	for _, s := range v.Sessions {
 		bytes += s.AgentBytes + s.RunBytes
-		if s.IdleSeconds != nil && *s.IdleSeconds > v.SessionsIdleAfterSeconds {
+		if s.IdleSeconds != nil && *s.IdleSeconds >= v.SessionsIdleAfterSeconds {
 			idle = append(idle, s)
 		}
 	}
@@ -109,7 +109,7 @@ func printSessionsLine(c *cmdCtx, v daemon.TopView) {
 		for _, s := range idle[:min(len(idle), 3)] {
 			entries = append(entries, fmt.Sprintf("%s %s %s", sessionName(s), compactSize(s.AgentBytes+s.RunBytes), fmtSecs(*s.IdleSeconds)))
 		}
-		fmt.Fprintf(c.stdout, "; idle >%s: %s", fmtSecs(v.SessionsIdleAfterSeconds), strings.Join(entries, ", "))
+		fmt.Fprintf(c.stdout, "; idle >=%s: %s", fmtSecs(v.SessionsIdleAfterSeconds), strings.Join(entries, ", "))
 	}
 	fmt.Fprintln(c.stdout)
 }

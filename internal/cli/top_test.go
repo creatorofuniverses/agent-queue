@@ -90,9 +90,40 @@ func TestTopSessionsLine(t *testing.T) {
 	payload := json.RawMessage(fmt.Sprintf(`{"sessions_idle_after_seconds":43200,"sessions":[%s]}`, strings.Join(sessions, ",")))
 	stubInsight(t, h, "top", "", payload, nil)
 	code, out, errout := h.run("top")
-	want := "sessions: 10 (4.2 GiB); idle >12h: ruchat-75 509M 44h, qa 1.0G 30h, main 1M 24h\n"
+	want := "sessions: 10 (4.2 GiB); idle >=12h: ruchat-75 509M 44h, qa 1.0G 30h, main 1M 24h\n"
 	if code != 0 || errout != "" || !strings.Contains(out, want) {
 		t.Fatalf("want %q, got exit %d, stdout %q, stderr %q", want, code, out, errout)
+	}
+}
+
+func TestTopSessionsLineIncludesIdleThreshold(t *testing.T) {
+	h := newHarness(t)
+	payload := json.RawMessage(`{"sessions_idle_after_seconds":43200,"sessions":[{"pid":1,"name":"at-threshold","idle_seconds":43200},{"pid":2,"name":"below-threshold","idle_seconds":43199}]}`)
+	stubInsight(t, h, "top", "", payload, nil)
+	code, out, errout := h.run("top")
+	if code != 0 || errout != "" || !strings.Contains(out, "; idle >=12h: at-threshold 0B 12h\n") {
+		t.Fatalf("want the session at the idle threshold, got exit %d, stdout %q, stderr %q", code, out, errout)
+	}
+}
+
+func TestDashboardHelpDescribesPanelFields(t *testing.T) {
+	h := newHarness(t)
+	code, out, errout := h.run("help", "dashboard")
+	if code != 0 || errout != "" {
+		t.Fatal(code, out, errout)
+	}
+	for _, want := range []string{"sessions", "tmp", "complete", "partial_items", "alerts", "an alert opens or clears"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dashboard help missing %q", want)
+		}
+	}
+}
+
+func TestTmpHelpDescribesDefaultLimit(t *testing.T) {
+	h := newHarness(t)
+	code, out, errout := h.run("help", "tmp")
+	if code != 0 || errout != "" || !strings.Contains(out, "[--all]") || !strings.Contains(out, "30 largest") {
+		t.Fatalf("want help with default limit and --all, got exit %d, stdout %q, stderr %q", code, out, errout)
 	}
 }
 
