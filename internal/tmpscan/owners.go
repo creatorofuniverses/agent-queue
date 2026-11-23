@@ -11,23 +11,38 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
-// ClaudeProject encodes a working directory as a Claude project directory name.
+const claudeProjectLimit = 200
+
+// ClaudeProject encodes a working directory before Claude's length limit and
+// hash suffix are applied. The replacement works on UTF-16 code units.
 func ClaudeProject(dir string) string {
-	return strings.Map(func(r rune) rune {
+	var encoded strings.Builder
+	encoded.Grow(len(dir))
+	for _, r := range dir {
 		switch {
 		case 'A' <= r && r <= 'Z', 'a' <= r && r <= 'z', '0' <= r && r <= '9':
-			return r
+			encoded.WriteByte(byte(r))
+		case utf16.RuneLen(r) == 2:
+			encoded.WriteString("--")
 		default:
-			return '-'
+			encoded.WriteByte('-')
 		}
-	}, dir)
+	}
+	return encoded.String()
 }
 
 type projectUsage struct {
 	alive         map[string]bool
+	prefixes      map[string]bool
 	cwdUnreadable bool
+}
+
+func (p projectUsage) isAlive(name string) bool {
+	return p.cwdUnreadable || p.alive[name] ||
+		len(name) > claudeProjectLimit && name[claudeProjectLimit] == '-' && p.prefixes[name[:claudeProjectLimit]]
 }
 
 type scanProcess struct {
@@ -37,7 +52,7 @@ type scanProcess struct {
 }
 
 func scanOwners(ctx context.Context, o Options, items []Item) (projectUsage, error) {
-	projects := projectUsage{alive: make(map[string]bool)}
+	projects := projectUsage{alive: make(map[string]bool), prefixes: make(map[string]bool)}
 	entries, err := os.ReadDir(o.ProcRoot)
 	if err != nil {
 		return projects, err
@@ -86,7 +101,13 @@ func scanOwners(ctx context.Context, o Options, items []Item) (projectUsage, err
 
 	for cwd := range cwds {
 		for dir := cwd; ; dir = filepath.Dir(dir) {
-			projects.alive[ClaudeProject(dir)] = true
+			name := ClaudeProject(dir)
+			if len(name) > claudeProjectLimit {
+				// Any hash suffix could belong to this live working directory.
+				projects.prefixes[name[:claudeProjectLimit]] = true
+			} else {
+				projects.alive[name] = true
+			}
 			if dir == "/" {
 				break
 			}
@@ -241,7 +262,7 @@ func itemState(item Item, projects projectUsage, cutoff time.Time) State {
 		return "aq_task"
 	case item.Partial || item.socketInUse || len(item.PIDs) != 0:
 		return "in_use"
-	case item.Owner.Kind == "claude_project" && (projects.cwdUnreadable || projects.alive[item.Owner.Project]):
+	case item.Owner.Kind == "claude_project" && projects.isAlive(item.Owner.Project):
 		if recent {
 			return "live"
 		}

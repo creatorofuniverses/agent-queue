@@ -38,7 +38,8 @@ type Item struct {
 	Gits      []string  `json:"gits,omitempty"` // every .git below the root, relative
 	PIDs      []int     `json:"pids,omitempty"` // up to 5 processes using it
 
-	socketInUse bool
+	socketInUse    bool
+	budgetExceeded bool
 }
 
 type Report struct {
@@ -47,7 +48,8 @@ type Report struct {
 	Items          []Item    `json:"items"` // largest first
 	OrphanBytes    uint64    `json:"orphan_bytes"`
 	CandidateBytes uint64    `json:"candidate_bytes"`
-	Complete       bool      `json:"complete"` // no item partial
+	Complete       bool      `json:"complete"` // no item exceeded its time budget
+	PartialItems   int       `json:"partial_items"`
 }
 
 type Options struct {
@@ -148,7 +150,10 @@ func scan(ctx context.Context, o Options, lstat func(string) (fs.FileInfo, error
 	for i := range r.Items {
 		item := &r.Items[i]
 		item.State = itemState(*item, projects, cutoff)
-		r.Complete = r.Complete && !item.Partial
+		r.Complete = r.Complete && !item.budgetExceeded
+		if item.Partial {
+			r.PartialItems++
+		}
 		switch item.State {
 		case "orphan":
 			r.OrphanBytes += item.Bytes
@@ -185,7 +190,8 @@ func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint6
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() || uint64(info.Sys().(*syscall.Stat_t).Dev) != dev {
+		projectStat := info.Sys().(*syscall.Stat_t)
+		if !info.IsDir() || uint64(projectStat.Dev) != dev {
 			continue
 		}
 		sessions, err := os.ReadDir(path)
@@ -193,7 +199,12 @@ func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint6
 			continue
 		}
 		if err != nil {
-			return err
+			if int(projectStat.Uid) == o.UID {
+				item := newItem(path, info, Owner{Kind: "claude_project", Project: project.Name()})
+				item.Partial = true
+				r.Items = append(r.Items, item)
+			}
+			continue
 		}
 		for _, session := range sessions {
 			if !session.IsDir() {
@@ -222,21 +233,36 @@ func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint6
 	return nil
 }
 
-func walkItem(ctx context.Context, o Options, path string, root fs.FileInfo, owner Owner) (Item, error) {
-	deadline := time.Now().Add(o.ItemBudget)
+func lastWrite(st *syscall.Stat_t) time.Time {
+	mtime := time.Unix(st.Mtim.Unix())
+	ctime := time.Unix(st.Ctim.Unix())
+	if ctime.After(mtime) {
+		return ctime
+	}
+	return mtime
+}
+
+func newItem(path string, root fs.FileInfo, owner Owner) Item {
 	st := root.Sys().(*syscall.Stat_t)
 	item := Item{
 		Path: path, Dev: uint64(st.Dev), Ino: uint64(st.Ino), Bytes: uint64(st.Blocks) * 512,
-		Inodes: 1, LastWrite: root.ModTime(), Kind: "other", Owner: owner,
-	}
-	// Socket entries can belong to a server in a different network namespace.
-	item.socketInUse = root.Mode()&fs.ModeSocket != 0
-	if !root.IsDir() {
-		return item, ctx.Err()
+		Inodes: 1, LastWrite: lastWrite(st), Kind: "other", Owner: owner,
 	}
 	if owner.Kind == "claude_project" {
 		item.Kind = "claude_scratchpad"
-	} else {
+	}
+	// Socket entries can belong to a server in a different network namespace.
+	item.socketInUse = root.Mode()&fs.ModeSocket != 0
+	return item
+}
+
+func walkItem(ctx context.Context, o Options, path string, root fs.FileInfo, owner Owner) (Item, error) {
+	deadline := time.Now().Add(o.ItemBudget)
+	item := newItem(path, root, owner)
+	if !root.IsDir() {
+		return item, ctx.Err()
+	}
+	if owner.Kind != "claude_project" {
 		item.Kind = rootKind(path, item.Dev)
 	}
 	err := filepath.WalkDir(path, func(name string, entry fs.DirEntry, err error) error {
@@ -244,7 +270,6 @@ func walkItem(ctx context.Context, o Options, path string, root fs.FileInfo, own
 			return err
 		}
 		if !time.Now().Before(deadline) {
-			item.Partial = true
 			return fs.SkipAll
 		}
 		if err != nil {
@@ -269,8 +294,8 @@ func walkItem(ctx context.Context, o Options, path string, root fs.FileInfo, own
 		item.Bytes += uint64(st.Blocks) * 512
 		item.Inodes++
 		item.socketInUse = item.socketInUse || info.Mode()&fs.ModeSocket != 0
-		if info.ModTime().After(item.LastWrite) {
-			item.LastWrite = info.ModTime()
+		if at := lastWrite(st); at.After(item.LastWrite) {
+			item.LastWrite = at
 		}
 		if entry.Name() == ".git" {
 			item.Gits = append(item.Gits, name[len(path)+1:])
@@ -278,7 +303,8 @@ func walkItem(ctx context.Context, o Options, path string, root fs.FileInfo, own
 		return nil
 	})
 	// The final filesystem call can finish after the deadline.
-	item.Partial = item.Partial || !time.Now().Before(deadline)
+	item.budgetExceeded = !time.Now().Before(deadline)
+	item.Partial = item.Partial || item.budgetExceeded
 	return item, err
 }
 

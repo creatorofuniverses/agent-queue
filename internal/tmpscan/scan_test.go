@@ -14,7 +14,7 @@ import (
 )
 
 func TestScanItemsAndKinds(t *testing.T) {
-	o := fixture(t)
+	o := agedFixture(t)
 	for _, name := range []string{
 		"gocache/README", "gocache/trim.txt", "venv/pyvenv.cfg", "wt/.git",
 		"big/sub/repo/.git/config", "x.log",
@@ -66,7 +66,7 @@ func TestScanItemsAndKinds(t *testing.T) {
 }
 
 func TestScanClaudeScratchpads(t *testing.T) {
-	o := fixture(t)
+	o := agedFixture(t)
 	fakeProcess(t, o, 101, 0, "fish", "/p/a/sub")
 	cases := []struct {
 		project, session string
@@ -103,10 +103,66 @@ func TestScanPartial(t *testing.T) {
 	writeFile(t, filepath.Join(o.Root, "z.log"), "x")
 	r := scanFixture(t, o)
 	big := itemAt(t, r, "big")
-	if r.Complete || !big.Partial || big.State != "in_use" {
+	if r.Complete || r.PartialItems != 1 || !big.Partial || big.State != "in_use" {
 		t.Errorf("expected incomplete report with partial in_use item, got %+v", r)
 	}
 	itemAt(t, r, "z.log")
+}
+
+func TestScanRecentCTimeWithOldMTimes(t *testing.T) {
+	o := fixture(t)
+	o.Now = time.Now
+	dir := filepath.Join(o.Root, "copied")
+	file := filepath.Join(dir, "old.log")
+	writeFile(t, file, "old")
+	old := time.Now().Add(-30 * time.Hour)
+	touch(t, dir, old)
+	touch(t, file, old)
+
+	want := time.Unix(statAt(t, file).Ctim.Unix())
+	item := itemAt(t, scanFixture(t, o), "copied")
+	if item.State != "recent" || !item.LastWrite.Equal(want) {
+		t.Errorf("state = %s, last write = %v, want recent at %v", item.State, item.LastWrite, want)
+	}
+}
+
+func TestScanUnreadableSubtree(t *testing.T) {
+	o := fixture(t)
+	hideDirectory(t, filepath.Join(o.Root, "item", "hidden"))
+
+	r := scanFixture(t, o)
+	assertPartialItem(t, r, "item")
+}
+
+func TestScanUnreadableClaudeProject(t *testing.T) {
+	o := fixture(t)
+	project := scratchPath(o, "-hidden", "")
+	hideDirectory(t, filepath.Join(o.Root, project))
+	scratchpad(t, o, "-visible", "session", time.Hour)
+
+	r := scanFixture(t, o)
+	assertPartialItem(t, r, project)
+	itemAt(t, r, scratchPath(o, "-visible", "session"))
+}
+
+func hideDirectory(t *testing.T, path string) {
+	t.Helper()
+	makeDir(t, path)
+	must(t, os.Chmod(path, 0000))
+	t.Cleanup(func() { must(t, os.Chmod(path, 0700)) })
+	if _, err := os.ReadDir(path); err == nil {
+		t.Skip("test user can read mode-0000 directories")
+	} else if !errors.Is(err, fs.ErrPermission) {
+		t.Fatal(err)
+	}
+}
+
+func assertPartialItem(t *testing.T, r Report, rel string) {
+	t.Helper()
+	item := itemAt(t, r, rel)
+	if !item.Partial || item.State != "in_use" || !r.Complete || r.PartialItems != 1 {
+		t.Errorf("partial item = %+v, complete = %t, partial items = %d, want partial in_use with a complete pass", item, r.Complete, r.PartialItems)
+	}
 }
 
 func TestScanForeignUIDAndSymlinks(t *testing.T) {
@@ -145,7 +201,7 @@ func TestScanNoClaudeDir(t *testing.T) {
 }
 
 func TestOrphanAndCandidateTotals(t *testing.T) {
-	o := fixture(t)
+	o := agedFixture(t)
 	fakeProcess(t, o, 101, 0, "fish", "/p/alive")
 	scratchpad(t, o, "-p-alive", "old", 30*time.Hour)
 	scratchpad(t, o, "-p-alive", "new", time.Hour)
@@ -188,6 +244,16 @@ func fixture(t *testing.T) Options {
 		Root: t.TempDir(), ProcRoot: t.TempDir(), UID: os.Getuid(),
 		OrphanAfter: 24 * time.Hour, Now: func() time.Time { return now },
 	}
+}
+
+// Ctime is set by the filesystem. Advancing the scan clock lets Chtimes
+// fixtures represent old trees without needing to change the host clock.
+func agedFixture(t *testing.T) Options {
+	t.Helper()
+	o := fixture(t)
+	now := o.Now().Add(48 * time.Hour)
+	o.Now = func() time.Time { return now }
+	return o
 }
 
 func scanFixture(t *testing.T, o Options) Report {

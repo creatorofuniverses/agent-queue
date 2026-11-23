@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,10 +16,30 @@ func TestClaudeProject(t *testing.T) {
 	for path, want := range map[string]string{
 		"/home/u/.codex/worktrees/x_y": "-home-u--codex-worktrees-x-y",
 		"/home/u/проект":               "-home-u-------",
+		"/home/u/😀x":                   "-home-u---x",
 	} {
 		if got := ClaudeProject(path); got != want {
 			t.Errorf("ClaudeProject(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestScanLongClaudeProjectsStayLive(t *testing.T) {
+	o := agedFixture(t)
+	fakeProcess(t, o, 101, 0, "claude", "/"+strings.Repeat("a", 249))
+	prefix := "-" + strings.Repeat("a", 199)
+	for _, suffix := range []string{"abc123", "def456"} {
+		scratchpad(t, o, prefix+"-"+suffix, "new", time.Hour)
+	}
+	scratchpad(t, o, prefix+"xyz", "unrelated", 30*time.Hour)
+	r := scanFixture(t, o)
+	for _, suffix := range []string{"abc123", "def456"} {
+		if item := itemAt(t, r, scratchPath(o, prefix+"-"+suffix, "new")); item.State != "live" {
+			t.Errorf("project %s: state = %s, want live", suffix, item.State)
+		}
+	}
+	if item := itemAt(t, r, scratchPath(o, prefix+"xyz", "unrelated")); item.State != "orphan" {
+		t.Errorf("unrelated project: state = %s, want orphan", item.State)
 	}
 }
 
@@ -94,7 +115,7 @@ func TestScanUnixSocketBackstop(t *testing.T) {
 
 func unixSocketFixture(t *testing.T) Options {
 	t.Helper()
-	o := fixture(t)
+	o := agedFixture(t)
 	// Use a short root so a long TMPDIR cannot exceed the Unix socket path limit.
 	root, err := os.MkdirTemp("/tmp", "ts")
 	must(t, err)
@@ -159,7 +180,7 @@ func TestScanUsesSelectedProcessReferences(t *testing.T) {
 }
 
 func TestScanScratchpadInUseKeepsProjectOwner(t *testing.T) {
-	o := fixture(t)
+	o := agedFixture(t)
 	scratchpad(t, o, "-p-b", "s2", 30*time.Hour)
 	rel := scratchPath(o, "-p-b", "s2")
 	agent := fakeProcess(t, o, 101, 0, "claude", "/p/elsewhere")
@@ -188,7 +209,7 @@ func TestScanInUsePathEndingInDeleted(t *testing.T) {
 }
 
 func TestScanUnreadableCwdKeepsProjectsAlive(t *testing.T) {
-	o := fixture(t)
+	o := agedFixture(t)
 	scratchpad(t, o, "-p-b", "s2", 30*time.Hour)
 	// A process may vanish after status was read, leaving no readable cwd or stat.
 	gone := filepath.Join(o.ProcRoot, "101")
