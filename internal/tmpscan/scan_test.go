@@ -145,6 +145,25 @@ func TestScanUnreadableClaudeProject(t *testing.T) {
 	itemAt(t, r, scratchPath(o, "-visible", "session"))
 }
 
+func TestScanNonSearchableClaudeProject(t *testing.T) {
+	o := fixture(t)
+	project := scratchPath(o, "-not-searchable", "")
+	path := filepath.Join(o.Root, project)
+	scratchpad(t, o, "-not-searchable", "session", time.Hour)
+	scratchpad(t, o, "-visible", "session", time.Hour)
+	must(t, os.Chmod(path, 0600))
+	t.Cleanup(func() { must(t, os.Chmod(path, 0700)) })
+	if _, err := os.Lstat(filepath.Join(path, "session")); err == nil {
+		t.Skip("test user can search mode-0600 directories")
+	} else if !errors.Is(err, fs.ErrPermission) {
+		t.Fatal(err)
+	}
+
+	r := scanFixture(t, o)
+	assertPartialItem(t, r, project)
+	itemAt(t, r, scratchPath(o, "-visible", "session"))
+}
+
 func hideDirectory(t *testing.T, path string) {
 	t.Helper()
 	makeDir(t, path)

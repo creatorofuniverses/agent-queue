@@ -135,6 +135,7 @@ func listenUnix(t *testing.T, path string) {
 func TestScanUsesSelectedProcessReferences(t *testing.T) {
 	o := fixture(t)
 	o.Agents = []string{"agent-test"}
+	o.TaskSlices = []string{"aq.slice"}
 	for _, name := range []string{"fd", "maps with spaces", "cwd", "outside-selection", "foreign-process"} {
 		makeDir(t, filepath.Join(o.Root, name))
 	}
@@ -238,4 +239,34 @@ func fakeProcess(t *testing.T, o Options, pid, ppid int, name, cwd string) strin
 		must(t, os.Symlink(cwd, filepath.Join(dir, "cwd")))
 	}
 	return dir
+}
+
+func TestScanUsesConfiguredTaskSliceAndAgentArgv0(t *testing.T) {
+	o := agedFixture(t)
+	o.TaskSlices = []string{"aqtest.slice"}
+	for _, tc := range []struct {
+		name    string
+		pid     int
+		cgroup  string
+		cmdline string
+		want    State
+	}{
+		{name: "task", pid: 201, cgroup: "0::/user.slice/aqtest.slice/aq-task.service\n", want: "in_use"},
+		{name: "similar", pid: 202, cgroup: "0::/user.slice/notaqtest.slice/aq-task.service\n", want: "orphan"},
+		{name: "agent", pid: 203, cmdline: "/opt/agents/claude\x00--resume\x00old\x00", want: "in_use"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(o.Root, tc.name, "open")
+			writeFile(t, path, "in use")
+			pidDir := fakeProcess(t, o, tc.pid, 0, "renamed", "/work")
+			writeFile(t, filepath.Join(pidDir, "cgroup"), tc.cgroup)
+			writeFile(t, filepath.Join(pidDir, "cmdline"), tc.cmdline)
+			makeDir(t, filepath.Join(pidDir, "fd"))
+			must(t, os.Symlink(path, filepath.Join(pidDir, "fd", "3")))
+			r := scanFixture(t, o)
+			if item := itemAt(t, r, tc.name); item.State != tc.want {
+				t.Errorf("state = %s (PIDs %v), want %s", item.State, item.PIDs, tc.want)
+			}
+		})
+	}
 }

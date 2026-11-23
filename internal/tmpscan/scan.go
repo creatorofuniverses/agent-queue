@@ -59,6 +59,7 @@ type Options struct {
 	ItemBudget     time.Duration // per-item walk limit; default 5s
 	Now            func() time.Time
 	Agents         []string // process names; defaults to claude and codex
+	TaskSlices     []string // cgroup slice names for aq tasks and teardowns
 }
 
 // Scan walks the temporary directory and checks which items processes use.
@@ -198,35 +199,34 @@ func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint6
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		if err != nil {
-			if int(projectStat.Uid) == o.UID {
-				item := newItem(path, info, Owner{Kind: "claude_project", Project: project.Name()})
-				item.Partial = true
-				r.Items = append(r.Items, item)
-			}
-			continue
-		}
+		partial := err != nil
 		for _, session := range sessions {
 			if !session.IsDir() {
 				continue
 			}
 			sessionPath := filepath.Join(path, session.Name())
-			info, err := lstat(sessionPath)
+			sessionInfo, err := lstat(sessionPath)
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			if err != nil {
-				return err
+				partial = true
+				continue
 			}
-			st := info.Sys().(*syscall.Stat_t)
-			if !info.IsDir() || uint64(st.Dev) != dev || int(st.Uid) != o.UID {
+			st := sessionInfo.Sys().(*syscall.Stat_t)
+			if !sessionInfo.IsDir() || uint64(st.Dev) != dev || int(st.Uid) != o.UID {
 				continue
 			}
 			owner := Owner{Kind: "claude_project", Project: project.Name(), Session: session.Name()}
-			item, err := walkItem(ctx, o, sessionPath, info, owner)
+			item, err := walkItem(ctx, o, sessionPath, sessionInfo, owner)
 			if err != nil {
 				return err
 			}
+			r.Items = append(r.Items, item)
+		}
+		if partial && int(projectStat.Uid) == o.UID {
+			item := newItem(path, info, Owner{Kind: "claude_project", Project: project.Name()})
+			item.Partial = true
 			r.Items = append(r.Items, item)
 		}
 	}

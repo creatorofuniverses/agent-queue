@@ -82,7 +82,8 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if paths.SliceLockDir == "" {
 		return errors.New("slice lock directory is not set")
 	}
-	for _, slice := range []string{cfg.SliceName, cfg.TeardownSliceName()} {
+	taskSlices := []string{cfg.SliceName, cfg.TeardownSliceName()}
+	for _, slice := range taskSlices {
 		l, err := lockSlice(paths, slice)
 		if err != nil {
 			return err
@@ -139,7 +140,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	const tmpRoot = "/tmp"
 	emit := operatorEmitter(st, router, outbox.Kick)
 	tmpOpts := tmpscan.Options{Root: tmpRoot, ProcRoot: "/proc", UID: os.Getuid(),
-		OrphanAfter: cfg.TmpScan.OrphanAfter, Agents: cfg.Stats.AgentProcesses}
+		OrphanAfter: cfg.TmpScan.OrphanAfter, Agents: cfg.Stats.AgentProcesses, TaskSlices: taskSlices}
 	watch := newTmpWatch(runCtx, d.lastTmp, d.alerts, func(ctx context.Context) (tmpscan.Report, error) {
 		return tmpscan.Scan(ctx, tmpOpts)
 	}, emit)

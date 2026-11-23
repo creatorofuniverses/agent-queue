@@ -17,6 +17,7 @@ import (
 // Info is what a Claude Code session file says about a live process.
 type Info struct {
 	SessionID, Name, Cwd, Status string
+	ProcStart                    uint64    // start time in kernel clock ticks
 	StatusSince                  time.Time // statusUpdatedAt; zero when absent
 }
 
@@ -70,7 +71,11 @@ func (r Reader) Read() map[int]Info {
 			!matchesProcStart(filepath.Join(r.ProcRoot, pid, "stat"), record.ProcStart) {
 			continue
 		}
-		session := Info{SessionID: record.SessionID, Name: record.Name, Cwd: record.Cwd, Status: record.Status}
+		start, err := strconv.ParseUint(record.ProcStart, 10, 64)
+		if err != nil || start == 0 {
+			continue
+		}
+		session := Info{ProcStart: start, SessionID: record.SessionID, Name: record.Name, Cwd: record.Cwd, Status: record.Status}
 		if record.StatusUpdatedAt != nil {
 			session.StatusSince = time.UnixMilli(*record.StatusUpdatedAt)
 		}
@@ -103,7 +108,7 @@ func Enrich(us []platform.SessionUsage, info map[int]Info, now time.Time) []Sess
 		session := &sessions[i]
 		session.SessionUsage = usage
 		metadata, ok := info[usage.PID]
-		if !ok {
+		if !ok || usage.Start == 0 || metadata.ProcStart != usage.Start {
 			session.SessionID = resumeID(usage.Cmdline)
 			continue
 		}

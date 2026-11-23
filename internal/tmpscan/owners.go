@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
 const claudeProjectLimit = 200
@@ -75,7 +77,7 @@ func scanOwners(ctx context.Context, o Options, items []Item) (projectUsage, err
 			continue
 		}
 		children[ppid] = append(children[ppid], pid)
-		if inAgentOrTask(dir, o.Agents) {
+		if inAgentOrTask(dir, o.Agents, o.TaskSlices) {
 			treeRoots = append(treeRoots, pid)
 		}
 		if uid != o.UID {
@@ -197,13 +199,25 @@ func processIDs(procDir string) (uid, ppid int) {
 	return uid, ppid
 }
 
-func inAgentOrTask(procDir string, agents []string) bool {
-	comm, _ := os.ReadFile(filepath.Join(procDir, "comm"))
-	if slices.Contains(agents, strings.TrimSuffix(string(comm), "\n")) {
-		return true
+func inAgentOrTask(procDir string, agents, taskSlices []string) bool {
+	comm, err := os.ReadFile(filepath.Join(procDir, "comm"))
+	if err == nil {
+		cmdline, _ := os.ReadFile(filepath.Join(procDir, "cmdline"))
+		if platform.AgentIndex(agents, string(comm), string(cmdline)) >= 0 {
+			return true
+		}
 	}
 	cgroup, _ := os.ReadFile(filepath.Join(procDir, "cgroup"))
-	return strings.Contains(string(cgroup), "/aq.slice/")
+	for line := range strings.SplitSeq(string(cgroup), "\n") {
+		if path, ok := strings.CutPrefix(line, "0::"); ok {
+			for component := range strings.SplitSeq(path, "/") {
+				if slices.Contains(taskSlices, component) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func readProcessPaths(procDir string, record func(string)) {

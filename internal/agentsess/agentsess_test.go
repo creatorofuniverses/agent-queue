@@ -35,6 +35,7 @@ func TestReadSkipsBrokenAndForeign(t *testing.T) {
 
 	got := (Reader{Dir: dir, ProcRoot: proc}).Read()
 	want := Info{
+		ProcStart:   123,
 		SessionID:   "one",
 		Name:        "project-1",
 		Cwd:         "/project",
@@ -56,15 +57,15 @@ func TestReadMissingDir(t *testing.T) {
 func TestEnrichIdle(t *testing.T) {
 	now := time.Unix(1795464773, 0)
 	usage := []platform.SessionUsage{
-		{PID: 1, Client: "claude", AgentBytes: 123},
-		{PID: 2, Client: "claude", Cwd: "/live"},
+		{PID: 1, Client: "claude", Start: 123, AgentBytes: 123},
+		{PID: 2, Client: "claude", Start: 123, Cwd: "/live"},
 		{PID: 3, Client: "claude", Cwd: "/process"},
-		{PID: 4, Client: "claude"},
+		{PID: 4, Client: "claude", Start: 123},
 	}
 	info := map[int]Info{
-		1: {SessionID: "one", Name: "project-1", Cwd: "/fallback", Status: "idle", StatusSince: now.Add(-13 * time.Hour)},
-		2: {Cwd: "/recorded", Status: "busy"},
-		4: {Status: "shell"},
+		1: {ProcStart: 123, SessionID: "one", Name: "project-1", Cwd: "/fallback", Status: "idle", StatusSince: now.Add(-13 * time.Hour)},
+		2: {ProcStart: 123, Cwd: "/recorded", Status: "busy"},
+		4: {ProcStart: 123, Status: "shell"},
 	}
 
 	got := Enrich(usage, info, now)
@@ -96,5 +97,28 @@ func TestEnrichResumeID(t *testing.T) {
 	got := Enrich(usage, nil, time.Time{})
 	if len(got) != 1 || got[0].SessionID != "abc" {
 		t.Fatalf("Enrich() = %+v, want one session with ID abc", got)
+	}
+}
+
+func TestEnrichRejectsDifferentOrUnknownSampledStart(t *testing.T) {
+	dir, proc := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(proc, "1"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	stat := "1 (claude) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 200 0\n"
+	if err := os.WriteFile(filepath.Join(proc, "1", "stat"), []byte(stat), 0600); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"pid":1,"procStart":"200","sessionId":"new","name":"new process","cwd":"/new","status":"busy"}`
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), []byte(record), 0600); err != nil {
+		t.Fatal(err)
+	}
+	info := (Reader{Dir: dir, ProcRoot: proc}).Read()
+	for _, start := range []uint64{100, 0} {
+		usage := platform.SessionUsage{PID: 1, Start: start, Cmdline: []string{"claude", "--resume", "old"}}
+		got := Enrich([]platform.SessionUsage{usage}, info, time.Time{})[0]
+		if got.SessionID != "old" || got.Name != "" || got.Cwd != "" || got.Status != "" || got.IdleSeconds != nil {
+			t.Errorf("sample start %d got another process's metadata: %+v", start, got)
+		}
 	}
 }

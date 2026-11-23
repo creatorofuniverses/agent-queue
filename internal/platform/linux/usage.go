@@ -126,15 +126,10 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		}
 		cmd, _ := os.ReadFile(filepath.Join(dir, "cmdline"))
 		cmdline := string(cmd)
-		argv, _, _ := strings.Cut(cmdline, "\x00")
 		ppid, swapBytes := parentPID(filepath.Join(dir, "status"))
-		p := &usageProc{dir: dir, agent: -1, ppid: ppid, swapBytes: swapBytes}
-		for i, name := range agents {
-			if strings.TrimSpace(string(comm)) == name || filepath.Base(argv) == name {
-				p.agent = i
-				p.cmdline = cmdline
-				break
-			}
+		p := &usageProc{dir: dir, agent: platform.AgentIndex(agents, string(comm), cmdline), ppid: ppid, swapBytes: swapBytes}
+		if p.agent >= 0 {
+			p.cmdline = cmdline
 		}
 		cg, e := os.ReadFile(filepath.Join(dir, "cgroup"))
 		if e != nil {
