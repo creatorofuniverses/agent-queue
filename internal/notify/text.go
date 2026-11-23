@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"html"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 )
 
 type Message struct {
@@ -169,6 +170,16 @@ func gongMark(m Message) string {
 		return "🔄"
 	case model.EventDiskWritesHigh, model.EventDiskWritesNormal:
 		return "💽"
+	case model.EventTmpFull, model.EventTmpFullNormal:
+		return "🗂"
+	case model.EventSwapFull, model.EventSwapFullNormal:
+		return "💾"
+	case model.EventSessionsHeavy, model.EventSessionsHeavyNormal:
+		return "🧠"
+	case model.EventSessionsIdle, model.EventSessionsIdleNormal:
+		return "💤"
+	case model.EventTmpOrphans, model.EventTmpOrphansNormal:
+		return "🧹"
 	case model.EventCleaningStuck, model.EventDeliveryFailed, model.EventReservationForceReleased, model.EventStandOverDeclared, model.EventReservationIdle:
 		return "⚠️"
 	}
@@ -180,6 +191,8 @@ func gongLevel(k model.EventKind) string {
 	case model.EventTaskFailedInfra, model.EventCleaningStuck, model.EventDeliveryFailed, model.EventTeardownFailed, model.EventTeardownUnknown:
 		return "error"
 	case model.EventAdmissionClosed, model.EventReservationForceReleased, model.EventStandOverDeclared, model.EventReservationExpiring, model.EventReservationIdle, model.EventDiskWritesHigh:
+		return "warning"
+	case model.EventTmpFull, model.EventSwapFull, model.EventSessionsHeavy, model.EventSessionsIdle, model.EventTmpOrphans:
 		return "warning"
 	case model.EventTeardownSucceeded, model.EventReservationGranted:
 		return "success"

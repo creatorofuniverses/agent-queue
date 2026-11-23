@@ -288,3 +288,37 @@ func TestGongDiskWrites(t *testing.T) {
 		t.Error("event kind names")
 	}
 }
+
+func TestGongResourceAlerts(t *testing.T) {
+	for _, tc := range []struct {
+		kind model.EventKind
+		mark string
+	}{
+		{"tmp_full", "🗂"},
+		{"swap_full", "💾"},
+		{"sessions_heavy", "🧠"},
+		{"sessions_idle", "💤"},
+		{"tmp_orphans", "🧹"},
+	} {
+		for _, event := range []struct {
+			kind  model.EventKind
+			level string
+		}{{tc.kind, "warning"}, {tc.kind + "_normal", "info"}} {
+			t.Run(string(event.kind), func(t *testing.T) {
+				body, err := GongBody(Message{Event: model.Event{Kind: event.kind}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got struct {
+					Level, Category, Message string
+				}
+				if err := json.Unmarshal(body, &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Category != string(event.kind) || got.Level != event.level || !strings.HasPrefix(got.Message, tc.mark+" ") {
+					t.Errorf("Gong payload = %+v, want category %q, level %q and mark %s", got, event.kind, event.level, tc.mark)
+				}
+			})
+		}
+	}
+}
