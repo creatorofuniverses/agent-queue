@@ -878,6 +878,15 @@ token_file = "/home/USER/.config/agent-queue/gong-token"
 format = "gong"
 ```
 
+The daemon sends operator events for high `/tmp` usage, high swap usage,
+agent session memory, idle sessions, and orphan or candidate items in `/tmp`.
+The first four alarms use the average over `[alerts].window`. The `/tmp` usage
+alarm uses the larger of the byte and inode percentages. An episode opens
+at the configured threshold and clears below half of it. The orphan alarm
+requires two complete scans to open or clear. Set an individual threshold
+to zero to disable its alarm. The `[tmp]`, `[host]`, and `[sessions]` tables
+in the example config list the thresholds.
+
 ## MCP
 
 The same binary works as a stdio MCP server; the daemon must be started

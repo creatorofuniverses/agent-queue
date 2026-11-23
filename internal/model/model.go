@@ -357,6 +357,18 @@ const (
 	// [disk] alert_rate for alert_window; EventDiskWritesNormal ends that episode.
 	EventDiskWritesHigh   EventKind = "disk_writes_high"
 	EventDiskWritesNormal EventKind = "disk_writes_normal"
+
+	// Operator events for temporary storage, swap, and agent sessions.
+	EventTmpFull            EventKind = "tmp_full"
+	EventTmpNormal          EventKind = "tmp_normal"
+	EventSwapFull           EventKind = "swap_full"
+	EventSwapNormal         EventKind = "swap_normal"
+	EventSessionsHeavy      EventKind = "sessions_heavy"
+	EventSessionsNormal     EventKind = "sessions_heavy_normal"
+	EventSessionsIdle       EventKind = "sessions_idle"
+	EventSessionsIdleNormal EventKind = "sessions_idle_normal"
+	EventTmpOrphans         EventKind = "tmp_orphans"
+	EventTmpOrphansNormal   EventKind = "tmp_orphans_normal"
 )
 
 type Audience string

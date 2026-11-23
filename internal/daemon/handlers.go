@@ -180,6 +180,22 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 			return nil, err
 		}
 		return d.top(ctx)
+	case "tmp":
+		var a struct {
+			Rescan bool `json:"rescan"`
+		}
+		if err := decode(args, &a); err != nil {
+			return nil, err
+		}
+		if a.Rescan && d.rescan != nil {
+			return d.rescan(ctx)
+		}
+		if d.lastTmp != nil {
+			if report := d.lastTmp.Load(); report != nil {
+				return *report, nil
+			}
+		}
+		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "no /tmp scan available yet"}
 	case "estimate":
 		return d.estimate(ctx, args)
 	case "profile_show":

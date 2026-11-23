@@ -10,12 +10,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/diskacct"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
 
@@ -40,6 +42,12 @@ type SamplerDeps struct {
 	LastDisk *atomic.Pointer[DiskRate]
 	// Home is the daemon's $HOME, shown as ~ in agent projects.
 	Home string
+
+	Sessions     agentsess.Reader
+	LastSessions *atomic.Pointer[[]agentsess.Session]
+	Alerts       *alertSet
+	TmpRoot      string
+	LastTmp      *atomic.Pointer[tmpscan.Report]
 
 	diskAt     time.Time // the last disk sample the accountant took
 	diskWarned time.Time // the last logged disk meter error
@@ -98,6 +106,17 @@ func sampleStep(ctx context.Context, d *SamplerDeps, every time.Duration) {
 	// and the alarm are still stepped, the agent estimate waits for the next
 	// scan, which covers the gap.
 	d.sampleDisk(ctx, usage.IO, uerr != nil, at)
+
+	var sessions []agentsess.Session
+	if uerr == nil && (d.LastSessions != nil || d.Alerts != nil) {
+		sessions = agentsess.Enrich(usage.Sessions, d.Sessions.Read(), at)
+		if d.LastSessions != nil {
+			d.LastSessions.Store(&sessions)
+		}
+	}
+	if d.Alerts != nil {
+		d.sampleAlerts(ctx, at, mem, sessions, uerr == nil)
+	}
 }
 
 func (d *SamplerDeps) sampleDisk(ctx context.Context, procs []platform.ProcIO, procsUnknown bool, at time.Time) {

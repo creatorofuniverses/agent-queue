@@ -293,6 +293,17 @@ deltas (rate over a window, one event per episode, an all-clear when the window 
 falls below half the threshold) and emits `disk_writes_high`/`disk_writes_normal` through the
 usual event delivery.
 
+The host sampler enriches the session inventory from that same process scan
+with Claude Code's session files. Successful samples replace the published
+inventory. A failed process scan leaves the last session inventory available
+and contributes a missing measurement to the session alarms.
+
+A separate loop inventories `/tmp` for the daemon's UID. The socket's `tmp`
+operation reads the last report or requests a scan with `{"rescan": true}`.
+Requests that arrive during a scan wait for that pass. The daemon keeps the
+latest successful report in memory, including whether the pass was complete.
+It joins the scan on shutdown before closing the event store.
+
 Retention removes old logs and history while preserving active items, including
 reservations whose cleanup failed. Defaults and controls are in the
 [configuration example](../deploy/config.example.toml).

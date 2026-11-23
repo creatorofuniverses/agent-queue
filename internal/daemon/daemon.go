@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"github.com/creatorofuniverses/agent-queue/internal/diskacct"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
@@ -24,6 +26,7 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
 
 // Version is reported by ping and aq version; release builds set it from git
@@ -113,7 +116,13 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	if opts.Usage != nil {
 		opts.Usage = &boundedUsage{inner: opts.Usage}
 	}
-	d := &server{host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg, lastDisk: &atomic.Pointer[DiskRate]{}}
+	d := &server{
+		host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg,
+		lastDisk:     &atomic.Pointer[DiskRate]{},
+		lastSessions: &atomic.Pointer[[]agentsess.Session]{},
+		lastTmp:      &atomic.Pointer[tmpscan.Report]{},
+		alerts:       newAlertSet(cfg),
+	}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {
 		return fmt.Errorf("recover: %w", err)
@@ -124,6 +133,15 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	const tmpRoot = "/tmp"
+	emit := operatorEmitter(st, router, outbox.Kick)
+	tmpOpts := tmpscan.Options{Root: tmpRoot, ProcRoot: "/proc", UID: os.Getuid(),
+		OrphanAfter: cfg.TmpScan.OrphanAfter, Agents: cfg.Stats.AgentProcesses}
+	watch := newTmpWatch(runCtx, d.lastTmp, d.alerts, func(ctx context.Context) (tmpscan.Report, error) {
+		return tmpscan.Scan(ctx, tmpOpts)
+	}, emit)
+	d.rescan = watch.rescan
+
 	schedDone := make(chan struct{})
 	go func() {
 		defer close(schedDone)
@@ -139,15 +157,19 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 			meter.Run(runCtx)
 		}()
 	}
-	loops.Add(5)
+	loops.Add(6)
 	go func() { defer loops.Done(); runDashboard(runCtx, d, paths.Dashboard()) }()
 	go func() { defer loops.Done(); RunRetention(runCtx, st, paths, cfg, 10*time.Minute) }()
+	go func() { defer loops.Done(); watch.run(cfg.TmpScan.ScanInterval) }()
 	go func() {
 		defer loops.Done()
 		home, _ := os.UserHomeDir()
 		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses,
 			Disk: opts.Disk, Acct: diskacct.New(), Alarm: diskacct.NewAlarm(cfg.Disk.AlertRate, cfg.Disk.AlertWindow),
-			Emit: operatorEmitter(st, router, outbox.Kick), LastDisk: d.lastDisk, Home: home}, cfg.Stats.SampleInterval)
+			Emit: emit, LastDisk: d.lastDisk, Home: home,
+			Sessions:     agentsess.Reader{Dir: filepath.Join(home, ".claude", "sessions"), ProcRoot: "/proc"},
+			LastSessions: d.lastSessions, Alerts: d.alerts, TmpRoot: tmpRoot, LastTmp: d.lastTmp,
+		}, cfg.Stats.SampleInterval)
 	}()
 	var engaged func()
 	if opts.Snapshot != nil {
@@ -186,17 +208,21 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 }
 
 type server struct {
-	host       platform.HostMetrics
-	opts       Options
-	router     *notify.Router
-	outbox     *notify.Outbox
-	cfg        config.Config
-	sched      *scheduler.Scheduler
-	st         *store.Store
-	paths      config.Paths
-	tmp        TmpPlan
-	lastDisk   *atomic.Pointer[DiskRate]
-	recovering atomic.Bool
+	host         platform.HostMetrics
+	opts         Options
+	router       *notify.Router
+	outbox       *notify.Outbox
+	cfg          config.Config
+	sched        *scheduler.Scheduler
+	st           *store.Store
+	paths        config.Paths
+	tmp          TmpPlan
+	lastDisk     *atomic.Pointer[DiskRate]
+	lastSessions *atomic.Pointer[[]agentsess.Session]
+	lastTmp      *atomic.Pointer[tmpscan.Report]
+	alerts       *alertSet
+	rescan       func(context.Context) (tmpscan.Report, error)
+	recovering   atomic.Bool
 }
 
 func lockSlice(paths config.Paths, slice string) (*os.File, error) {

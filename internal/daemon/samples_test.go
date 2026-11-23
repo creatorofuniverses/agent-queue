@@ -3,7 +3,15 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/creatorofuniverses/agent-queue/internal/admission"
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"github.com/creatorofuniverses/agent-queue/internal/diskacct"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
@@ -12,11 +20,6 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
-	"path/filepath"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
 )
 
 func TestStatsSamplerWritesRow(t *testing.T) {
@@ -271,5 +274,112 @@ func TestDiskRowsSkipAgentOutsideSources(t *testing.T) {
 		{Key: "agent:codex:/q", Within: "session:s.scope", Bytes: 2}}})
 	if len(rows) != 2 || rows[0].Source != "host" || rows[1].Source != "agent:codex:/q" || rows[1].Within != "session:s.scope" {
 		t.Fatalf("%+v", rows)
+	}
+}
+
+func sessionSampler(t *testing.T, at *time.Time) (SamplerDeps, *fake.Host, *fake.UsageMeter) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "samples.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	host, usage := fake.NewHost(), &fake.UsageMeter{}
+	return SamplerDeps{
+		Host: host, Usage: usage, Store: st,
+		Pass:     func() scheduler.PassSummary { return scheduler.PassSummary{} },
+		Pressure: func() (bool, float64) { return false, 0 },
+		Now:      func() time.Time { return *at },
+	}, host, usage
+}
+
+func TestSamplerSessions(t *testing.T) {
+	at := time.Unix(1795464773, 0)
+	d, _, usage := sessionSampler(t, &at)
+	dir, proc := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), []byte(`{"pid":1,"procStart":"123","sessionId":"one","name":"shop","status":"busy"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(proc, "1"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	stat := "1 (claude) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 123 456\n"
+	if err := os.WriteFile(filepath.Join(proc, "1", "stat"), []byte(stat), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d.Sessions = agentsess.Reader{Dir: dir, ProcRoot: proc}
+	d.LastSessions = &atomic.Pointer[[]agentsess.Session]{}
+	usage.Set(platform.Usage{Sessions: []platform.SessionUsage{
+		{PID: 1, Start: 123, Client: "claude", AgentBytes: 321},
+		{PID: 2, Client: "codex", AgentBytes: 123},
+	}})
+	sampleStep(t.Context(), &d, 30*time.Second)
+	last := d.LastSessions.Load()
+	if last == nil || len(*last) != 2 {
+		t.Fatalf("want two sampled sessions, got %v", last)
+	}
+	first, second := (*last)[0], (*last)[1]
+	if first.PID != 1 || first.Name != "shop" || first.SessionID != "one" || first.AgentBytes != 321 ||
+		first.IdleSeconds == nil || *first.IdleSeconds != 0 || second.PID != 2 || second.IdleSeconds != nil {
+		t.Fatalf("sampled sessions: %+v", *last)
+	}
+	usage.Fail(errors.New("usage scan failed"))
+	at = at.Add(30 * time.Second)
+	sampleStep(t.Context(), &d, 30*time.Second)
+	if d.LastSessions.Load() != last {
+		t.Fatal("a failed scan replaced the last successful sessions")
+	}
+	rows, err := d.Store.HostSamples(t.Context(), time.Time{})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("memory samples after failed usage scan: %v, %v", rows, err)
+	}
+}
+
+func TestSamplerLevelAlerts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fs   platform.FSUsage
+	}{
+		{"bytes", platform.FSUsage{Size: 100, Free: 20, Inodes: 100, InodesFree: 90}},
+		{"inodes", platform.FSUsage{Size: 100, Free: 90, Inodes: 100, InodesFree: 20}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const step = 30 * time.Second
+			at := time.Unix(1795464773, 0)
+			d, host, usage := sessionSampler(t, &at)
+			host.Set(platform.MemInfo{Total: 32 * gib, Available: 12 * gib, SwapTotal: 10 * gib, SwapFree: gib})
+			host.SetFS(tc.fs, nil)
+			usage.Fail(errors.New("usage scan failed"))
+			d.TmpRoot = t.TempDir()
+			d.Alerts = newAlertSet(config.Default())
+			var events []model.Event
+			d.Emit = func(_ context.Context, ev model.Event) { events = append(events, ev) }
+			sampleStep(t.Context(), &d, step) // The window starts at this sample.
+			for i := 1; i <= 20; i++ {
+				at = at.Add(step)
+				sampleStep(t.Context(), &d, step)
+				if i < 20 && len(events) != 0 {
+					t.Fatalf("alarm before the window elapsed at step %d: %+v", i, events)
+				}
+				if i == 20 && len(events) != 2 {
+					t.Fatalf("want both alarms after the window elapsed, got %+v", events)
+				}
+			}
+			for range 2 {
+				at = at.Add(step)
+				sampleStep(t.Context(), &d, step)
+			}
+			if len(events) != 2 {
+				t.Fatalf("want two alarm events, got %+v", events)
+			}
+			want := map[model.EventKind]string{model.EventTmpFull: "80%", model.EventSwapFull: "90%"}
+			for _, ev := range events {
+				value := want[ev.Kind]
+				if value == "" || ev.Audience != model.AudienceOperator || !strings.Contains(ev.Detail, value) {
+					t.Fatalf("unexpected alarm event: %+v", ev)
+				}
+				delete(want, ev.Kind)
+			}
+		})
 	}
 }
