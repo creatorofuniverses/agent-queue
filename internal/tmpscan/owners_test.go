@@ -41,7 +41,7 @@ func TestScanInUse(t *testing.T) {
 }
 
 func TestScanUnixSocketPaths(t *testing.T) {
-	o := fixture(t)
+	o := unixSocketFixture(t)
 	old := o.Now().Add(-30 * time.Hour)
 	bound := filepath.Join(o.Root, "bound", "server socket.sock")
 	unlinked := filepath.Join(o.Root, "unlinked", "server socket.sock")
@@ -74,7 +74,7 @@ func TestScanUnixSocketPaths(t *testing.T) {
 }
 
 func TestScanUnixSocketBackstop(t *testing.T) {
-	o := fixture(t)
+	o := unixSocketFixture(t)
 	old := o.Now().Add(-30 * time.Hour)
 	for _, name := range []string{"top.sock", "nested/sub/server.sock"} {
 		path := filepath.Join(o.Root, name)
@@ -90,6 +90,17 @@ func TestScanUnixSocketBackstop(t *testing.T) {
 			t.Errorf("%s: state = %q, partial = %v, want complete in_use item", name, item.State, item.Partial)
 		}
 	}
+}
+
+func unixSocketFixture(t *testing.T) Options {
+	t.Helper()
+	o := fixture(t)
+	// Use a short root so a long TMPDIR cannot exceed the Unix socket path limit.
+	root, err := os.MkdirTemp("/tmp", "ts")
+	must(t, err)
+	t.Cleanup(func() { must(t, os.RemoveAll(root)) })
+	o.Root = root
+	return o
 }
 
 func listenUnix(t *testing.T, path string) {
