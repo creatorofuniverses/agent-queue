@@ -11,17 +11,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
 
 // DashboardVersion changes only when a field of DashboardView changes meaning or goes away.
 const DashboardVersion = 1
 
 const (
-	dashboardWindow = 24 * time.Hour
-	dashboardRecent = 20
-	// numbersEvery bounds rewrites caused by memory figures alone; heartbeatEvery keeps "at" fresh.
+	dashboardWindow   = 24 * time.Hour
+	dashboardRecent   = 20
+	dashboardTmpItems = 50
+	// numbersEvery bounds rewrites caused by figures alone; heartbeatEvery keeps "at" fresh.
 	numbersEvery   = 10 * time.Second
 	heartbeatEvery = 30 * time.Second
 )
@@ -29,15 +33,30 @@ const (
 // DashboardView is what a panel draws: the queue, what each item uses now, and the last day.
 // It is aq dashboard's output and the content of the runtime dir's dashboard.json.
 type DashboardView struct {
-	Version int                   `json:"version"`
-	At      time.Time             `json:"at"`
-	Daemon  DashboardDaemon       `json:"daemon"`
-	Host    DashboardHost         `json:"host"`
-	Pool    scheduler.Commitments `json:"pool"`
-	Queue   QueueView             `json:"queue"`
-	Items   []ItemView            `json:"items"`  // non-terminal, in queue order
-	Recent  []ItemView            `json:"recent"` // ended within the day, latest first
-	Day     DayView               `json:"day"`
+	Version  int                   `json:"version"`
+	At       time.Time             `json:"at"`
+	Daemon   DashboardDaemon       `json:"daemon"`
+	Host     DashboardHost         `json:"host"`
+	Pool     scheduler.Commitments `json:"pool"`
+	Queue    QueueView             `json:"queue"`
+	Items    []ItemView            `json:"items"`  // non-terminal, in queue order
+	Recent   []ItemView            `json:"recent"` // ended within the day, latest first
+	Day      DayView               `json:"day"`
+	Sessions *DashboardSessions    `json:"sessions,omitempty"` // nil before the first sample
+	Tmp      *DashboardTmp         `json:"tmp,omitempty"`      // nil before the first scan
+	Alerts   []AlertView           `json:"alerts"`             // [] when none
+}
+type DashboardSessions struct {
+	AgentBytes uint64              `json:"agent_bytes"`
+	RunBytes   uint64              `json:"run_bytes"`
+	Items      []agentsess.Session `json:"items"`
+}
+type DashboardTmp struct {
+	FS             platform.FSUsage `json:"fs"`
+	ScannedAt      time.Time        `json:"scanned_at"`
+	OrphanBytes    uint64           `json:"orphan_bytes"`
+	CandidateBytes uint64           `json:"candidate_bytes"`
+	Items          []tmpscan.Item   `json:"items"` // at most 50, largest first
 }
 type DashboardDaemon struct {
 	Version string `json:"version"`
@@ -82,7 +101,10 @@ func (d *server) dashboard(ctx context.Context, now time.Time) (DashboardView, e
 
 // dashboardWith builds the view, taking the day's part from c while it is fresh (c may be nil).
 func (d *server) dashboardWith(ctx context.Context, now time.Time, c *dayCache) (DashboardView, error) {
-	v := DashboardView{Version: DashboardVersion, At: now.UTC(), Daemon: DashboardDaemon{Version}, Items: []ItemView{}, Recent: []ItemView{}}
+	v := DashboardView{
+		Version: DashboardVersion, At: now.UTC(), Daemon: DashboardDaemon{Version},
+		Items: []ItemView{}, Recent: []ItemView{}, Alerts: []AlertView{},
+	}
 	if mem, err := d.host.Memory(); err == nil {
 		v.Host.MemTotal, v.Host.MemAvailable = mem.Total, mem.Available
 	}
@@ -93,6 +115,30 @@ func (d *server) dashboardWith(ctx context.Context, now time.Time, c *dayCache) 
 	v.Host.GuardCeiling = d.sched.GuardCeiling()
 	v.Host.GuardCutting = guardCutting(v.Host.GuardCeiling, v.Pool)
 	v.Queue = QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}
+
+	if d.lastSessions != nil {
+		if sessions := d.lastSessions.Load(); sessions != nil {
+			v.Sessions = &DashboardSessions{Items: *sessions}
+			for _, session := range *sessions {
+				v.Sessions.AgentBytes += session.AgentBytes
+				v.Sessions.RunBytes += session.RunBytes
+			}
+		}
+	}
+	if d.lastTmp != nil {
+		if r := d.lastTmp.Load(); r != nil {
+			v.Tmp = &DashboardTmp{
+				ScannedAt: r.At.UTC(), OrphanBytes: r.OrphanBytes, CandidateBytes: r.CandidateBytes,
+				Items: r.Items[:min(len(r.Items), dashboardTmpItems)],
+			}
+			if fs, err := d.host.FSUsage(r.Root); err == nil {
+				v.Tmp.FS = fs
+			}
+		}
+	}
+	if d.alerts != nil {
+		v.Alerts = d.alerts.Active()
+	}
 
 	active, err := d.st.ListActive(ctx)
 	if err != nil {
@@ -190,7 +236,7 @@ func (d *server) dayPart(ctx context.Context, now time.Time) ([]ItemView, DayVie
 	return recent, day, nil
 }
 
-// dashWriter rewrites the dashboard file: at once when what is queued, running or ended changes,
+// dashWriter rewrites the dashboard file: at once when tasks change or alerts open or close,
 // at most every numbersEvery when only figures move, and every heartbeatEvery regardless.
 type dashWriter struct {
 	path        string
@@ -220,8 +266,7 @@ func (w *dashWriter) offer(v DashboardView, now time.Time) (bool, error) {
 }
 
 // dashShape is what a panel must show without delay: items and their states, places and
-// reasons to wait, the day's counts and the host's gates. Memory figures, forecasts and blocker
-// details (they quote live memory) are left out.
+// reasons to wait, the day's counts, the host's gates and the names of active alerts.
 func dashShape(v DashboardView) []byte {
 	type item struct {
 		ID       model.ItemID
@@ -235,6 +280,7 @@ func dashShape(v DashboardView) []byte {
 		Queue                  QueueView
 		Day                    DayView
 		Closed, Guard, Cutting bool
+		Alerts                 []string
 	}{Queue: v.Queue, Day: v.Day, Closed: v.Host.PressureClosed, Guard: v.Host.GuardActive, Cutting: v.Host.GuardCutting}
 	s.Queue.BlockedDetail = ""
 	s.Day.Since, s.Day.WaitMedianSeconds, s.Day.WaitMaxSeconds, s.Day.RunSeconds = time.Time{}, 0, 0, 0
@@ -246,6 +292,10 @@ func dashShape(v DashboardView) []byte {
 			*list.out = append(*list.out, item{it.ID, it.State, it.Reason, it.Position, string(it.BlockedBy)})
 		}
 	}
+	for _, alert := range v.Alerts {
+		s.Alerts = append(s.Alerts, alert.Name)
+	}
+	slices.Sort(s.Alerts)
 	b, _ := json.Marshal(s)
 	return b
 }

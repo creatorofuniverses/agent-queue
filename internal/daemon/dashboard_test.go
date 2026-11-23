@@ -1,15 +1,21 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
 
 func (e *env) end(t *testing.T, id model.ItemID, info platform.ExitInfo, want model.State) {
@@ -104,6 +110,148 @@ func TestDashboardFile(t *testing.T) {
 	e.done <- nil // for the cleanup's wait
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dashboard left after stop: %v", err)
+	}
+}
+
+func TestDashboardSessionsTmpAlerts(t *testing.T) {
+	e := newEnv(t)
+	st, err := store.Open(filepath.Join(t.TempDir(), "dashboard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	e.cfg.Sessions.AlertIdleCount = 3
+	e.cfg.Alerts.Window = time.Minute
+	d := &server{
+		host:         e.host,
+		st:           st,
+		sched:        scheduler.New(scheduler.Deps{Store: st, Exec: e.ex, Host: e.host, Cfg: e.cfg, Paths: e.paths}),
+		lastSessions: &atomic.Pointer[[]agentsess.Session]{},
+		lastTmp:      &atomic.Pointer[tmpscan.Report]{},
+		alerts:       newAlertSet(e.cfg),
+	}
+	now := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	cache := &dayCache{}
+	snapshot := func() map[string]json.RawMessage {
+		t.Helper()
+		v, err := d.dashboardWith(t.Context(), now, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(b, &fields); err != nil {
+			t.Fatal(err)
+		}
+		return fields
+	}
+	first := snapshot()
+	if first["sessions"] != nil || first["tmp"] != nil || string(first["alerts"]) != "[]" {
+		t.Errorf("before sampling: sessions=%s tmp=%s alerts=%s, want absent sessions and tmp and empty alerts", first["sessions"], first["tmp"], first["alerts"])
+	}
+
+	sessions := []agentsess.Session{
+		{SessionUsage: platform.SessionUsage{AgentBytes: 8, RunBytes: 3}, Name: "first"},
+		{SessionUsage: platform.SessionUsage{AgentBytes: 4, RunBytes: 2}, Name: "second"},
+	}
+	d.lastSessions.Store(&sessions)
+	root := t.TempDir()
+	r := tmpscan.Report{Root: root, At: now.Add(-time.Second), OrphanBytes: 73, CandidateBytes: 19}
+	for i := range 60 {
+		r.Items = append(r.Items, tmpscan.Item{Bytes: uint64(60 - i), State: "recent"})
+	}
+	d.lastTmp.Store(&r)
+	fs := platform.FSUsage{Size: 100, Free: 40, Inodes: 32, InodesFree: 20, Tmpfs: true}
+	e.host.SetFS(fs, nil)
+	d.alerts.observeLevel(model.EventSessionsIdle, now.Add(-time.Minute), 4, true)
+	d.alerts.observeLevel(model.EventSessionsIdle, now, 4, true)
+
+	fields := snapshot()
+	if string(fields["version"]) != "1" {
+		t.Errorf("dashboard version = %s, want 1", fields["version"])
+	}
+	var gotSessions struct {
+		AgentBytes uint64              `json:"agent_bytes"`
+		RunBytes   uint64              `json:"run_bytes"`
+		Items      []agentsess.Session `json:"items"`
+	}
+	if err := json.Unmarshal(fields["sessions"], &gotSessions); err != nil {
+		t.Errorf("sessions field missing or invalid: %v", err)
+	} else if gotSessions.AgentBytes != 12 || gotSessions.RunBytes != 5 ||
+		len(gotSessions.Items) != 2 || gotSessions.Items[0].Name != "first" || gotSessions.Items[1].Name != "second" {
+		t.Errorf("sessions = %+v, want both sessions and totals of 12 agent bytes and 5 run bytes", gotSessions)
+	}
+	var gotTmp struct {
+		FS             platform.FSUsage `json:"fs"`
+		ScannedAt      time.Time        `json:"scanned_at"`
+		OrphanBytes    uint64           `json:"orphan_bytes"`
+		CandidateBytes uint64           `json:"candidate_bytes"`
+		Items          []tmpscan.Item   `json:"items"`
+	}
+	if err := json.Unmarshal(fields["tmp"], &gotTmp); err != nil {
+		t.Errorf("tmp field missing or invalid: %v", err)
+	} else {
+		if gotTmp.FS != fs || !gotTmp.ScannedAt.Equal(r.At) || gotTmp.OrphanBytes != 73 || gotTmp.CandidateBytes != 19 {
+			t.Errorf("tmp metadata = %s", fields["tmp"])
+		}
+		if len(gotTmp.Items) != 50 {
+			t.Errorf("tmp.items length = %d, want 50", len(gotTmp.Items))
+		}
+		for i, item := range gotTmp.Items {
+			if item.Bytes != uint64(60-i) || item.State != "recent" {
+				t.Fatalf("tmp.items[%d] = %+v, want largest items first with their scan state", i, item)
+			}
+		}
+	}
+	var alerts []AlertView
+	if err := json.Unmarshal(fields["alerts"], &alerts); err != nil {
+		t.Errorf("alerts field missing or invalid: %v", err)
+	} else if len(alerts) != 1 || alerts[0].Name != "sessions_idle" || !alerts[0].Since.Equal(now) ||
+		alerts[0].Value != 4 || alerts[0].Threshold != 3 {
+		t.Errorf("alerts = %+v, want the active sessions_idle episode", alerts)
+	}
+
+	e.host.SetFS(fs, errors.New("statfs failed"))
+	if err := json.Unmarshal(snapshot()["tmp"], &gotTmp); err != nil || gotTmp.FS != (platform.FSUsage{}) {
+		t.Errorf("tmp.fs = %+v after statfs failure, want zero values (decode error %v)", gotTmp.FS, err)
+	}
+}
+
+func TestDashboardShapeChangesOnAlert(t *testing.T) {
+	decode := func(data string) DashboardView {
+		t.Helper()
+		var v DashboardView
+		if err := json.Unmarshal([]byte(data), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	quiet := decode(`{"host":{"mem_available":100},"alerts":[]}`)
+	open := decode(`{"host":{"mem_available":100},"alerts":[{"name":"tmp_full","value":80},{"name":"swap_full","value":90}]}`)
+	updated := decode(`{"host":{"mem_available":90},"alerts":[{"name":"swap_full","value":91},{"name":"tmp_full","value":81}]}`)
+	closed := decode(`{"host":{"mem_available":90},"alerts":[{"name":"swap_full","value":91}]}`)
+	if bytes.Equal(dashShape(quiet), dashShape(open)) {
+		t.Error("opening alerts did not change the dashboard shape")
+	}
+	if !bytes.Equal(dashShape(open), dashShape(updated)) {
+		t.Error("changing memory, alert values, and alert order changed the dashboard shape")
+	}
+	if bytes.Equal(dashShape(updated), dashShape(closed)) {
+		t.Error("closing an alert did not change the dashboard shape")
+	}
+
+	w := &dashWriter{path: filepath.Join(t.TempDir(), "dashboard.json")}
+	now := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	for i, step := range []struct {
+		view  DashboardView
+		wrote bool
+	}{{quiet, true}, {open, true}, {updated, false}, {closed, true}} {
+		if wrote, err := w.offer(step.view, now.Add(time.Duration(i)*time.Second)); err != nil || wrote != step.wrote {
+			t.Errorf("step %d: wrote %v, err %v, want wrote %v", i, wrote, err, step.wrote)
+		}
 	}
 }
 
