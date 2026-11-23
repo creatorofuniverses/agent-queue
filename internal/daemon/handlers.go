@@ -188,6 +188,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 			return nil, err
 		}
 		if a.Rescan && d.rescan != nil {
+			// The watcher checks the cached report and the in-flight scan together.
 			return d.rescan(ctx)
 		}
 		if d.lastTmp != nil {

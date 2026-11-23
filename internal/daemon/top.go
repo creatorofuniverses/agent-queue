@@ -168,11 +168,9 @@ func (d *server) top(ctx context.Context) (any, error) {
 	if d.lastDisk != nil {
 		v.Disk = d.lastDisk.Load()
 	}
-	if d.lastSessions != nil {
-		if sessions := d.lastSessions.Load(); sessions != nil {
-			v.Sessions = *sessions
-			v.SessionsIdleAfterSeconds = d.cfg.Sessions.IdleAfter.Seconds()
-		}
+	if ue == nil {
+		v.Sessions = agentsess.Enrich(u.Sessions, d.sessionReader.Read(), v.At)
+		v.SessionsIdleAfterSeconds = d.cfg.Sessions.IdleAfter.Seconds()
 	}
 	if d.lastTmp != nil {
 		if report := d.lastTmp.Load(); report != nil {

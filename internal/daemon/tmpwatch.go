@@ -45,8 +45,10 @@ func (w *tmpWatch) run(every time.Duration) {
 		case <-w.ctx.Done():
 			return
 		case <-t.C:
-			pass, err := w.startScan()
-			if err != nil {
+			w.mu.Lock()
+			pass := w.startScanLocked(true)
+			w.mu.Unlock()
+			if pass == nil {
 				return
 			}
 			w.waitScheduled(pass, every)
@@ -96,24 +98,30 @@ func (w *tmpWatch) waitForShutdown() {
 	}
 }
 
-func (w *tmpWatch) startScan() (*tmpPass, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if err := w.ctx.Err(); err != nil {
-		return nil, err
+// startScanLocked shares the current pass with callers. Joining a manual pass
+// from the scheduler does not turn it into an alarm observation.
+func (w *tmpWatch) startScanLocked(scheduled bool) *tmpPass {
+	if w.ctx.Err() != nil {
+		return nil
 	}
 	if w.current == nil {
 		pass := &tmpPass{done: make(chan struct{}), started: time.Now()}
 		w.current = pass
-		go w.scanOnce(pass)
+		go w.scanOnce(pass, scheduled)
 	}
-	return w.current, nil
+	return w.current
 }
 
 func (w *tmpWatch) rescan(ctx context.Context) (tmpscan.Report, error) {
-	pass, err := w.startScan()
-	if err != nil {
-		return tmpscan.Report{}, err
+	w.mu.Lock()
+	if last := w.last.Load(); last != nil && time.Since(last.At) < time.Minute {
+		w.mu.Unlock()
+		return *last, nil
+	}
+	pass := w.startScanLocked(false)
+	w.mu.Unlock()
+	if pass == nil {
+		return tmpscan.Report{}, w.ctx.Err()
 	}
 
 	// One caller leaving does not cancel the inventory shared by the others.
@@ -125,11 +133,11 @@ func (w *tmpWatch) rescan(ctx context.Context) (tmpscan.Report, error) {
 	}
 }
 
-func (w *tmpWatch) scanOnce(pass *tmpPass) {
+func (w *tmpWatch) scanOnce(pass *tmpPass, scheduled bool) {
 	pass.report, pass.err = w.scan(w.ctx)
 	if pass.err == nil && w.ctx.Err() == nil {
 		w.last.Store(&pass.report)
-		if w.alerts != nil {
+		if scheduled && w.alerts != nil {
 			if ev, fired := w.alerts.observeOrphans(pass.report); fired && w.emit != nil {
 				emitAlert(w.ctx, w.emit, model.EventTmpOrphans, pass.report.At, ev, tmpAlertDetails(&pass.report))
 			}

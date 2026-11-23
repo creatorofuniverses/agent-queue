@@ -117,12 +117,14 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 		opts.Usage = &boundedUsage{inner: opts.Usage}
 	}
 	initialUsageDone := make(chan struct{})
+	home, _ := os.UserHomeDir()
 	d := &server{
 		host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg, initialUsageDone: initialUsageDone,
-		lastDisk:     &atomic.Pointer[DiskRate]{},
-		lastSessions: &atomic.Pointer[[]agentsess.Session]{},
-		lastTmp:      &atomic.Pointer[tmpscan.Report]{},
-		alerts:       newAlertSet(cfg),
+		lastDisk:      &atomic.Pointer[DiskRate]{},
+		sessionReader: agentsess.Reader{Dir: filepath.Join(home, ".claude", "sessions"), ProcRoot: "/proc"},
+		lastSessions:  &atomic.Pointer[[]agentsess.Session]{},
+		lastTmp:       &atomic.Pointer[tmpscan.Report]{},
+		alerts:        newAlertSet(cfg),
 	}
 	d.recovering.Store(true)
 	if err := sched.Recover(ctx); err != nil {
@@ -164,11 +166,10 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	go func() { defer loops.Done(); watch.run(cfg.TmpScan.ScanInterval) }()
 	go func() {
 		defer loops.Done()
-		home, _ := os.UserHomeDir()
 		RunStatsSampler(runCtx, SamplerDeps{Host: host, Usage: opts.Usage, Store: st, Pass: sched.LastPass, Pressure: sched.Pressure, Agents: cfg.Stats.AgentProcesses,
 			Disk: opts.Disk, Acct: diskacct.New(), Alarm: diskacct.NewAlarm(cfg.Disk.AlertRate, cfg.Disk.AlertWindow),
 			Emit: emit, LastDisk: d.lastDisk, Home: home, initialUsageDone: initialUsageDone,
-			Sessions:     agentsess.Reader{Dir: filepath.Join(home, ".claude", "sessions"), ProcRoot: "/proc"},
+			Sessions:     d.sessionReader,
 			LastSessions: d.lastSessions, Alerts: d.alerts, TmpRoot: tmpRoot, LastTmp: d.lastTmp,
 		}, cfg.Stats.SampleInterval)
 	}()
@@ -209,21 +210,22 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 }
 
 type server struct {
-	host         platform.HostMetrics
-	opts         Options
-	router       *notify.Router
-	outbox       *notify.Outbox
-	cfg          config.Config
-	sched        *scheduler.Scheduler
-	st           *store.Store
-	paths        config.Paths
-	tmp          TmpPlan
-	lastDisk     *atomic.Pointer[DiskRate]
-	lastSessions *atomic.Pointer[[]agentsess.Session]
-	lastTmp      *atomic.Pointer[tmpscan.Report]
-	alerts       *alertSet
-	rescan       func(context.Context) (tmpscan.Report, error)
-	recovering   atomic.Bool
+	host          platform.HostMetrics
+	opts          Options
+	router        *notify.Router
+	outbox        *notify.Outbox
+	cfg           config.Config
+	sched         *scheduler.Scheduler
+	st            *store.Store
+	paths         config.Paths
+	tmp           TmpPlan
+	lastDisk      *atomic.Pointer[DiskRate]
+	sessionReader agentsess.Reader
+	lastSessions  *atomic.Pointer[[]agentsess.Session]
+	lastTmp       *atomic.Pointer[tmpscan.Report]
+	alerts        *alertSet
+	rescan        func(context.Context) (tmpscan.Report, error)
+	recovering    atomic.Bool
 
 	initialUsageDone <-chan struct{}
 }

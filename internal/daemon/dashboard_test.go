@@ -159,9 +159,13 @@ func TestDashboardSessionsTmpAlerts(t *testing.T) {
 	}
 	d.lastSessions.Store(&sessions)
 	root := t.TempDir()
-	r := tmpscan.Report{Root: root, At: now.Add(-time.Second), OrphanBytes: 73, CandidateBytes: 19}
+	r := tmpscan.Report{Root: root, At: now.Add(-time.Second), OrphanBytes: 73, CandidateBytes: 19, Complete: true, PartialItems: 7}
 	for i := range 60 {
-		r.Items = append(r.Items, tmpscan.Item{Bytes: uint64(60 - i), State: "recent"})
+		item := tmpscan.Item{Bytes: uint64(60 - i), State: "recent"}
+		if i >= 53 {
+			item.Partial, item.State = true, "in_use"
+		}
+		r.Items = append(r.Items, item)
 	}
 	d.lastTmp.Store(&r)
 	fs := platform.FSUsage{Size: 100, Free: 40, Inodes: 32, InodesFree: 20, Tmpfs: true}
@@ -189,6 +193,8 @@ func TestDashboardSessionsTmpAlerts(t *testing.T) {
 		ScannedAt      time.Time        `json:"scanned_at"`
 		OrphanBytes    uint64           `json:"orphan_bytes"`
 		CandidateBytes uint64           `json:"candidate_bytes"`
+		Complete       *bool            `json:"complete"`
+		PartialItems   int              `json:"partial_items"`
 		Items          []tmpscan.Item   `json:"items"`
 	}
 	if err := json.Unmarshal(fields["tmp"], &gotTmp); err != nil {
@@ -196,6 +202,9 @@ func TestDashboardSessionsTmpAlerts(t *testing.T) {
 	} else {
 		if gotTmp.FS != fs || !gotTmp.ScannedAt.Equal(r.At) || gotTmp.OrphanBytes != 73 || gotTmp.CandidateBytes != 19 {
 			t.Errorf("tmp metadata = %s", fields["tmp"])
+		}
+		if gotTmp.Complete == nil || !*gotTmp.Complete || gotTmp.PartialItems != 7 {
+			t.Errorf("tmp should report complete with 7 partial items outside the top 50: %s", fields["tmp"])
 		}
 		if len(gotTmp.Items) != 50 {
 			t.Errorf("tmp.items length = %d, want 50", len(gotTmp.Items))

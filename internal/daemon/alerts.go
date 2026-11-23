@@ -81,9 +81,9 @@ var alertDescriptions = map[model.EventKind]struct {
 	label  string
 	format func(float64) string
 }{
-	model.EventTmpFull:       {model.EventTmpNormal, "/tmp usage", alertPercent},
-	model.EventSwapFull:      {model.EventSwapNormal, "swap usage", alertPercent},
-	model.EventSessionsHeavy: {model.EventSessionsNormal, "agent session memory", alertSize},
+	model.EventTmpFull:       {model.EventTmpFullNormal, "/tmp usage", alertPercent},
+	model.EventSwapFull:      {model.EventSwapFullNormal, "swap usage", alertPercent},
+	model.EventSessionsHeavy: {model.EventSessionsHeavyNormal, "agent session memory", alertSize},
 	model.EventSessionsIdle:  {model.EventSessionsIdleNormal, "idle sessions", alertCount},
 	model.EventTmpOrphans:    {model.EventTmpOrphansNormal, "orphan and candidate /tmp items", alertSize},
 }
@@ -98,12 +98,12 @@ func emitAlert(ctx context.Context, emit func(context.Context, model.Event), kin
 	var text string
 	if ev.High {
 		text = fmt.Sprintf("%s at %s (threshold %s).", desc.label, value, desc.format(ev.Threshold))
+		if details != "" {
+			text += " " + details
+		}
 	} else {
 		kind = desc.normal
 		text = fmt.Sprintf("%s back to %s after %s.", desc.label, value, shortDuration(at.Sub(ev.Since)))
-	}
-	if details != "" {
-		text += " " + details
 	}
 	emit(ctx, model.Event{ID: string(model.NewID()), Kind: kind, Audience: model.AudienceOperator,
 		Detail: text, CreatedAt: at.UTC()})

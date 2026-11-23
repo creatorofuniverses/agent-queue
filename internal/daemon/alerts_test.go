@@ -10,6 +10,7 @@ import (
 
 	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/config"
+	"github.com/creatorofuniverses/agent-queue/internal/levelalarm"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
@@ -79,5 +80,30 @@ func TestAlertSetActive(t *testing.T) {
 	}
 	if got := a.Active(); !reflect.DeepEqual(got, want[:1]) {
 		t.Fatalf("Active() after clearing = %+v, want %+v", got, want[:1])
+	}
+}
+
+func TestAlertAllClear(t *testing.T) {
+	at := time.Unix(1795464773, 0)
+	for _, tc := range []struct {
+		raise  model.EventKind
+		normal model.EventKind
+		value  float64
+		detail string
+	}{
+		{model.EventTmpFull, "tmp_full_normal", 20, "/tmp usage back to 20% after 10m."},
+		{model.EventSwapFull, "swap_full_normal", 10, "swap usage back to 10% after 10m."},
+		{model.EventSessionsHeavy, "sessions_heavy_normal", float64(gib), "agent session memory back to 1.0 GiB after 10m."},
+		{model.EventSessionsIdle, "sessions_idle_normal", 1, "idle sessions back to 1 after 10m."},
+		{model.EventTmpOrphans, "tmp_orphans_normal", 512 << 20, "orphan and candidate /tmp items back to 512 MiB after 10m."},
+	} {
+		t.Run(string(tc.raise), func(t *testing.T) {
+			var got model.Event
+			emitAlert(t.Context(), func(_ context.Context, event model.Event) { got = event },
+				tc.raise, at, levelalarm.Event{Since: at.Add(-10 * time.Minute), Value: tc.value}, "Current top items.")
+			if got.Kind != tc.normal || got.Detail != tc.detail || got.Audience != model.AudienceOperator {
+				t.Errorf("got %s / %s / %q, want %s / operator / %q", got.Kind, got.Audience, got.Detail, tc.normal, tc.detail)
+			}
+		})
 	}
 }

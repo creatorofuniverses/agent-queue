@@ -68,10 +68,8 @@ func TestTmpWatchDiscardsLateReport(t *testing.T) {
 			return late, nil
 		}, func(_ context.Context, ev model.Event) { events = append(events, ev) })
 
-		if _, err := watch.rescan(ctx); err != nil {
-			t.Fatal(err)
-		}
 		go watch.run(time.Minute)
+		time.Sleep(time.Minute)
 		<-entered
 		cancel()
 		time.Sleep(6 * time.Second)
@@ -147,13 +145,13 @@ func TestTmpWatchWarnsOncePerStuckPass(t *testing.T) {
 			if calls > 1 {
 				<-release
 			}
-			return tmpscan.Report{}, nil
+			return tmpscan.Report{At: time.Now()}, nil
 		}, nil)
-		go watch.run(time.Minute)
-		time.Sleep(30 * time.Second)
+		go watch.run(2 * time.Minute)
+		time.Sleep(time.Minute)
 		go func() { _, _ = watch.rescan(ctx) }()
 
-		time.Sleep(2*time.Minute - time.Second)
+		time.Sleep(4*time.Minute - time.Second)
 		synctest.Wait()
 		if len(logs) != 0 {
 			t.Fatalf("warning before two intervals elapsed: %s", <-logs)
@@ -175,58 +173,70 @@ func TestTmpWatchWarnsOncePerStuckPass(t *testing.T) {
 }
 
 func TestTmpWatchOrphansAlert(t *testing.T) {
-	last := &atomic.Pointer[tmpscan.Report]{}
-	alerts := newAlertSet(config.Default())
-	at := time.Unix(1795464773, 0)
-	high := tmpscan.Report{At: at, OrphanBytes: 3 * gib / 2, CandidateBytes: 3 * gib / 2, Complete: true, Items: []tmpscan.Item{
-		{Path: "/tmp/live", State: "in_use", Bytes: 4 * gib},
-		{Path: "/tmp/large", State: "orphan", Bytes: gib},
-		{Path: "/tmp/next", State: "candidate", Bytes: gib / 2},
-		{Path: "/tmp/third", State: "orphan", Bytes: gib / 4},
-		{Path: "/tmp/fourth", State: "candidate", Bytes: gib / 8},
-		{Path: "/tmp/fifth", State: "orphan", Bytes: gib / 16},
-		{Path: "/tmp/tiny", State: "orphan", Bytes: 1},
-	}}
-	partial := tmpscan.Report{At: at.Add(time.Minute)}
-	highAgain := high
-	highAgain.At = at.Add(2 * time.Minute)
-	low := tmpscan.Report{At: at.Add(3 * time.Minute), Complete: true}
-	reports := []tmpscan.Report{high, partial, highAgain, low, partial, low}
-	var events []model.Event
-	watch := newTmpWatch(t.Context(), last, alerts, func(context.Context) (tmpscan.Report, error) {
-		r := reports[0]
-		reports = reports[1:]
-		return r, nil
-	}, func(_ context.Context, ev model.Event) { events = append(events, ev) })
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		last := &atomic.Pointer[tmpscan.Report]{}
+		alerts := newAlertSet(config.Default())
+		start := time.Now()
+		high := tmpscan.Report{OrphanBytes: 3 * gib / 2, CandidateBytes: 3 * gib / 2, Complete: true, Items: []tmpscan.Item{
+			{Path: "/tmp/live", State: "in_use", Bytes: 4 * gib},
+			{Path: "/tmp/large", State: "orphan", Bytes: gib},
+			{Path: "/tmp/next", State: "candidate", Bytes: gib / 2},
+			{Path: "/tmp/third", State: "orphan", Bytes: gib / 4},
+			{Path: "/tmp/fourth", State: "candidate", Bytes: gib / 8},
+			{Path: "/tmp/fifth", State: "orphan", Bytes: gib / 16},
+			{Path: "/tmp/tiny", State: "orphan", Bytes: 1},
+		}}
+		partial := tmpscan.Report{PartialItems: 1}
+		low := tmpscan.Report{Complete: true}
+		reports := []tmpscan.Report{high, partial, high, low, partial, low}
+		emitted := make(chan model.Event, len(reports))
+		watch := newTmpWatch(ctx, last, alerts, func(context.Context) (tmpscan.Report, error) {
+			r := reports[0]
+			reports = reports[1:]
+			r.At = time.Now()
+			return r, nil
+		}, func(_ context.Context, ev model.Event) { emitted <- ev })
 
-	for i, want := range []int{0, 0, 1, 1, 1, 2} {
-		got, err := watch.rescan(t.Context())
-		if err != nil || last.Load() == nil || !last.Load().At.Equal(got.At) || len(events) != want {
-			t.Fatalf("pass %d: report %+v, cached %+v, events %+v, error %v", i, got, last.Load(), events, err)
-		}
-		if i == 2 {
-			active := alerts.Active()
-			if len(active) != 1 || active[0].Name != "tmp_orphans" || !active[0].Since.Equal(highAgain.At) || active[0].Value != float64(3*gib) {
-				t.Fatalf("active after second complete high pass: %+v", active)
+		go watch.run(time.Minute)
+		var events []model.Event
+		for i, want := range []int{0, 0, 1, 1, 1, 2} {
+			if i > 0 {
+				time.Sleep(time.Minute)
+			}
+			synctest.Wait()
+			for len(emitted) > 0 {
+				events = append(events, <-emitted)
+			}
+			at := start.Add(time.Duration(i) * time.Minute)
+			if got := last.Load(); got == nil || !got.At.Equal(at) || len(events) != want {
+				t.Fatalf("pass %d: cached %+v, events %+v, want report at %v and %d events", i, got, events, at, want)
+			}
+			if i == 2 {
+				active := alerts.Active()
+				if len(active) != 1 || active[0].Name != "tmp_orphans" || !active[0].Since.Equal(at) || active[0].Value != float64(3*gib) {
+					t.Fatalf("active after second complete high pass: %+v", active)
+				}
 			}
 		}
-	}
-	ev := events[0]
-	if ev.Kind != model.EventTmpOrphans || ev.Audience != model.AudienceOperator {
-		t.Fatalf("unexpected orphan alarm event: %+v", ev)
-	}
-	for _, want := range []string{"3.0 GiB", "/tmp/large", "/tmp/next", "/tmp/third", "/tmp/fourth", "/tmp/fifth", "aq tmp"} {
-		if !strings.Contains(ev.Detail, want) {
-			t.Errorf("orphan detail missing %q: %s", want, ev.Detail)
+		ev := events[0]
+		if ev.Kind != model.EventTmpOrphans || ev.Audience != model.AudienceOperator {
+			t.Fatalf("unexpected orphan alarm event: %+v", ev)
 		}
-	}
-	if strings.Contains(ev.Detail, "/tmp/live") || strings.Contains(ev.Detail, "/tmp/tiny") ||
-		strings.Index(ev.Detail, "/tmp/large") > strings.Index(ev.Detail, "/tmp/next") {
-		t.Errorf("orphan detail should list five largest orphan/candidate items: %s", ev.Detail)
-	}
-	if events[1].Kind != model.EventTmpOrphansNormal || len(alerts.Active()) != 0 {
-		t.Fatalf("no all-clear after two complete low passes: %+v", events)
-	}
+		for _, want := range []string{"3.0 GiB", "/tmp/large", "/tmp/next", "/tmp/third", "/tmp/fourth", "/tmp/fifth", "aq tmp"} {
+			if !strings.Contains(ev.Detail, want) {
+				t.Errorf("orphan detail missing %q: %s", want, ev.Detail)
+			}
+		}
+		if strings.Contains(ev.Detail, "/tmp/live") || strings.Contains(ev.Detail, "/tmp/tiny") ||
+			strings.Index(ev.Detail, "/tmp/large") > strings.Index(ev.Detail, "/tmp/next") {
+			t.Errorf("orphan detail should list five largest orphan/candidate items: %s", ev.Detail)
+		}
+		if events[1].Kind != model.EventTmpOrphansNormal || len(alerts.Active()) != 0 {
+			t.Fatalf("no all-clear after two complete low passes: %+v", events)
+		}
+	})
 }
 
 func TestTmpOpRescan(t *testing.T) {
@@ -289,6 +299,66 @@ func TestTmpOpRescan(t *testing.T) {
 		check(d.handle(t.Context(), "tmp", nil, nil))
 		if calls != 1 {
 			t.Fatalf("concurrent rescans started %d scans, want one", calls)
+		}
+	})
+}
+
+func TestTmpOpRescanUsesRecentReport(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := server{lastTmp: &atomic.Pointer[tmpscan.Report]{}}
+		watch := newTmpWatch(t.Context(), d.lastTmp, nil, func(context.Context) (tmpscan.Report, error) {
+			return tmpscan.Report{At: time.Now(), Complete: true}, nil
+		}, nil)
+		d.rescan = watch.rescan
+		at := time.Now()
+		d.lastTmp.Store(&tmpscan.Report{At: at, Complete: true})
+		rescanAt := func() time.Time {
+			t.Helper()
+			got, err := d.handle(t.Context(), "tmp", json.RawMessage(`{"rescan":true}`), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return got.(tmpscan.Report).At
+		}
+		time.Sleep(time.Minute - time.Second)
+		if got := rescanAt(); !got.Equal(at) {
+			t.Errorf("--rescan at 59s returned report at %v, want cached report at %v", got, at)
+		}
+		time.Sleep(time.Second)
+		if got := rescanAt(); !got.Equal(at.Add(time.Minute)) {
+			t.Errorf("--rescan at 60s returned report at %v, want a fresh pass", got)
+		}
+	})
+}
+
+func TestTmpWatchRescansDoNotFeedOrphans(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		last := &atomic.Pointer[tmpscan.Report]{}
+		alerts := newAlertSet(config.Default())
+		events := make(chan model.Event, 3)
+		watch := newTmpWatch(ctx, last, alerts, func(context.Context) (tmpscan.Report, error) {
+			return tmpscan.Report{At: time.Now(), OrphanBytes: 3 * gib, Complete: true}, nil
+		}, func(_ context.Context, ev model.Event) { events <- ev })
+		go watch.run(2 * time.Minute)
+		synctest.Wait()
+		time.Sleep(time.Minute)
+		manual, err := watch.rescan(ctx)
+		if cached := last.Load(); err != nil || !manual.At.Equal(time.Now()) || cached == nil || !cached.At.Equal(manual.At) {
+			t.Fatalf("manual scan did not update the cache: %+v, %v", manual, err)
+		}
+		if active := alerts.Active(); len(active) != 0 || len(events) != 0 {
+			t.Errorf("manual scan opened the alarm: active %+v, %d events", active, len(events))
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if len(events) != 1 {
+			t.Fatalf("want one alert from the second scheduled pass, got %d", len(events))
+		}
+		event := <-events
+		if event.Kind != model.EventTmpOrphans || !event.CreatedAt.Equal(time.Now()) {
+			t.Errorf("want an alert from the second scheduled pass, got %+v", event)
 		}
 	})
 }

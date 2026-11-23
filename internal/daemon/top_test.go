@@ -3,15 +3,17 @@ package daemon
 import (
 	"context"
 	"errors"
-	"github.com/creatorofuniverses/agent-queue/internal/platform"
-	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
-	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
-	"github.com/creatorofuniverses/agent-queue/internal/store"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
+	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
+	"github.com/creatorofuniverses/agent-queue/internal/store"
 )
 
 func TestTopView(t *testing.T) {
@@ -28,6 +30,50 @@ func TestTopView(t *testing.T) {
 	m.Fail(errors.New("unavailable"))
 	if err := e.call(t, "top", nil, &v); err != nil || v.Physical.Error == "" || v.Physical.Used != 0 || v.Host.MemTotal != 32*gib {
 		t.Fatal(v, err)
+	}
+}
+
+func TestTopSessionsMatchPhysicalScan(t *testing.T) {
+	e := newEnv(t)
+	meter := &fake.UsageMeter{}
+	meter.Set(platform.Usage{
+		Agents: []platform.AgentUsage{{Name: "claude", Bytes: 8, Spawned: 4}, {Name: "codex", Bytes: 5, Spawned: 2}},
+		Sessions: []platform.SessionUsage{
+			{PID: 42, Client: "claude", AgentBytes: 8, RunBytes: 4, Cmdline: []string{"claude", "--resume", "fresh"}},
+			{PID: 43, Client: "codex", AgentBytes: 5, RunBytes: 2},
+		},
+	})
+	d := &server{
+		host: e.host, opts: Options{Usage: meter}, cfg: e.cfg,
+		sched:        scheduler.New(scheduler.Deps{Exec: e.ex, Host: e.host, Cfg: e.cfg, Paths: e.paths}),
+		lastSessions: &atomic.Pointer[[]agentsess.Session]{},
+	}
+	stale := []agentsess.Session{{SessionUsage: platform.SessionUsage{PID: 99, AgentBytes: 103}}}
+	d.lastSessions.Store(&stale)
+
+	got, err := d.handle(t.Context(), "top", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := got.(TopView)
+	var agentBytes, runBytes, physicalAgentBytes uint64
+	for _, s := range v.Sessions {
+		agentBytes += s.AgentBytes
+		runBytes += s.RunBytes
+	}
+	for _, a := range v.Physical.Agents {
+		physicalAgentBytes += a.Bytes
+	}
+	if v.Physical.Error != "" || agentBytes != physicalAgentBytes || runBytes != v.Physical.Spawned {
+		t.Errorf("sessions report %d agent and %d run bytes, physical reports %+v", agentBytes, runBytes, v.Physical)
+	}
+	if len(v.Sessions) != 2 || v.Sessions[0].SessionID != "fresh" {
+		t.Errorf("expected both sessions from the new scan, with the resumed ID, got %+v", v.Sessions)
+	}
+	meter.Fail(errors.New("unavailable"))
+	got, err = d.handle(t.Context(), "top", nil, nil)
+	if err != nil || got.(TopView).Physical.Error == "" || len(got.(TopView).Sessions) != 0 {
+		t.Errorf("failed physical scan should not return cached sessions: %+v, %v", got, err)
 	}
 }
 

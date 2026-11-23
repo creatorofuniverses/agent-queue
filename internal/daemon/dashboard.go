@@ -56,7 +56,9 @@ type DashboardTmp struct {
 	ScannedAt      time.Time        `json:"scanned_at"`
 	OrphanBytes    uint64           `json:"orphan_bytes"`
 	CandidateBytes uint64           `json:"candidate_bytes"`
-	Items          []tmpscan.Item   `json:"items"` // at most 50, largest first
+	Complete       bool             `json:"complete"`
+	PartialItems   int              `json:"partial_items"` // whole scan, including items excluded below
+	Items          []tmpscan.Item   `json:"items"`         // at most 50, largest first
 }
 type DashboardDaemon struct {
 	Version string `json:"version"`
@@ -129,6 +131,7 @@ func (d *server) dashboardWith(ctx context.Context, now time.Time, c *dayCache) 
 		if r := d.lastTmp.Load(); r != nil {
 			v.Tmp = &DashboardTmp{
 				ScannedAt: r.At.UTC(), OrphanBytes: r.OrphanBytes, CandidateBytes: r.CandidateBytes,
+				Complete: r.Complete, PartialItems: r.PartialItems,
 				Items: r.Items[:min(len(r.Items), dashboardTmpItems)],
 			}
 			if fs, err := d.host.FSUsage(r.Root); err == nil {

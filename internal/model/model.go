@@ -359,16 +359,16 @@ const (
 	EventDiskWritesNormal EventKind = "disk_writes_normal"
 
 	// Operator events for temporary storage, swap, and agent sessions.
-	EventTmpFull            EventKind = "tmp_full"
-	EventTmpNormal          EventKind = "tmp_normal"
-	EventSwapFull           EventKind = "swap_full"
-	EventSwapNormal         EventKind = "swap_normal"
-	EventSessionsHeavy      EventKind = "sessions_heavy"
-	EventSessionsNormal     EventKind = "sessions_heavy_normal"
-	EventSessionsIdle       EventKind = "sessions_idle"
-	EventSessionsIdleNormal EventKind = "sessions_idle_normal"
-	EventTmpOrphans         EventKind = "tmp_orphans"
-	EventTmpOrphansNormal   EventKind = "tmp_orphans_normal"
+	EventTmpFull             EventKind = "tmp_full"
+	EventTmpFullNormal       EventKind = "tmp_full_normal"
+	EventSwapFull            EventKind = "swap_full"
+	EventSwapFullNormal      EventKind = "swap_full_normal"
+	EventSessionsHeavy       EventKind = "sessions_heavy"
+	EventSessionsHeavyNormal EventKind = "sessions_heavy_normal"
+	EventSessionsIdle        EventKind = "sessions_idle"
+	EventSessionsIdleNormal  EventKind = "sessions_idle_normal"
+	EventTmpOrphans          EventKind = "tmp_orphans"
+	EventTmpOrphansNormal    EventKind = "tmp_orphans_normal"
 )
 
 type Audience string
