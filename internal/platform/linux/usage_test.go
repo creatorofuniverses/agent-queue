@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func usageFile(t *testing.T, root, path, body string) {
@@ -62,30 +63,41 @@ func TestUsageMeterVanishingProcess(t *testing.T) {
 		t.Fatal(v, e)
 	}
 }
-func TestUsageMeterCountsWhatAgentsRun(t *testing.T) {
+func usageAgentFixture(t *testing.T, nestedCodex bool) *UsageMeter {
+	t.Helper()
 	root := t.TempDir()
 	manager := "user.slice/user-1000.slice/user@1000.service"
 	usageFile(t, root, "proc/self/cgroup", "0::/"+manager+"/app.slice/aq.service\n")
-	proc := func(pid, ppid int, comm, cg string, pssMiB int) {
+	proc := func(pid, ppid int, comm, cg string, pssMiB, swapMiB int) {
 		base := fmt.Sprintf("proc/%d/", pid)
 		usageFile(t, root, base+"comm", comm+"\n")
 		usageFile(t, root, base+"cmdline", comm+"\x00")
-		usageFile(t, root, base+"status", fmt.Sprintf("Name:\t%s\nPPid:\t%d\n", comm, ppid))
+		usageFile(t, root, base+"status", fmt.Sprintf("Name:\t%s\nPPid:\t%d\nVmSwap:\t%d kB\n", comm, ppid, swapMiB*1024))
 		usageFile(t, root, base+"cgroup", "0::/"+cg+"\n")
 		usageFile(t, root, base+"smaps_rollup", fmt.Sprintf("Pss: %d kB\n", pssMiB*1024))
+		if e := os.Symlink(root, filepath.Join(root, base, "cwd")); e != nil {
+			t.Fatal(e)
+		}
 	}
 	session := "user.slice/user-1000.slice/session-3.scope"
-	proc(2, 1, "herder", session, 50)                             // runs the agents, is not one: other
-	proc(10, 2, "claude", session, 400)                           // an agent
-	proc(11, 10, "bash", session, 10)                             // what it runs directly
-	proc(12, 11, "python", session, 500)                          // and that one's children
-	proc(13, 10, "claude", session, 100)                          // a nested agent counts as an agent
-	proc(14, 13, "node", session, 50)                             // what it runs goes to the nearest agent
-	proc(15, 10, "python", manager+"/aq.slice/aq-x.service", 900) // already in aq: tasks
-	proc(16, 2, "codex", session, 200)
-	proc(17, 16, "cargo", session, 300)
-	proc(18, 1, "sshd", "system.slice/sshd.service", 999)
-	m := NewUsageMeter(UsageMeterConfig{ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg"), Slices: []string{"aq.slice"}})
+	proc(2, 1, "herder", session, 50, 1)                              // runs the agents, is not one: other
+	proc(10, 2, "claude", session, 400, 1)                            // an agent
+	proc(11, 10, "bash", session, 10, 2)                              // what it runs directly
+	proc(12, 11, "python", session, 500, 3)                           // and that one's children
+	proc(13, 10, "claude", session, 100, 4)                           // a nested agent counts as an agent
+	proc(14, 13, "node", session, 50, 5)                              // what it runs goes to the nearest agent
+	proc(15, 10, "python", manager+"/aq.slice/aq-x.service", 900, 64) // already in aq: tasks
+	proc(16, 2, "codex", session, 200, 6)
+	proc(17, 16, "cargo", session, 300, 7)
+	proc(18, 1, "sshd", "system.slice/sshd.service", 999, 1)
+	if nestedCodex {
+		proc(19, 11, "codex", session, 70, 8)
+	}
+	return NewUsageMeter(UsageMeterConfig{ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg"), Slices: []string{"aq.slice"}})
+}
+
+func TestUsageMeterCountsWhatAgentsRun(t *testing.T) {
+	m := usageAgentFixture(t, false)
 	v, e := m.Usage(context.Background(), []string{"claude", "codex"})
 	if e != nil {
 		t.Fatal(e)
@@ -96,6 +108,72 @@ func TestUsageMeterCountsWhatAgentsRun(t *testing.T) {
 	}
 	if a := v.Agents[1]; a.Bytes != 200*mib || a.Spawned != 300*mib || a.SpawnedProcs != 1 {
 		t.Fatalf("codex %+v", a)
+	}
+}
+
+func TestUsageMeterSessions(t *testing.T) {
+	m := usageAgentFixture(t, true)
+	root := filepath.Dir(m.cfg.ProcRoot)
+	usageFile(t, root, "proc/stat", "cpu 100 0 0 200\nbtime 1700000000\n")
+	usageFile(t, root, "proc/10/stat", "10 (claude) S 2 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1010 0 0\n")
+	usageFile(t, root, "proc/10/cmdline", "/opt/bin/claude\x00--resume\x00a b\x00\x00")
+	v, e := m.Usage(context.Background(), []string{"claude", "codex"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(v.Sessions) != 2 {
+		t.Fatalf("sessions = %+v, want two", v.Sessions)
+	}
+	const mib = 1 << 20
+	claude, codex := v.Sessions[0], v.Sessions[1]
+	if claude.PID != 10 || claude.Client != "claude" || claude.AgentBytes != (400+100+70)*mib ||
+		claude.RunBytes != (10+500+50)*mib || claude.SwapBytes != (1+2+3+4+5+8)*mib {
+		t.Errorf("first session = %+v", claude)
+	}
+	if claude.Start != 1010 || !claude.StartedAt.Equal(time.Unix(1700000010, 100_000_000)) || claude.Cwd != root ||
+		!slices.Equal(claude.Cmdline, []string{"/opt/bin/claude", "--resume", "a b", ""}) {
+		t.Errorf("claude metadata = %+v", claude)
+	}
+	if codex.PID != 16 || codex.Client != "codex" || codex.AgentBytes != 200*mib ||
+		codex.RunBytes != 300*mib || codex.SwapBytes != (6+7)*mib {
+		t.Errorf("second session = %+v", codex)
+	}
+	if codex.Start != 0 || !codex.StartedAt.IsZero() {
+		t.Errorf("codex start without /proc/16/stat = %d, %v", codex.Start, codex.StartedAt)
+	}
+}
+
+func TestUsageMeterSessionsReconcile(t *testing.T) {
+	m := usageAgentFixture(t, true)
+	v, e := m.Usage(context.Background(), []string{"claude", "codex"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	var agentBytes, spawnedBytes, sessionAgentBytes, sessionRunBytes uint64
+	for _, a := range v.Agents {
+		agentBytes += a.Bytes
+		spawnedBytes += a.Spawned
+	}
+	for _, s := range v.Sessions {
+		sessionAgentBytes += s.AgentBytes
+		sessionRunBytes += s.RunBytes
+	}
+	if sessionAgentBytes != agentBytes || sessionRunBytes != spawnedBytes {
+		t.Errorf("session totals = (%d agent, %d run), want (%d agent, %d run)", sessionAgentBytes, sessionRunBytes, agentBytes, spawnedBytes)
+	}
+}
+
+func TestUsageMeterSessionCwdUnreadable(t *testing.T) {
+	m := usageAgentFixture(t, true)
+	if e := os.Remove(filepath.Join(m.cfg.ProcRoot, "10/cwd")); e != nil {
+		t.Fatal(e)
+	}
+	v, e := m.Usage(context.Background(), []string{"claude", "codex"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(v.Sessions) != 2 || v.Sessions[0].PID != 10 || v.Sessions[0].Cwd != "" {
+		t.Errorf("sessions = %+v, want pid 10 with empty cwd first", v.Sessions)
 	}
 }
 

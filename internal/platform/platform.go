@@ -139,8 +139,24 @@ type AgentUsage struct {
 	Spawned      uint64 `json:"spawned"`
 	SpawnedProcs int    `json:"spawned_procs"`
 }
+
+// SessionUsage is one agent session: a root agent process (no agent among its
+// ancestors) and everything below it outside aq and docker.
+type SessionUsage struct {
+	Client     string    `json:"client"` // the agent name from stats.agent_processes
+	PID        int       `json:"pid"`
+	Start      uint64    `json:"-"`           // field 22 of /proc/PID/stat
+	StartedAt  time.Time `json:"started_at"`  // from Start and boot time; zero when unknown
+	Cwd        string    `json:"cwd"`         // readlink /proc/PID/cwd; "" when unreadable
+	Cmdline    []string  `json:"-"`           // argv of the root
+	AgentBytes uint64    `json:"agent_bytes"` // agent processes of the session, PSS or RSS as in AgentUsage.Bytes
+	RunBytes   uint64    `json:"run_bytes"`   // its other descendants, as in AgentUsage.Spawned
+	SwapBytes  uint64    `json:"swap_bytes"`  // VmSwap of the whole tree
+}
+
 type Usage struct {
 	Agents        []AgentUsage
+	Sessions      []SessionUsage // largest AgentBytes+RunBytes first
 	Docker, Tasks uint64
 	// IO is the write counters of every process in a cgroup that holds an
 	// agent (outside aq and docker), ancestors before descendants.
