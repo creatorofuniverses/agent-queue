@@ -9,6 +9,7 @@ import (
 
 	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/stats"
 	"github.com/creatorofuniverses/agent-queue/internal/units"
 )
@@ -80,12 +81,41 @@ func printTop(c *cmdCtx, v daemon.TopView) {
 	fmt.Fprintf(c.stdout, "queue: %d queued, %d running, %d held; head %s\n", v.Queue.Queued, v.Queue.Running, v.Queue.Held, head)
 	fmt.Fprintf(c.stdout, "disk: %s\n", c.diskText(v.Disk, time.Now()))
 	printSessionsLine(c, v)
-	suffix := tmpSummarySuffix(v.TmpSummary)
 	if t := v.Tmp; t != nil {
-		fmt.Fprintf(c.stdout, "tmp: %s%s\n", tmpText(t), suffix)
-	} else if suffix != "" {
-		fmt.Fprintln(c.stdout, "tmp: "+strings.TrimPrefix(suffix, "; "))
+		fmt.Fprintf(c.stdout, "tmp: %s%s\n", tmpText(t), tmpInlineSuffix(v))
 	}
+	printTmpScanLine(c, v)
+	printAlertsLine(c, v.Alerts)
+}
+
+func printAlertsLine(c *cmdCtx, alerts []daemon.AlertView) {
+	if len(alerts) == 0 {
+		return
+	}
+	parts := make([]string, 0, len(alerts))
+	for _, alert := range alerts {
+		parts = append(parts, fmt.Sprintf("%s since %s (%s)", alert.Name, alert.Since.Local().Format("15:04"), alert.FormattedValue()))
+	}
+	fmt.Fprintln(c.stdout, "alerts: "+strings.Join(parts, ", "))
+}
+
+func tmpInlineSuffix(v daemon.TopView) string {
+	if v.TmpSummary != nil && v.TmpSummary.SameFilesystem {
+		return tmpSummarySuffix(v.TmpSummary)
+	}
+	return ""
+}
+
+func printTmpScanLine(c *cmdCtx, v daemon.TopView) {
+	summary := v.TmpSummary
+	if summary == nil || v.Tmp != nil && summary.SameFilesystem {
+		return
+	}
+	space := "filesystem usage unavailable"
+	if summary.FS != nil {
+		space = fsSpaceText(*summary.FS)
+	}
+	fmt.Fprintf(c.stdout, "tmp scan: %s: %s%s\n", summary.Root, space, tmpSummarySuffix(summary))
 }
 
 func printSessionsLine(c *cmdCtx, v daemon.TopView) {
@@ -201,5 +231,9 @@ func tmpText(t *daemon.TmpView) string {
 	if t.Reason != "" {
 		s += " [" + t.Reason + "]"
 	}
-	return fmt.Sprintf("%s: %s free of %s, %d of %d inodes free", s, units.FormatSize(t.Free), units.FormatSize(t.Size), t.InodesFree, t.Inodes)
+	return s + ": " + fsSpaceText(t.FSUsage)
+}
+
+func fsSpaceText(fs platform.FSUsage) string {
+	return fmt.Sprintf("%s free of %s, %d of %d inodes free", size(fs.Free), size(fs.Size), fs.InodesFree, fs.Inodes)
 }

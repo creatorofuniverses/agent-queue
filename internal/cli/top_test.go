@@ -138,13 +138,76 @@ func TestTopSessionsLineWithoutIdle(t *testing.T) {
 }
 
 func TestTopTmpLine(t *testing.T) {
-	h := newHarness(t)
-	payload := json.RawMessage(`{"tmp":{"reason":"configured"},"tmp_summary":{"orphan_bytes":1181116006,"candidate_bytes":429496730,"scanned_at":"2026-11-24T00:00:00Z","items":[{"path":"/tmp/build","bytes":1181116006}]}}`)
-	stubInsight(t, h, "top", "", payload, nil)
-	code, out, errout := h.run("top")
-	want := "tmp: state dir (configured); orphans 1.1 GiB, candidates 0.4 GiB; largest: /tmp/build 1.1G\n"
-	if code != 0 || errout != "" || strings.Count(out, "\ntmp:") != 1 || !strings.Contains(out, want) {
-		t.Fatalf("want %q, got exit %d, stdout %q, stderr %q", want, code, out, errout)
+	for _, tc := range []struct {
+		name     string
+		same     bool
+		wantScan string
+	}{
+		{name: "same filesystem", same: true},
+		{name: "different filesystems", wantScan: "tmp scan: /tmp: 37 B free of 100 B, 8 of 25 inodes free"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := fmt.Sprintf(`{"tmp":{"root":"/tasks/aq","size":200,"free":60,"inodes":50,"inodes_free":19},"tmp_summary":{"root":"/tmp","fs":{"size":100,"free":37,"inodes":25,"inodes_free":8},"same_filesystem":%t,"orphan_bytes":1181116006,"candidate_bytes":429496730,"scanned_at":"2026-11-24T00:00:00Z","items":[{"path":"/tmp/build","bytes":1181116006}]}}`, tc.same)
+			var v daemon.TopView
+			if err := json.Unmarshal([]byte(payload), &v); err != nil {
+				t.Fatal(err)
+			}
+			var b strings.Builder
+			c := &cmdCtx{stdout: &b}
+			for _, pretty := range []bool{false, true} {
+				b.Reset()
+				c.ui.pretty = pretty
+				if pretty {
+					c.prettyTop(v)
+				} else {
+					printTop(c, v)
+				}
+				summary := "; orphans 1.1 GiB, candidates 0.4 GiB; largest: /tmp/build 1.1G\n"
+				task := "tmp: /tasks/aq: 60 B free of 200 B, 19 of 50 inodes free"
+				if pretty {
+					task = "140 B used of 200 B · 19 inodes free"
+				}
+				if tc.same {
+					if !strings.Contains(b.String(), task+summary) || strings.Contains(b.String(), "tmp scan:") {
+						t.Errorf("pretty=%t: want summary on task filesystem line, got %q", pretty, b.String())
+					}
+				} else if !strings.Contains(b.String(), task+"\n") || !strings.Contains(b.String(), tc.wantScan+summary) {
+					t.Errorf("pretty=%t: want task and scan filesystem lines, got %q", pretty, b.String())
+				}
+			}
+		})
+	}
+}
+
+func TestTopAlertsLine(t *testing.T) {
+	payload := `{"alerts":[{"name":"swap_full","since":"2026-11-24T12:03:00Z","value":82,"threshold":70},{"name":"tmp_orphans","since":"2026-11-24T12:07:00Z","value":3221225472,"threshold":2147483648}]}`
+	var v daemon.TopView
+	if err := json.Unmarshal([]byte(payload), &v); err != nil {
+		t.Fatal(err)
+	}
+	for _, render := range []struct {
+		name string
+		fn   func(*cmdCtx, daemon.TopView)
+	}{
+		{name: "plain", fn: printTop},
+		{name: "pretty", fn: (*cmdCtx).prettyTop},
+	} {
+		t.Run(render.name, func(t *testing.T) {
+			var b strings.Builder
+			c := &cmdCtx{stdout: &b, ui: ui{pretty: render.name == "pretty"}}
+			render.fn(c, daemon.TopView{})
+			if strings.Contains(b.String(), "alerts:") {
+				t.Errorf("unexpected alerts line in %q", b.String())
+			}
+			b.Reset()
+			render.fn(c, v)
+			at := time.Date(2026, 11, 24, 12, 3, 0, 0, time.UTC).Local()
+			want := fmt.Sprintf("alerts: swap_full since %s (82%%), tmp_orphans since %s (3.0 GiB)\n",
+				at.Format("15:04"), at.Add(4*time.Minute).Format("15:04"))
+			if strings.Count(b.String(), "alerts:") != 1 || !strings.Contains(b.String(), want) {
+				t.Errorf("want %q, got %q", want, b.String())
+			}
+		})
 	}
 }
 

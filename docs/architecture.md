@@ -304,16 +304,21 @@ Operator events for temporary storage, swap and sessions use the same delivery p
 | `tmp_orphans` | `tmp_orphans_normal` |
 
 The host sampler enriches the session inventory from that same process scan
-with Claude Code's session files. Successful samples replace the published
-inventory. A failed process scan leaves the last session inventory available
-for the dashboard and contributes a missing measurement to the session alarms.
+with Claude Code's session files whose PID and process start time match the
+sample. Successful samples replace the published inventory. A failed process
+scan leaves the last session inventory available for the dashboard and
+contributes a missing measurement to the session alarms.
 Each `top` response enriches sessions from its own physical memory scan.
 
 A separate loop inventories `/tmp` for the daemon's UID. The socket's `tmp`
-operation reads the last report or requests a scan with `{"rescan": true}`.
-Rescan requests reuse reports under one minute old. When a fresh scan is needed,
-requests that arrive during a scan wait for that pass. Only scheduled passes
-feed the orphan alarm. The daemon keeps the latest successful report in memory,
+operation returns the report and current filesystem usage of its scan root.
+With `{"rescan": true}`, requests first join any running pass. With no pass
+running, they reuse a report under one minute old or start a new pass.
+The `top` response carries both task temp and scan-root filesystem usage and
+reports whether their device IDs match. Both `top` and the dashboard carry
+active alert episodes. Level alarms use the configured sample interval to
+determine how many readings are needed. Only complete scheduled passes
+update the orphan alarm. The daemon keeps the latest successful report in memory,
 including the total number of partial items and whether all items stayed within
 the scan time budget. Unreadable subtrees contribute partial items without
 pausing the alarm.

@@ -238,7 +238,7 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 	fmt.Fprintf(w, "  %s\n", c.diskText(v.Disk, time.Now()))
 	printSessionsLine(c, v)
 
-	suffix := tmpSummarySuffix(v.TmpSummary)
+	suffix := tmpInlineSuffix(v)
 	if t := v.Tmp; t != nil {
 		fmt.Fprintln(w)
 		u.heading(w, "Temp dirs")
@@ -259,9 +259,9 @@ func (c *cmdCtx) prettyTop(v daemon.TopView) {
 				fmt.Fprintf(w, "  %s\n", u.yellow(t.Reason))
 			}
 		}
-	} else if suffix != "" {
-		fmt.Fprintln(w, "tmp: "+strings.TrimPrefix(suffix, "; "))
 	}
+	printTmpScanLine(c, v)
+	printAlertsLine(c, v.Alerts)
 }
 
 func (c *cmdCtx) prettyProfiles(vs []daemon.ProfileListEntry) {

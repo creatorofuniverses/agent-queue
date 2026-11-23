@@ -321,14 +321,18 @@ memory, swap and idle time. A dash means idle time is unknown.
 
 ### Temporary files and session alerts
 
-The `tmp:` line in `aq top` includes orphan and candidate totals and up to three
-of the largest scanned entries. `aq tmp` shows filesystem usage, both totals,
+The `aq top` inventory summary includes orphan and candidate totals and up to
+three of the largest scanned entries. It appears on the `tmp:` line when task
+temp dirs share the scan filesystem, or on a `tmp scan:` line with the scan
+filesystem's own usage figures. `aq tmp` shows filesystem usage, both totals,
 scan age, the number of partial items, and the 30 largest entries. Counts and
 bytes per state cover the whole inventory. Entries marked `*` were partly
 scanned. Use `aq tmp --all` to show every entry or `aq tmp --json` for the full
-report. The daemon scans every 10 minutes by default. `aq tmp --rescan` reuses a
-report under one minute old. It requests a scan when the report is at least a
-minute old or absent.
+report. The JSON `fs` field contains the scan root's size and free bytes, inode
+counts and tmpfs flag. It is `null` when usage is unavailable.
+The daemon scans every 10 minutes by default. `aq tmp --rescan` joins a running
+scan if there is one. Otherwise it reuses a report under one minute old or
+starts a scan if the report is older or absent.
 This release only inventories files. It never deletes them.
 
 | State | Meaning |
@@ -349,12 +353,16 @@ This release only inventories files. It never deletes them.
 | `tmp_orphans` | `tmp_orphans_normal` | 2 GiB of orphan and candidate entries combined. |
 
 The first four alerts open when the average over `[alerts] window` (10 minutes
-by default) reaches the threshold and clear when it drops below half.
+by default) reaches the threshold and clear when it drops below half. At least
+half the samples expected at `[stats] sample_interval` must be present.
 `tmp_orphans` uses two consecutive complete scheduled scans to open or clear.
+When an alert is active, `aq top` shows its name, start time and value on the
+`alerts:` line. `aq top --json` includes the active episodes in `alerts`.
 If an item exceeds its scan time budget, the header shows
-`incomplete pass: tmp_orphans paused`. Unreadable entries count as partial and
-leave the pass complete. A threshold of zero disables its alert. The operator
-webhook receives one notification when an alert opens and one when it clears.
+`incomplete pass: tmp_orphans paused`. The alert retains its last complete
+value. Unreadable entries count as partial and leave the pass complete.
+A threshold of zero disables its alert. The operator webhook receives one
+notification when an alert opens and one when it clears.
 
 ### Dashboard snapshot
 

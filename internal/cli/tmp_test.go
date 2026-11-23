@@ -47,18 +47,18 @@ func TestTmpTable(t *testing.T) {
 	h := newHarness(t)
 	now := time.Now()
 	payload := json.RawMessage(fmt.Sprintf(`{
-		"root":%q,"scanned_at":%q,"orphan_bytes":1181116006,"candidate_bytes":429496730,"complete":false,"partial_items":1,
+		"root":"/server-only/tmp","fs":{"size":10737418240,"free":6442450944,"inodes":250,"inodes_free":120,"tmpfs":true},"scanned_at":%q,"orphan_bytes":1181116006,"candidate_bytes":429496730,"complete":false,"partial_items":1,
 		"items":[
 			{"path":"/tmp/small","bytes":1048576,"last_write":%q,"owner":{"kind":"process","pid":42},"type":"venv","state":"in_use","partial":true},
 			{"path":"/tmp/big","bytes":1181116006,"last_write":%q,"owner":{"kind":"unknown"},"type":"git","state":"orphan"},
 			{"path":"/tmp/scratch","bytes":429496730,"last_write":%q,"owner":{"kind":"claude_project","project":"proj","session":"session-1"},"type":"claude_scratchpad","state":"candidate"}
 		]
-	}`, h.cwd, now.Add(-3*time.Minute).Format(time.RFC3339Nano), now.Add(-time.Hour).Format(time.RFC3339Nano), now.Add(-25*time.Hour).Format(time.RFC3339Nano), now.Add(-26*time.Hour).Format(time.RFC3339Nano)))
+	}`, now.Add(-3*time.Minute).Format(time.RFC3339Nano), now.Add(-time.Hour).Format(time.RFC3339Nano), now.Add(-25*time.Hour).Format(time.RFC3339Nano), now.Add(-26*time.Hour).Format(time.RFC3339Nano)))
 	stubInsight(t, h, "tmp", `{"rescan":true}`, payload, nil)
 	code, out, errout := h.run("tmp", "--rescan")
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if code != 0 || errout != "" || len(lines) != 7 ||
-		!strings.HasPrefix(lines[0], "tmp: ") || !strings.Contains(lines[0], " of ") ||
+		!strings.HasPrefix(lines[0], "tmp: 4.0 of 10.0 GiB;") ||
 		!strings.HasSuffix(lines[0], "; orphans 1.1 GiB; candidates 0.4 GiB; scanned 3m ago; partial items: 1; incomplete pass: tmp_orphans paused") ||
 		strings.Join(strings.Fields(lines[1]), " ") != "PATH SIZE LAST WRITE OWNER TYPE STATE" ||
 		strings.Join(strings.Fields(lines[2]), " ") != "/tmp/big 1.1 GiB 25h ago unknown git orphan" ||
@@ -106,7 +106,7 @@ func TestTmpShowsLargestThirtyWithFullStateTotals(t *testing.T) {
 
 func TestTmpJSON(t *testing.T) {
 	h := newHarness(t)
-	payload := json.RawMessage(`{"root":"/missing","scanned_at":"2026-11-24T00:00:00Z","items":[],"orphan_bytes":0,"candidate_bytes":0,"complete":true,"future_field":42}`)
+	payload := json.RawMessage(`{"root":"/missing","scanned_at":"2026-11-24T00:00:00Z","items":[],"orphan_bytes":0,"candidate_bytes":0,"complete":true,"fs":{"size":1024,"free":100,"inodes":100,"inodes_free":95,"tmpfs":true},"future_field":42}`)
 	stubInsight(t, h, "tmp", `{"rescan":false}`, payload, nil)
 	code, out, errout := h.run("tmp", "--json")
 	if code != 0 || errout != "" || out != string(payload)+"\n" {

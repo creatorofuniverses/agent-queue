@@ -60,10 +60,12 @@ but it is a hint: ignore it for light commands (it also fires on quoted text).
    forecast.
 4. **Will it start soon?** `aq estimate --name tests --cpus 4 --timeout 30m`
    (or `--memory 6G`). If the queue is long, do other work first, or ask the
-   user whether to wait. `aq top` shows who uses host memory right now, and
-   `aq top --sessions` shows each agent session's memory, swap and idle time.
+   user whether to wait. `aq top` shows who uses host memory right now and any
+   active alerts. `aq top --sessions` shows each session's memory, swap and idle time.
    `aq tmp [--all] [--json] [--rescan]` shows the 30 largest /tmp entries and
-   totals by state. Use `--all` for every entry or `--json` for the full report.
+   totals by state. Use `--all` for every entry or `--json` for the full report,
+   including scan-root filesystem usage in `fs`.
+   `--rescan` joins a running scan before checking the one-minute report cache.
    The report states are `aq_task`, `in_use`, `live`, `candidate`, `orphan` and `recent`.
 
 ## 3. Pick the shape

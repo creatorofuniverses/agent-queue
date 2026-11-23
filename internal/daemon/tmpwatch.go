@@ -8,8 +8,43 @@ import (
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
+	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
+
+// TmpResponse carries the inventory and current usage of its filesystem.
+type TmpResponse struct {
+	tmpscan.Report
+	FS *platform.FSUsage `json:"fs"`
+}
+
+func (d *server) tmpReport(ctx context.Context, rescan bool) (TmpResponse, error) {
+	if rescan && d.rescan != nil {
+		report, err := d.rescan(ctx)
+		if err != nil {
+			return TmpResponse{}, err
+		}
+		return TmpResponse{Report: report, FS: d.scanFilesystem(report.Root)}, nil
+	}
+	if d.lastTmp != nil {
+		if report := d.lastTmp.Load(); report != nil {
+			return TmpResponse{Report: *report, FS: d.scanFilesystem(report.Root)}, nil
+		}
+	}
+	return TmpResponse{}, &protocol.Error{Code: protocol.CodeUnavailable, Message: "no /tmp scan available yet"}
+}
+
+func (d *server) scanFilesystem(root string) *platform.FSUsage {
+	if root == "" {
+		return nil
+	}
+	fs, err := d.host.FSUsage(root)
+	if err != nil {
+		return nil
+	}
+	return &fs
+}
 
 type tmpWatch struct {
 	ctx    context.Context
@@ -114,9 +149,11 @@ func (w *tmpWatch) startScanLocked(scheduled bool) *tmpPass {
 
 func (w *tmpWatch) rescan(ctx context.Context) (tmpscan.Report, error) {
 	w.mu.Lock()
-	if last := w.last.Load(); last != nil && time.Since(last.At) < time.Minute {
-		w.mu.Unlock()
-		return *last, nil
+	if w.current == nil {
+		if last := w.last.Load(); last != nil && time.Since(last.At) < time.Minute {
+			w.mu.Unlock()
+			return *last, nil
+		}
 	}
 	pass := w.startScanLocked(false)
 	w.mu.Unlock()

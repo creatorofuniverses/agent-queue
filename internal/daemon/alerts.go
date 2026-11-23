@@ -88,6 +88,14 @@ var alertDescriptions = map[model.EventKind]struct {
 	model.EventTmpOrphans:    {model.EventTmpOrphansNormal, "orphan and candidate /tmp items", alertSize},
 }
 
+// FormattedValue renders the reading in the alert's own units.
+func (a AlertView) FormattedValue() string {
+	if desc, ok := alertDescriptions[model.EventKind(a.Name)]; ok {
+		return desc.format(a.Value)
+	}
+	return alertCount(a.Value)
+}
+
 func alertPercent(v float64) string { return alertCount(v) + "%" }
 func alertSize(v float64) string    { return units.FormatSize(uint64(v)) }
 func alertCount(v float64) string   { return strings.TrimSuffix(fmt.Sprintf("%.1f", v), ".0") }

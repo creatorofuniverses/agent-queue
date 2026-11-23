@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/creatorofuniverses/agent-queue/internal/platform/linux"
+	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
@@ -17,7 +17,7 @@ import (
 func cmdTmp(c *cmdCtx, args []string) error {
 	fs := c.newFlagSet("tmp")
 	asJSON := fs.Bool("json", false, "show the scan report as JSON")
-	rescan := fs.Bool("rescan", false, "request a scan if the last report is at least one minute old")
+	rescan := fs.Bool("rescan", false, "join a running scan or refresh a report at least one minute old")
 	all := fs.Bool("all", false, "show every entry in the inventory")
 	pos, err := parseFlags(fs, args)
 	if err != nil {
@@ -41,7 +41,7 @@ func cmdTmp(c *cmdCtx, args []string) error {
 		_, err := fmt.Fprintln(c.stdout, string(raw))
 		return err
 	}
-	var report tmpscan.Report
+	var report daemon.TmpResponse
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return err
 	}
@@ -49,10 +49,10 @@ func cmdTmp(c *cmdCtx, args []string) error {
 	return nil
 }
 
-func printTmp(c *cmdCtx, report tmpscan.Report, all bool) {
+func printTmp(c *cmdCtx, report daemon.TmpResponse, all bool) {
 	now := time.Now()
 	occupancy := "filesystem usage unavailable"
-	if fs, err := linux.NewHost("/proc").FSUsage(report.Root); err == nil {
+	if fs := report.FS; fs != nil {
 		used, total := tmpSizes(fs.Size-min(fs.Free, fs.Size), fs.Size)
 		_, unit, _ := strings.Cut(total, " ")
 		occupancy = strings.TrimSuffix(used, " "+unit) + " of " + total

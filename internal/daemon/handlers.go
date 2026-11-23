@@ -187,16 +187,7 @@ func (d *server) dispatch(ctx context.Context, op string, args json.RawMessage, 
 		if err := decode(args, &a); err != nil {
 			return nil, err
 		}
-		if a.Rescan && d.rescan != nil {
-			// The watcher checks the cached report and the in-flight scan together.
-			return d.rescan(ctx)
-		}
-		if d.lastTmp != nil {
-			if report := d.lastTmp.Load(); report != nil {
-				return *report, nil
-			}
-		}
-		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "no /tmp scan available yet"}
+		return d.tmpReport(ctx, a.Rescan)
 	case "estimate":
 		return d.estimate(ctx, args)
 	case "profile_show":

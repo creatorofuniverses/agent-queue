@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/admission"
@@ -55,14 +56,18 @@ type TopView struct {
 	Sessions                 []agentsess.Session `json:"sessions,omitempty"`
 	SessionsIdleAfterSeconds float64             `json:"sessions_idle_after_seconds,omitempty"`
 	TmpSummary               *TmpSummary         `json:"tmp_summary,omitempty"`
+	Alerts                   []AlertView         `json:"alerts"`
 }
 
-// TmpSummary is the last inventory's totals and at most three largest entries.
+// TmpSummary carries scan-root filesystem usage and totals from the last inventory.
 type TmpSummary struct {
-	OrphanBytes    uint64         `json:"orphan_bytes"`
-	CandidateBytes uint64         `json:"candidate_bytes"`
-	ScannedAt      time.Time      `json:"scanned_at"`
-	Items          []tmpscan.Item `json:"items"`
+	Root           string            `json:"root"`
+	FS             *platform.FSUsage `json:"fs"`
+	SameFilesystem bool              `json:"same_filesystem"`
+	OrphanBytes    uint64            `json:"orphan_bytes"`
+	CandidateBytes uint64            `json:"candidate_bytes"`
+	ScannedAt      time.Time         `json:"scanned_at"`
+	Items          []tmpscan.Item    `json:"items"`
 }
 
 // TmpView is the filesystem holding task temp dirs. Root is empty when they
@@ -150,21 +155,20 @@ func (d *server) top(ctx context.Context) (any, error) {
 	}
 	closed, avg := d.sched.Pressure()
 	p := d.sched.LastPass()
-	tmp := &TmpView{TmpPlan: d.tmp}
-	if tmp.Root != "" {
-		// The start-up note goes stale once a launch makes the root.
-		tmp.Reason = ""
-		if err := tmpdir.CheckRoot(tmp.Root, os.Getuid()); err != nil {
-			tmp.Reason = err.Error()
-		}
-	}
-	if u, err := d.host.FSUsage(d.tmp.Base); err != nil {
-		tmp.Error = err.Error()
-	} else {
-		tmp.FSUsage = u
-	}
+	tmp, tmpPath := d.taskTmpView()
 	u, ue := scanUsage(ctx, d.opts.Usage, d.cfg.Stats.AgentProcesses, d.initialUsageDone)
-	v := TopView{At: time.Now().UTC(), Host: HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed}, Physical: physicalView(u, ue, mem), Commitments: p.Commitments, Queue: QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail}, Tmp: tmp}
+	v := TopView{
+		At:          time.Now().UTC(),
+		Host:        HostView{mem.Total, mem.Available, mem.SwapTotal, mem.SwapFree, avg, closed},
+		Physical:    physicalView(u, ue, mem),
+		Commitments: p.Commitments,
+		Queue:       QueueView{p.Queued, p.Running, p.Held, p.HeadID, p.Head.Blocker, p.Head.Detail},
+		Tmp:         tmp,
+		Alerts:      []AlertView{},
+	}
+	if d.alerts != nil {
+		v.Alerts = d.alerts.Active()
+	}
 	if d.lastDisk != nil {
 		v.Disk = d.lastDisk.Load()
 	}
@@ -174,11 +178,45 @@ func (d *server) top(ctx context.Context) (any, error) {
 	}
 	if d.lastTmp != nil {
 		if report := d.lastTmp.Load(); report != nil {
+			fs := d.scanFilesystem(report.Root)
 			v.TmpSummary = &TmpSummary{
-				OrphanBytes: report.OrphanBytes, CandidateBytes: report.CandidateBytes,
+				Root: report.Root, FS: fs,
+				SameFilesystem: fs != nil && tmp.Error == "" && sameFilesystem(tmpPath, report.Root),
+				OrphanBytes:    report.OrphanBytes, CandidateBytes: report.CandidateBytes,
 				ScannedAt: report.At.UTC(), Items: report.Items[:min(len(report.Items), 3)],
 			}
 		}
 	}
 	return v, nil
+}
+
+func (d *server) taskTmpView() (*TmpView, string) {
+	tmp := &TmpView{TmpPlan: d.tmp}
+	path := d.paths.TmpBase()
+	if tmp.Root != "" {
+		// The start-up note goes stale once a launch makes the root.
+		tmp.Reason = ""
+		path = tmp.Root
+		if err := tmpdir.CheckRoot(tmp.Root, os.Getuid()); err != nil {
+			tmp.Reason = err.Error()
+			path = tmp.Base
+		}
+	} else if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		path = d.paths.StateDir
+	}
+	if u, err := d.host.FSUsage(path); err != nil {
+		tmp.Error = err.Error()
+	} else {
+		tmp.FSUsage = u
+	}
+	return tmp, path
+}
+
+func sameFilesystem(a, b string) bool {
+	first, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	second, err := os.Stat(b)
+	return err == nil && first.Sys().(*syscall.Stat_t).Dev == second.Sys().(*syscall.Stat_t).Dev
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
+	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
@@ -241,8 +242,8 @@ func TestTmpWatchOrphansAlert(t *testing.T) {
 
 func TestTmpOpRescan(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		d := server{lastTmp: &atomic.Pointer[tmpscan.Report]{}}
 		root := t.TempDir()
+		d := server{lastTmp: &atomic.Pointer[tmpscan.Report]{}, host: pathFSHost{}}
 		entered, release := make(chan struct{}, 2), make(chan struct{})
 		want := tmpscan.Report{At: time.Now(), Root: root, Complete: true}
 		calls := 0
@@ -287,7 +288,7 @@ func TestTmpOpRescan(t *testing.T) {
 		close(release)
 		check := func(value any, err error) {
 			t.Helper()
-			got, ok := value.(tmpscan.Report)
+			got, ok := value.(TmpResponse)
 			if err != nil || !ok || !got.At.Equal(want.At) || got.Root != want.Root || !got.Complete {
 				t.Fatalf("tmp returned %+v, %v, want %+v", value, err, want)
 			}
@@ -301,6 +302,50 @@ func TestTmpOpRescan(t *testing.T) {
 			t.Fatalf("concurrent rescans started %d scans, want one", calls)
 		}
 	})
+}
+
+type pathFSHost struct {
+	platform.HostMetrics
+	filesystems map[string]platform.FSUsage
+}
+
+func (h pathFSHost) FSUsage(path string) (platform.FSUsage, error) {
+	if fs, ok := h.filesystems[path]; ok {
+		return fs, nil
+	}
+	return platform.FSUsage{}, errors.New("unexpected filesystem path: " + path)
+}
+
+func TestTmpOpIncludesScanFilesystem(t *testing.T) {
+	root := t.TempDir()
+	fs := platform.FSUsage{Size: 100, Free: 36, Inodes: 25, InodesFree: 9, Tmpfs: true}
+	report := tmpscan.Report{Root: root, Complete: true, OrphanBytes: 17}
+	d := server{
+		host:    pathFSHost{filesystems: map[string]platform.FSUsage{root: fs}},
+		lastTmp: &atomic.Pointer[tmpscan.Report]{},
+		rescan:  func(context.Context) (tmpscan.Report, error) { return report, nil },
+	}
+	d.lastTmp.Store(&report)
+	for _, args := range []string{`{}`, `{"rescan":true}`} {
+		got, err := d.handle(t.Context(), "tmp", json.RawMessage(args), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reply struct {
+			tmpscan.Report
+			FS *platform.FSUsage `json:"fs"`
+		}
+		if err := json.Unmarshal(b, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if reply.Root != root || reply.OrphanBytes != 17 || reply.FS == nil || *reply.FS != fs {
+			t.Errorf("tmp %s: want a full report with scan-root fs %+v, got %s", args, fs, b)
+		}
+	}
 }
 
 func TestTmpOpRescanUsesRecentReport(t *testing.T) {
@@ -318,7 +363,7 @@ func TestTmpOpRescanUsesRecentReport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return got.(tmpscan.Report).At
+			return got.(TmpResponse).At
 		}
 		time.Sleep(time.Minute - time.Second)
 		if got := rescanAt(); !got.Equal(at) {
@@ -359,6 +404,42 @@ func TestTmpWatchRescansDoNotFeedOrphans(t *testing.T) {
 		event := <-events
 		if event.Kind != model.EventTmpOrphans || !event.CreatedAt.Equal(time.Now()) {
 			t.Errorf("want an alert from the second scheduled pass, got %+v", event)
+		}
+	})
+}
+
+func TestTmpWatchRescanJoinsPassWithRecentCache(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		last := &atomic.Pointer[tmpscan.Report]{}
+		last.Store(&tmpscan.Report{At: time.Now(), OrphanBytes: 1})
+		release := make(chan struct{})
+		watch := newTmpWatch(ctx, last, nil, func(ctx context.Context) (tmpscan.Report, error) {
+			select {
+			case <-release:
+				return tmpscan.Report{At: time.Now(), OrphanBytes: 2}, nil
+			case <-ctx.Done():
+				return tmpscan.Report{}, ctx.Err()
+			}
+		}, nil)
+		go watch.run(30 * time.Second)
+		synctest.Wait()
+
+		done := make(chan tmpscan.Report, 1)
+		go func() {
+			report, _ := watch.rescan(ctx)
+			done <- report
+		}()
+		synctest.Wait()
+		select {
+		case report := <-done:
+			t.Fatalf("rescan returned before the active pass completed: %+v", report)
+		default:
+		}
+		close(release)
+		if report := <-done; report.OrphanBytes != 2 {
+			t.Fatalf("rescan got %+v, want report from the active pass", report)
 		}
 	})
 }

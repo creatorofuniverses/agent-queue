@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,12 @@ import (
 	"time"
 
 	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
+	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 	"github.com/creatorofuniverses/agent-queue/internal/platform/fake"
 	"github.com/creatorofuniverses/agent-queue/internal/scheduler"
 	"github.com/creatorofuniverses/agent-queue/internal/store"
+	"github.com/creatorofuniverses/agent-queue/internal/tmpscan"
 )
 
 func TestTopView(t *testing.T) {
@@ -158,5 +161,89 @@ func TestTopViewDisk(t *testing.T) {
 	got, err := d.top(context.Background())
 	if err != nil || got.(TopView).Disk == nil || *got.(TopView).Disk != want {
 		t.Fatal(got, err)
+	}
+}
+
+func TestTopIncludesActiveAlerts(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Alerts.Window = 4 * time.Minute
+	e.cfg.Stats.SampleInterval = time.Minute
+	alerts := newAlertSet(e.cfg)
+	d := &server{cfg: e.cfg, host: e.host, alerts: alerts,
+		sched: scheduler.New(scheduler.Deps{Exec: e.ex, Host: e.host, Cfg: e.cfg, Paths: e.paths})}
+
+	check := func(want string) {
+		t.Helper()
+		got, err := d.handle(t.Context(), "top", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reply map[string]json.RawMessage
+		if err := json.Unmarshal(b, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if string(reply["alerts"]) != want {
+			t.Errorf("alerts = %s, want %s", reply["alerts"], want)
+		}
+	}
+
+	check(`[]`)
+	at := time.Date(2026, 11, 24, 11, 59, 0, 0, time.UTC)
+	alerts.observeLevel(model.EventSwapFull, at, 0, true)
+	alerts.observeLevel(model.EventSwapFull, at.Add(3*time.Minute), 82, true)
+	alerts.observeLevel(model.EventSwapFull, at.Add(4*time.Minute), 82, true)
+	check(`[{"name":"swap_full","since":"2026-11-24T12:03:00Z","value":82,"threshold":75}]`)
+}
+
+func TestTopTmpSummaryFilesystems(t *testing.T) {
+	e := newEnv(t)
+	taskRoot := t.TempDir()
+	taskFS := platform.FSUsage{Size: 200, Free: 60, Inodes: 50, InodesFree: 19, Tmpfs: true}
+	scanFS := platform.FSUsage{Size: 100, Free: 37, Inodes: 25, InodesFree: 8}
+	for _, tc := range []struct {
+		name, root string
+		same       bool
+		scanFS     platform.FSUsage
+	}{
+		{name: "same device, different directory", root: t.TempDir(), same: true, scanFS: taskFS},
+		{name: "different device", root: "/proc", scanFS: scanFS},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := pathFSHost{HostMetrics: e.host, filesystems: map[string]platform.FSUsage{
+				taskRoot: taskFS, tc.root: tc.scanFS,
+			}}
+			d := &server{cfg: e.cfg, host: host, tmp: TmpPlan{Root: taskRoot, Base: filepath.Dir(taskRoot)},
+				sched:   scheduler.New(scheduler.Deps{Exec: e.ex, Host: host, Cfg: e.cfg, Paths: e.paths}),
+				lastTmp: &atomic.Pointer[tmpscan.Report]{}}
+			d.lastTmp.Store(&tmpscan.Report{Root: tc.root, OrphanBytes: 17})
+			got, err := d.handle(t.Context(), "top", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reply struct {
+				Tmp     TmpView `json:"tmp"`
+				Summary struct {
+					Root        string            `json:"root"`
+					FS          *platform.FSUsage `json:"fs"`
+					Same        bool              `json:"same_filesystem"`
+					OrphanBytes uint64            `json:"orphan_bytes"`
+				} `json:"tmp_summary"`
+			}
+			if err := json.Unmarshal(b, &reply); err != nil {
+				t.Fatal(err)
+			}
+			if reply.Tmp.FSUsage != taskFS || reply.Summary.Root != tc.root || reply.Summary.FS == nil ||
+				*reply.Summary.FS != tc.scanFS || reply.Summary.Same != tc.same || reply.Summary.OrphanBytes != 17 {
+				t.Errorf("want task and scan usage with same_filesystem=%t, got %s", tc.same, b)
+			}
+		})
 	}
 }
