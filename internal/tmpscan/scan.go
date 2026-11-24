@@ -110,6 +110,7 @@ func scan(ctx context.Context, o Options, lstat func(string) (fs.FileInfo, error
 	}
 	claudeDir := fmt.Sprintf("claude-%d", o.UID)
 	aqPrefix := fmt.Sprintf("aq-%d-", o.UID)
+	var partialClaudeRoot *Item
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return Report{}, err
@@ -127,9 +128,20 @@ func scan(ctx context.Context, o Options, lstat func(string) (fs.FileInfo, error
 			continue
 		}
 		if entry.Name() == claudeDir && info.IsDir() {
-			if err := scanScratchpads(ctx, o, path, rootDev, &r, lstat); err != nil {
-				return Report{}, err
+			items, err := scanScratchpads(ctx, o, path, rootDev, lstat)
+			if err != nil {
+				if err := ctx.Err(); err != nil {
+					return Report{}, err
+				}
+				item := newItem(path, info, Owner{Kind: "unknown"})
+				item.Partial = true
+				for _, scratchpad := range items {
+					item.budgetExceeded = item.budgetExceeded || scratchpad.budgetExceeded
+				}
+				partialClaudeRoot = &item
+				continue
 			}
+			r.Items = append(r.Items, items...)
 			continue
 		}
 		owner := Owner{Kind: "unknown"}
@@ -146,6 +158,10 @@ func scan(ctx context.Context, o Options, lstat func(string) (fs.FileInfo, error
 	projects, err := scanOwners(ctx, o, r.Items)
 	if err != nil {
 		return Report{}, err
+	}
+	if partialClaudeRoot != nil {
+		// A process in one project cannot own the whole Claude directory.
+		r.Items = append(r.Items, *partialClaudeRoot)
 	}
 	cutoff := r.At.Add(-o.OrphanAfter)
 	for i := range r.Items {
@@ -168,17 +184,18 @@ func scan(ctx context.Context, o Options, lstat func(string) (fs.FileInfo, error
 	return r, nil
 }
 
-func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint64, r *Report, lstat func(string) (fs.FileInfo, error)) error {
+func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint64, lstat func(string) (fs.FileInfo, error)) ([]Item, error) {
 	projects, err := os.ReadDir(claudeDir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var items []Item
 	for _, project := range projects {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		if !project.IsDir() {
 			continue
@@ -189,7 +206,7 @@ func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint6
 			continue
 		}
 		if err != nil {
-			return err
+			return items, err
 		}
 		projectStat := info.Sys().(*syscall.Stat_t)
 		if !info.IsDir() || uint64(projectStat.Dev) != dev {
@@ -220,17 +237,17 @@ func scanScratchpads(ctx context.Context, o Options, claudeDir string, dev uint6
 			owner := Owner{Kind: "claude_project", Project: project.Name(), Session: session.Name()}
 			item, err := walkItem(ctx, o, sessionPath, sessionInfo, owner)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			r.Items = append(r.Items, item)
+			items = append(items, item)
 		}
 		if partial && int(projectStat.Uid) == o.UID {
 			item := newItem(path, info, Owner{Kind: "claude_project", Project: project.Name()})
 			item.Partial = true
-			r.Items = append(r.Items, item)
+			items = append(items, item)
 		}
 	}
-	return nil
+	return items, nil
 }
 
 func lastWrite(st *syscall.Stat_t) time.Time {

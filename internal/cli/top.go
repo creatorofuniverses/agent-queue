@@ -33,6 +33,9 @@ func cmdTop(c *cmdCtx, args []string) error {
 		return printJSON(c, v)
 	}
 	if *sessions {
+		if v.Physical.Error != "" {
+			return &exitError{code: exitUnavailable, msg: "sessions unavailable: " + v.Physical.Error}
+		}
 		printSessions(c, v.Sessions)
 		return nil
 	}

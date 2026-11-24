@@ -305,9 +305,11 @@ Operator events for temporary storage, swap and sessions use the same delivery p
 
 The host sampler enriches the session inventory from that same process scan
 with Claude Code's session files whose PID and process start time match the
-sample. Successful samples replace the published inventory. A failed process
-scan leaves the last session inventory available for the dashboard and
-contributes a missing measurement to the session alarms.
+sample. The process scan captures start time before reading process details
+and verifies it after reading memory and cwd. It drops changed identities
+before grouping processes into sessions. Successful samples replace the
+published inventory. After a failed process scan, the dashboard keeps the
+last session inventory and the session alarms record a missing measurement.
 Each `top` response enriches sessions from its own physical memory scan.
 
 A separate loop inventories `/tmp` for the daemon's UID. The socket's `tmp`
@@ -321,7 +323,8 @@ determine how many readings are needed. Only complete scheduled passes
 update the orphan alarm. The daemon keeps the latest successful report in memory,
 including the total number of partial items and whether all items stayed within
 the scan time budget. Unreadable subtrees contribute partial items without
-pausing the alarm.
+pausing the alarm. If the scan cannot enumerate or search `claude-<uid>`, it
+reports that directory as one partial item and continues the inventory.
 The loop logs one warning per scan still running after two scan intervals.
 On shutdown the loop waits up to five seconds for an in-flight scan. A scan
 that returns after cancellation skips report and alarm updates.

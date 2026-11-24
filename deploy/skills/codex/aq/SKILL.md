@@ -60,11 +60,13 @@ workload: the hint can also match quoted text or a light command.
    long, continue independent work. `aq top` shows host memory, pressure,
    commitments, the blocked queue head and active alerts. `aq top --sessions`
    shows each agent session's memory, swap and idle time.
+   If process sampling fails, the text view prints the error and exits with code 69.
    `aq tmp [--all] [--json] [--rescan]` shows the 30 largest /tmp entries and
    totals by state. Use `--all` for every entry or `--json` for the full report,
    including scan-root filesystem usage in `fs`.
    `--rescan` joins a running scan before checking the one-minute report cache.
    The report states are `aq_task`, `in_use`, `live`, `candidate`, `orphan` and `recent`.
+   An unreadable or unsearchable `claude-<uid>` appears as one partial `in_use` entry.
 5. **Reservation budgets stay explicit.** Profiles learn from completed tasks,
    including named tasks submitted with `--within`, not from reservations. Aq
    does not automatically shrink a reservation's stand or task budget. Give

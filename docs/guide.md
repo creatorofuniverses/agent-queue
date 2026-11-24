@@ -317,7 +317,9 @@ agent); "other" is the rest: the system, a terminal multiplexer, the kernel.
 and child-process memory, and up to three sessions idle for
 `[sessions] idle_after` or longer (12 hours by default). `aq top --sessions` shows every
 session's name (or PID), client, project directory, agent memory, child-process
-memory, swap and idle time. A dash means idle time is unknown.
+memory, swap and idle time. A dash means idle time is unknown. If the process
+scan fails, the text view prints the error and exits with code 69. JSON output
+carries the error in `physical.error`.
 
 ### Temporary files and session alerts
 
@@ -360,7 +362,9 @@ When an alert is active, `aq top` shows its name, start time and value on the
 `alerts:` line. `aq top --json` includes the active episodes in `alerts`.
 If an item exceeds its scan time budget, the header shows
 `incomplete pass: tmp_orphans paused`. The alert retains its last complete
-value. Unreadable entries count as partial and leave the pass complete.
+value. Unreadable entries count as partial and leave the pass complete. If
+`claude-<uid>` cannot be listed or searched, it appears as one partial `in_use`
+entry and the rest of the inventory is still scanned.
 A threshold of zero disables its alert. The operator webhook receives one
 notification when an alert opens and one when it clears.
 

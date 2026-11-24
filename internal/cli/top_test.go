@@ -224,3 +224,21 @@ func TestTopSessionsTable(t *testing.T) {
 		t.Fatalf("want two session rows, got exit %d, stdout %q, stderr %q", code, out, errout)
 	}
 }
+
+func TestTopSessionsUsageUnavailable(t *testing.T) {
+	h := newHarness(t)
+	const scanError = "previous usage scan still running"
+	payload := json.RawMessage(`{"physical":{"error":"` + scanError + `"}}`)
+	stubInsight(t, h, "top", "", payload, nil)
+
+	code, out, errout := h.run("top", "--sessions")
+	if code != exitUnavailable || out != "" || !strings.Contains(errout, scanError) {
+		t.Errorf("want scan error on stderr and exit %d, got exit %d, stdout %q, stderr %q", exitUnavailable, code, out, errout)
+	}
+
+	code, out, errout = h.run("top", "--sessions", "--json")
+	var v daemon.TopView
+	if code != exitOK || errout != "" || json.Unmarshal([]byte(out), &v) != nil || v.Physical.Error != scanError || v.Sessions != nil {
+		t.Errorf("want JSON with the physical scan error, got exit %d, stdout %q, stderr %q", code, out, errout)
+	}
+}

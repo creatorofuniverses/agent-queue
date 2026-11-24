@@ -164,6 +164,50 @@ func TestScanNonSearchableClaudeProject(t *testing.T) {
 	itemAt(t, r, scratchPath(o, "-visible", "session"))
 }
 
+func TestScanInaccessibleClaudeRoot(t *testing.T) {
+	for _, mode := range []fs.FileMode{0000, 0600} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			o := agedFixture(t)
+			claude := scratchPath(o, "", "")
+			root := filepath.Join(o.Root, claude)
+			scratchpad(t, o, "-hidden", "session", 30*time.Hour)
+			fakeProcess(t, o, 101, 0, "fish", filepath.Join(root, "-hidden", "session"))
+			writeFile(t, filepath.Join(o.Root, "z.log"), "old")
+			must(t, os.Chmod(root, mode))
+			t.Cleanup(func() { must(t, os.Chmod(root, 0700)) })
+			if mode == 0000 {
+				if _, err := os.ReadDir(root); !errors.Is(err, fs.ErrPermission) {
+					if err == nil {
+						t.Skip("test user can read mode-0000 directories")
+					}
+					t.Fatal(err)
+				}
+			} else {
+				_, err := os.ReadDir(root)
+				must(t, err)
+				if _, err := os.Lstat(filepath.Join(root, "-hidden")); !errors.Is(err, fs.ErrPermission) {
+					if err == nil {
+						t.Skip("test user can search mode-0600 directories")
+					}
+					t.Fatal(err)
+				}
+			}
+
+			r := scanFixture(t, o)
+			assertPartialItem(t, r, claude)
+			if item := itemAt(t, r, claude); item.Owner.Kind != "unknown" || item.Inodes != 1 {
+				t.Errorf("want a fallback for the Claude root with no project owner, got %+v", item)
+			}
+			if len(r.Items) != 2 {
+				t.Fatalf("expected one Claude fallback and an unrelated item, got %+v", r.Items)
+			}
+			if item := itemAt(t, r, "z.log"); item.State != "orphan" || r.OrphanBytes != item.Bytes {
+				t.Errorf("expected the unrelated file to contribute its orphan bytes, got %+v", r)
+			}
+		})
+	}
+}
+
 func hideDirectory(t *testing.T, path string) {
 	t.Helper()
 	makeDir(t, path)
