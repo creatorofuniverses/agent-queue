@@ -21,9 +21,10 @@ type UsageMeterConfig struct {
 	Slices               []string
 }
 type UsageMeter struct {
-	cfg      UsageMeterConfig
-	manager  string
-	projects map[string]string // working directory -> project root; the sampler runs one pass at a time
+	cfg        UsageMeterConfig
+	manager    string
+	projects   map[string]string // working directory -> project root; the sampler runs one pass at a time
+	readMemory func(string) uint64
 	// tracked is the agent-tree processes the last pass reported or could
 	// not read, by PID: they are read while they live, with or without an
 	// agent left in their cgroup.
@@ -38,7 +39,7 @@ func NewUsageMeter(cfg UsageMeterConfig) *UsageMeter {
 		cfg.CgroupRoot = "/sys/fs/cgroup"
 	}
 	b, _ := os.ReadFile(filepath.Join(cfg.ProcRoot, "self/cgroup"))
-	return &UsageMeter{cfg: cfg, manager: userManagerCgroup(string(b), os.Getuid()), projects: map[string]string{}}
+	return &UsageMeter{cfg: cfg, manager: userManagerCgroup(string(b), os.Getuid()), projects: map[string]string{}, readMemory: processMemory}
 }
 func workingSet(dir string) (uint64, error) {
 	cur, e := readUint(filepath.Join(dir, "memory.current"))
@@ -68,11 +69,15 @@ func withinCG(path, dir string) bool { return path == dir || strings.HasPrefix(p
 // usageProc is what the single /proc pass learns about one process.
 type usageProc struct {
 	dir          string
+	start        uint64
+	startKnown   bool
 	ppid, agent  int // agent indexes the agent list, -1 when the process is none
 	cgroup       string
 	inAQOrDocker bool
 	swapBytes    uint64
 	cmdline      string // retained for agents so session metadata needs no second read
+	cwd          string
+	memory       uint64
 }
 
 func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage, error) {
@@ -120,6 +125,7 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 			continue
 		}
 		dir := filepath.Join(m.cfg.ProcRoot, ent.Name())
+		start, startKnown := procStart(filepath.Join(dir, "stat"))
 		comm, e := os.ReadFile(filepath.Join(dir, "comm"))
 		if e != nil {
 			continue
@@ -127,7 +133,8 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		cmd, _ := os.ReadFile(filepath.Join(dir, "cmdline"))
 		cmdline := string(cmd)
 		ppid, swapBytes := parentPID(filepath.Join(dir, "status"))
-		p := &usageProc{dir: dir, agent: platform.AgentIndex(agents, string(comm), cmdline), ppid: ppid, swapBytes: swapBytes}
+		p := &usageProc{dir: dir, start: start, startKnown: startKnown,
+			agent: platform.AgentIndex(agents, string(comm), cmdline), ppid: ppid, swapBytes: swapBytes}
 		if p.agent >= 0 {
 			p.cmdline = cmdline
 		}
@@ -177,6 +184,27 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		}
 		return root
 	}
+	// Sample memory and cwd before validating process identity. Removing an
+	// invalid record can only shorten an ancestry chain, so any process that
+	// still has an agent root below already had one here.
+	for pid, p := range procs {
+		if e := ctx.Err(); e != nil {
+			return v, e
+		}
+		if !p.inAQOrDocker && rootAgent(pid) >= 0 {
+			p.memory = m.readMemory(p.dir)
+		}
+		if p.agent >= 0 {
+			p.cwd, _ = os.Readlink(filepath.Join(p.dir, "cwd"))
+		}
+		start, ok := procStart(filepath.Join(p.dir, "stat"))
+		// A consistently unavailable stat leaves the start time unknown.
+		if ok != p.startKnown || ok && start != p.start {
+			delete(procs, pid)
+		}
+	}
+	// Group only validated records so a discarded process cannot act as a
+	// session root or link a descendant to an unrelated agent.
 	sessionIndex := map[int]int{}
 	for pid, p := range procs {
 		if p.inAQOrDocker {
@@ -193,17 +221,16 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 			v.Sessions = append(v.Sessions, platform.SessionUsage{PID: root, Client: agents[procs[root].agent]})
 		}
 		s := &v.Sessions[i]
-		memory := processMemory(p.dir)
 		if p.agent >= 0 {
-			v.Agents[p.agent].Bytes += memory
+			v.Agents[p.agent].Bytes += p.memory
 			v.Agents[p.agent].Procs++
-			s.AgentBytes += memory
+			s.AgentBytes += p.memory
 		} else {
 			// The ancestry walk found a root, so there is also a nearest agent.
 			a := nearestAgent(p.ppid)
-			v.Agents[a].Spawned += memory
+			v.Agents[a].Spawned += p.memory
 			v.Agents[a].SpawnedProcs++
-			s.RunBytes += memory
+			s.RunBytes += p.memory
 		}
 		s.SwapBytes += p.swapBytes
 	}
@@ -212,15 +239,15 @@ func (m *UsageMeter) Usage(ctx context.Context, agents []string) (platform.Usage
 		for i := range v.Sessions {
 			s := &v.Sessions[i]
 			p := procs[s.PID]
-			if start, ok := procStart(filepath.Join(p.dir, "stat")); ok {
-				s.Start = start
+			if p.startKnown {
+				s.Start = p.start
 				if !bootTime.IsZero() {
 					// /proc reports starttime in Linux user clock ticks (USER_HZ).
 					const ticksPerSecond = 100
-					s.StartedAt = bootTime.Add(time.Duration(start) * (time.Second / ticksPerSecond))
+					s.StartedAt = bootTime.Add(time.Duration(p.start) * (time.Second / ticksPerSecond))
 				}
 			}
-			s.Cwd, _ = os.Readlink(filepath.Join(p.dir, "cwd"))
+			s.Cwd = p.cwd
 			if p.cmdline != "" {
 				s.Cmdline = strings.Split(strings.TrimSuffix(p.cmdline, "\x00"), "\x00")
 			}

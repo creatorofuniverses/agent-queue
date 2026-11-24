@@ -151,6 +151,7 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 		seen[pid] = true
 		queue = append(queue, children[pid]...)
 		p := procs[pid]
+		bytes, haveWrites := procWrites(filepath.Join(p.dir, "io"))
 		start, ok := procStart(filepath.Join(p.dir, "stat"))
 		if !ok {
 			if t, known := prev[pid]; known && survivor[pid] {
@@ -158,13 +159,15 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 			}
 			continue
 		}
+		if !p.startKnown || start != p.start {
+			continue
+		}
 		// Parents come first: a child of a tracked process in its cgroup is
 		// in the tree too.
 		_, parentTracked := next[p.ppid]
 		pp := procs[p.ppid]
 		remember := p.agent >= 0 || survivor[pid] || (parentTracked && pp != nil && pp.cgroup == p.cgroup)
-		bytes, ok := procWrites(filepath.Join(p.dir, "io"))
-		if !ok {
+		if !haveWrites {
 			if remember {
 				miss(pid, start)
 			}
@@ -177,7 +180,7 @@ func (m *UsageMeter) procIO(procs map[int]*usageProc, agents []string) []platfor
 			Within: sourceKey(p.cgroup, m.manager, m.aqRels(), nil)}
 		if p.agent >= 0 {
 			e.Agent = agents[p.agent]
-			e.Project = m.project(p.dir)
+			e.Project = m.project(p.cwd)
 		}
 		out = append(out, e)
 	}
@@ -209,11 +212,9 @@ func (m *UsageMeter) aqRels() []string {
 	return rels
 }
 
-// project is the project root of a process's working directory, cached by
-// directory ("" when the directory cannot be read).
-func (m *UsageMeter) project(procDir string) string {
-	cwd, err := os.Readlink(filepath.Join(procDir, "cwd"))
-	if err != nil {
+// project is the cached project root of a sampled working directory.
+func (m *UsageMeter) project(cwd string) string {
+	if cwd == "" {
 		return ""
 	}
 	if r, ok := m.projects[cwd]; ok {

@@ -163,6 +163,55 @@ func TestUsageMeterSessionsReconcile(t *testing.T) {
 	}
 }
 
+func TestUsageMeterDropsReusedPID(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		pid, ppid  int
+		claudeRoot int
+		agentMiB   uint64
+	}{
+		{name: "root", pid: 10, ppid: 2, claudeRoot: 13, agentMiB: 100},
+		{name: "child", pid: 11, ppid: 10, claudeRoot: 10, agentMiB: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := usageAgentFixture(t, false)
+			dir := filepath.Join(m.cfg.ProcRoot, fmt.Sprint(tc.pid))
+			writeStart := func(start int) {
+				usageFile(t, dir, "stat", fmt.Sprintf("%d (process) S %d 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 %d 0 0\n", tc.pid, tc.ppid, start))
+			}
+			writeStart(1000)
+			m.readMemory = func(path string) uint64 {
+				memory := processMemory(path)
+				if path == dir {
+					writeStart(2000)
+				}
+				return memory
+			}
+
+			v, err := m.Usage(context.Background(), []string{"claude", "codex"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			const mib = 1 << 20
+			if got := v.Agents[0]; got.Bytes != tc.agentMiB*mib || got.Spawned != 50*mib {
+				t.Errorf("Claude usage = %+v, want %d MiB agent and 50 MiB run", got, tc.agentMiB)
+			}
+			wantRoots := []int{tc.claudeRoot, 16}
+			var roots []int
+			for _, s := range v.Sessions {
+				roots = append(roots, s.PID)
+				if s.Client == "claude" && (s.AgentBytes != tc.agentMiB*mib || s.RunBytes != 50*mib) {
+					t.Errorf("Claude session = %+v, want %d MiB agent and 50 MiB run", s, tc.agentMiB)
+				}
+			}
+			slices.Sort(roots)
+			if !slices.Equal(roots, wantRoots) {
+				t.Errorf("session roots = %v, want %v", roots, wantRoots)
+			}
+		})
+	}
+}
+
 func TestUsageMeterSessionCwdUnreadable(t *testing.T) {
 	m := usageAgentFixture(t, true)
 	if e := os.Remove(filepath.Join(m.cfg.ProcRoot, "10/cwd")); e != nil {
