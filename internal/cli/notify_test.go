@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
+	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"github.com/creatorofuniverses/agent-queue/internal/model"
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
@@ -113,6 +118,44 @@ func TestListMineShowsEvents(t *testing.T) {
 	h.vars["CODEX_THREAD_ID"] = "parent" // an explicit session needs no detection
 	if code, _, err = h.run("list", "--mine", "--session", "c"); code != 0 {
 		t.Fatal(code, err)
+	}
+}
+
+// fakeAgentTree is a fake /proc of aq (pid 100) started by OpenClaude (pid 101);
+// home holds the session file OpenClaude writes for 101, with no procStart.
+func fakeAgentTree(t *testing.T) (proc, home string) {
+	t.Helper()
+	proc, home = t.TempDir(), t.TempDir()
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(proc, "stat"), "btime 1000000\n")
+	write(filepath.Join(proc, "100", "status"), "Name:\taq\nPid:\t100\nPPid:\t101\n")
+	write(filepath.Join(proc, "101", "comm"), "openclaude\n")
+	write(filepath.Join(proc, "101", "cmdline"), "/usr/bin/openclaude\x00")
+	write(filepath.Join(proc, "101", "status"), "Name:\topenclaude\nPid:\t101\nPPid:\t1\n")
+	// Field 22 of stat is the start time: the 18 fields between it and the state are zero.
+	write(filepath.Join(proc, "101", "stat"), fmt.Sprintf("101 (openclaude) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 50 0\n"))
+	write(filepath.Join(home, ".openclaude", "sessions", "101.json"), `{"pid":101,"sessionId":"oc-session","status":"shell","updatedAt":1000000500,"startedAt":1000000503}`)
+	return proc, home
+}
+
+// Under an agent ancestor the session comes from its session file, with no variable set.
+func TestListMineFromParentSession(t *testing.T) {
+	h := newHarness(t)
+	proc, home := fakeAgentTree(t)
+	session := client.Parent{ProcRoot: proc, Self: 100, Names: []string{"openclaude"}, Sessions: agentsess.Reader{Sources: agentsess.Sources(home), ProcRoot: proc}}
+	stubInsight(t, h, "list", `{"all":false,"session_id":"oc-session"}`, json.RawMessage("[]"), nil)
+	var out bytes.Buffer
+	c := &cmdCtx{ctx: context.Background(), env: func(k string) string { return h.vars[k] }, stdout: &out, parent: func(config.Config) client.Parent { return session }}
+	if err := cmdList(c, []string{"--mine"}); err != nil { // the stub fails the test on other arguments
+		t.Fatal(err)
 	}
 }
 func TestWaitUntilExpiringAndEventIDs(t *testing.T) {

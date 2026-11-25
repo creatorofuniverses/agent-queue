@@ -308,8 +308,9 @@ func cmdList(c *cmdCtx, args []string) error {
 	} else if len(pos) > 0 {
 		return usagef("list: unexpected argument %q", pos[0])
 	}
+	cfg := c.clientConfig()
 	if *mine && *session == "" {
-		id, err := client.DetectIdentity(client.Parent{}, c.clientConfig().Agents, c.env, "", "")
+		id, err := client.DetectIdentity(c.parentOf(cfg), cfg.Agents, c.env, "", "")
 		if err != nil {
 			return err
 		}
@@ -318,7 +319,7 @@ func cmdList(c *cmdCtx, args []string) error {
 		}
 		*session = id.SessionID
 	} else {
-		*session = client.ListSession(c.clientConfig().Agents, c.env, *session)
+		*session = client.ListSession(cfg.Agents, c.env, *session)
 	}
 	var views []daemon.ItemView
 	if err := c.call(c.ctx, "list", map[string]any{"session_id": *session, "all": *all}, &views); err != nil {
@@ -521,7 +522,7 @@ func cmdMCP(c *cmdCtx, args []string) error {
 	cfg := c.clientConfig()
 	ctx, cancel := signal.NotifyContext(c.ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	return mcp.Serve(ctx, os.Stdin, c.stdout, func(ctx context.Context, op string, args, out any) error { return callOn(ctx, p, op, args, out) }, client.Parent{}, cfg.Agents, c.env, daemon.Version)
+	return mcp.Serve(ctx, os.Stdin, c.stdout, func(ctx context.Context, op string, args, out any) error { return callOn(ctx, p, op, args, out) }, c.parentOf(cfg), cfg.Agents, c.env, daemon.Version)
 }
 
 func cmdHook(c *cmdCtx, args []string) error {
@@ -539,7 +540,7 @@ func cmdHook(c *cmdCtx, args []string) error {
 	if e != nil {
 		patterns, _ = hook.Compile(config.Default().Hook.Patterns)
 	}
-	id, _ := client.DetectIdentity(client.Parent{}, cfg.Agents, c.env, "", "")
+	id, _ := client.DetectIdentity(c.parentOf(cfg), cfg.Agents, c.env, "", "")
 	hook.PreToolUse(os.Stdin, c.stdout, patterns, func(idx int) {
 		if err == nil {
 			_ = hook.AppendHit(p.StateDir, time.Now(), idx, id.ClientType)

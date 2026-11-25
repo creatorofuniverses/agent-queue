@@ -49,6 +49,8 @@ func newHarness(t *testing.T) *harness {
 	}
 	h.vars = map[string]string{
 		"AQ_STATE_DIR": h.paths.StateDir, "AQ_RUNTIME_DIR": h.paths.RuntimeDir, "AQ_CONFIG": h.paths.ConfigFile,
+		// The test runner's own ancestors (an agent, maybe) must not give the commands a session.
+		"AQ_NO_PARENT_SESSION": "1",
 	}
 	t.Chdir(h.cwd)
 	return h

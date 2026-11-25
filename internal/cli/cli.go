@@ -40,6 +40,8 @@ type cmdCtx struct {
 	ui     ui
 	// helpAsked: the user asked for help, so usage goes to stdout.
 	helpAsked bool
+	// parent builds the ancestor lookup for session identity; nil (tests) means none.
+	parent func(config.Config) client.Parent
 }
 
 type command func(c *cmdCtx, args []string) error
@@ -79,7 +81,8 @@ func isHelpArg(a string) bool { return a == "-h" || a == "--help" || a == "-help
 
 // Main runs the aq CLI and returns the process exit code.
 func Main(args []string, env func(string) string, stdout, stderr io.Writer) int {
-	c := &cmdCtx{ctx: context.Background(), env: env, stdout: stdout, stderr: stderr, ui: detectUI(stdout, env)}
+	c := &cmdCtx{ctx: context.Background(), env: env, stdout: stdout, stderr: stderr, ui: detectUI(stdout, env),
+		parent: func(cfg config.Config) client.Parent { return client.ParentFrom(cfg, env) }}
 	if len(args) == 0 {
 		printOverview(c.ui, stderr)
 		return exitUsage
@@ -279,6 +282,14 @@ func (c *cmdCtx) clientConfig() config.Config {
 		return config.Default()
 	}
 	return cfg
+}
+
+// parentOf is the ancestor lookup a command detects its session with.
+func (c *cmdCtx) parentOf(cfg config.Config) client.Parent {
+	if c.parent == nil {
+		return client.Parent{}
+	}
+	return c.parent(cfg)
 }
 
 // queuedNote tells on stderr where a queued item stands and why it waits.

@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/agentsess"
 	"github.com/creatorofuniverses/agent-queue/internal/client"
 	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"github.com/creatorofuniverses/agent-queue/internal/daemon"
 	"github.com/creatorofuniverses/agent-queue/internal/protocol"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,11 +21,17 @@ import (
 
 func serveText(t *testing.T, input string, call Caller, vars map[string]string) []map[string]any {
 	t.Helper()
+	return serveParent(t, client.Parent{}, input, call, vars)
+}
+
+// serveParent is serveText under the ancestor lookup of a fake process tree.
+func serveParent(t *testing.T, parent client.Parent, input string, call Caller, vars map[string]string) []map[string]any {
+	t.Helper()
 	var b bytes.Buffer
 	if call == nil {
 		call = func(context.Context, string, any, any) error { t.Error("unexpected call"); return nil }
 	}
-	if e := Serve(context.Background(), strings.NewReader(input), &b, call, client.Parent{}, config.Default().Agents, func(k string) string { return vars[k] }, "test"); e != nil {
+	if e := Serve(context.Background(), strings.NewReader(input), &b, call, parent, config.Default().Agents, func(k string) string { return vars[k] }, "test"); e != nil {
 		t.Fatal(e)
 	}
 	var out []map[string]any
@@ -132,6 +140,66 @@ func TestMCPExplicitClientNeedsItsSession(t *testing.T) {
 	r := out[0]["result"].(map[string]any)
 	if called || r["isError"] != true || !strings.Contains(r["content"].([]any)[0].(map[string]any)["text"].(string), "session identity unknown") {
 		t.Fatal(called, r)
+	}
+}
+
+// fakeAgentTree is a fake /proc of aq (pid 100) started by OpenClaude (pid 101).
+func fakeAgentTree(t *testing.T) string {
+	t.Helper()
+	proc := t.TempDir()
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(proc, "stat"), "btime 1000000\n")
+	write(filepath.Join(proc, "100", "status"), "Name:\taq\nPid:\t100\nPPid:\t101\n")
+	write(filepath.Join(proc, "101", "comm"), "openclaude\n")
+	write(filepath.Join(proc, "101", "cmdline"), "/usr/bin/openclaude\x00")
+	write(filepath.Join(proc, "101", "status"), "Name:\topenclaude\nPid:\t101\nPPid:\t1\n")
+	// Field 22 of stat is the start time: the 18 fields between it and the state are zero.
+	write(filepath.Join(proc, "101", "stat"), fmt.Sprintf("101 (openclaude) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 50 0\n"))
+	return proc
+}
+
+// Under an agent ancestor the session comes from its session file; without one
+// the identity is unknown as before.
+func TestMCPParentSessionFile(t *testing.T) {
+	proc := fakeAgentTree(t)
+	// The file OpenClaude writes for 101: no procStart.
+	for _, file := range []string{`{"pid":101,"sessionId":"oc-session","status":"shell","updatedAt":1000000500,"startedAt":1000000503}`, ""} {
+		home := t.TempDir()
+		if file != "" {
+			path := filepath.Join(home, ".openclaude", "sessions", "101.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		parent := client.Parent{ProcRoot: proc, Self: 100, Names: []string{"openclaude"}, Sessions: agentsess.Reader{Sources: agentsess.Sources(home), ProcRoot: proc}}
+		called := false
+		var sent daemon.SubmitArgs
+		out := serveParent(t, parent, tool("queue_submit", submitArgs()), func(_ context.Context, _ string, a, _ any) error {
+			called = true
+			sent = a.(daemon.SubmitArgs)
+			return nil
+		}, nil)
+		r := out[0]["result"].(map[string]any)
+		if file == "" {
+			if called || r["isError"] != true || !strings.Contains(r["content"].([]any)[0].(map[string]any)["text"].(string), "session identity unknown") {
+				t.Fatal(called, r)
+			}
+			continue
+		}
+		if !called || r["isError"] == true || sent.ClientType != "claude" || sent.SessionID != "oc-session" {
+			t.Fatal(called, sent, r)
+		}
 	}
 }
 func testMCPIdentityRequired(t *testing.T, env map[string]string) {

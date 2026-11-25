@@ -43,7 +43,7 @@ func cmdReserve(c *cmdCtx, args []string) error {
 		return err
 	}
 	cfg := c.clientConfig()
-	identity, err := client.DetectIdentity(client.Parent{}, cfg.Agents, c.env, *flagClient, *session)
+	identity, err := client.DetectIdentity(c.parentOf(cfg), cfg.Agents, c.env, *flagClient, *session)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func cmdExtend(c *cmdCtx, args []string) error {
 	}
 	// The next expiry warning only reaches a client-wait session through a fresh waiter.
 	cfg := c.clientConfig()
-	if who, err := client.DetectIdentity(client.Parent{}, cfg.Agents, c.env, "", ""); err == nil {
+	if who, err := client.DetectIdentity(c.parentOf(cfg), cfg.Agents, c.env, "", ""); err == nil {
 		if a, ok := cfg.Agent(who.ClientType); ok && a.Delivery == config.DeliveryClientWait {
 			fmt.Fprintf(c.stderr, "hint: to get the next expiry warning, run in background: aq wait %s --until expiring\n", id)
 		}
