@@ -591,7 +591,9 @@ percentiles are 50–100, limit margin is 1–4. Retention values must be positi
 the host interval is from 5 s to 5 min; process names are non-empty and contain
 no `/`. The names are the processes aq counts as agents when it measures memory,
 in `aq top --sessions` and when it looks for the agent process a command was
-started from (`openclaude` is OpenClaude).
+started from (`openclaude` is OpenClaude). OpenClaude gives its process this
+name through the terminal title; with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` set
+the process stays `node`, and aq does not count it as an agent.
 
 ## Diagnostics: `aq doctor`
 
@@ -853,8 +855,8 @@ go to the operator (see below).
 
 The client detects the session from the agent process aq was started from (a
 process named in `stats.agent_processes`: Codex, Claude Code, OpenClaude). First
-the identity variable that the agent set for this command and did not itself
-receive at start (Codex `CODEX_THREAD_ID`, Claude `CLAUDE_CODE_SESSION_ID`),
+the agent's own identity variable, absent from the agent's start environment
+or different there (Codex `CODEX_THREAD_ID`, Claude `CLAUDE_CODE_SESSION_ID`),
 then that agent's session file (`~/.claude/sessions/<pid>.json`,
 `~/.openclaude/sessions/<pid>.json`), which is how OpenClaude is recognized: it
 exports no variable. Without an agent among the ancestors (a plain shell, tmux,
@@ -1016,8 +1018,8 @@ Installation does not change hook settings. Merge the fragment you need,
 [Claude](../deploy/hooks/claude-settings.json) or [Codex](../deploy/hooks/codex-hooks.json),
 into the client's settings by hand (do not overwrite existing hooks). The
 Claude fragment also suits OpenClaude (`~/.openclaude/settings.json`, same
-format). The matcher is `Bash` in both; Codex requires you to trust the new
-definition through `/hooks`.
+format). The matcher is `Bash` in both hook fragments; Codex requires you to
+trust the new definition through `/hooks`.
 The aq skill ([Claude](../deploy/skills/claude/aq/SKILL.md), [Codex](../deploy/skills/codex/aq/SKILL.md))
 describes how an agent should work with aq: what counts as heavy, how to
 estimate memory, when to `submit` and when to `reserve` with a stand, how to get

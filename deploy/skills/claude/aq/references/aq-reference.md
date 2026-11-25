@@ -25,9 +25,9 @@ accumulating repeats.
 Notification identity: `--client NAME --session S` overrides discovery and
 turns the ancestor lookup off. Otherwise aq looks at the agent process it was
 started from (Claude Code, OpenClaude, Codex — the names in
-`stats.agent_processes`): first the identity variable the agent set for this
-command and did not itself receive at start (Codex CODEX_THREAD_ID, Claude
-CLAUDE_CODE_SESSION_ID), then that agent's verified session file
+`stats.agent_processes`): first the agent's own identity variable, absent from
+the agent's start environment or different there (Codex CODEX_THREAD_ID,
+Claude CLAUDE_CODE_SESSION_ID), then that agent's verified session file
 (`~/.claude/sessions/<pid>.json`, `~/.openclaude/sessions/<pid>.json`),
 otherwise `cli`. OpenClaude exports no variable: aq reads its session file.
 With no agent among aq's ancestors the adapter variables of the environment

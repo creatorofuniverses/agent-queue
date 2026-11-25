@@ -603,7 +603,10 @@ agent_processes = ["claude", "openclaude", "codex"]
 `samples_full_res < samples_max_age`, общий предел логов не меньше 256 MiB,
 интервал хоста — от 5 с до 5 мин; имена процессов непусты и без `/`. Это имена
 процессов, которые aq считает агентами при замере памяти, в `aq top --sessions`
-и при поиске агента-предка команды (`openclaude` — OpenClaude).
+и при поиске агента-предка команды (`openclaude` — OpenClaude). OpenClaude даёт
+процессу это имя через заголовок терминала; с заданной
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE` процесс остаётся `node`, и aq не считает
+его агентом.
 
 ## Диагностика: `aq doctor`
 
@@ -858,8 +861,8 @@ aq release --force "$id"   # стенд убран вручную: освобо�
 
 Клиент обнаруживает сессию по процессу агента, из которого запущен aq (процесс с
 именем из `stats.agent_processes`: Codex, Claude Code, OpenClaude). Сначала
-берётся своя переменная идентичности — заданная агентом для этой команды и не
-унаследованная им при запуске (Codex `CODEX_THREAD_ID`, Claude
+берётся своя переменная идентичности — которой у агента при запуске не было или
+которая отличается от полученной им (Codex `CODEX_THREAD_ID`, Claude
 `CLAUDE_CODE_SESSION_ID`), — затем подтверждённый файл сессии этого процесса
 (`~/.claude/sessions/<pid>.json`, `~/.openclaude/sessions/<pid>.json`); так
 распознаётся OpenClaude: переменной он не экспортирует. Если среди предков нет
@@ -1018,8 +1021,9 @@ compose up/run, docker run. Он не обращается к демону, не
 Установка не меняет настройки хуков. Вручную объедините нужный фрагмент
 [Claude](../deploy/hooks/claude-settings.json) или [Codex](../deploy/hooks/codex-hooks.json)
 с настройками клиента (не перезаписывайте существующие hooks). Фрагмент Claude
-подходит и OpenClaude (`~/.openclaude/settings.json`, тот же формат). В обоих
-matcher `Bash`; Codex требует доверить новое определение через `/hooks`.
+подходит и OpenClaude (`~/.openclaude/settings.json`, тот же формат).
+В обоих фрагментах хуков matcher `Bash`; Codex требует доверить новое
+определение через `/hooks`.
 Скилл aq ([Claude](../deploy/skills/claude/aq/SKILL.md), [Codex](../deploy/skills/codex/aq/SKILL.md))
 описывает, как агенту работать с aq: что считать тяжёлым, как оценить память,
 когда `submit`, а когда `reserve` со стендом, как получить результат и убрать за собой.
