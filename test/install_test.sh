@@ -58,6 +58,21 @@ test ! -e "$T/s3/aq"
 test -f "$T/s1/aq/SKILL.md"
 run
 test -f "$T/s3/aq/SKILL.md"
+# A dangling symlink is an entry to replace too: -e is false for it.
+rm -rf "$T/s3/aq"
+ln -s "$T/gone/aq" "$T/s3/aq"
+env "${opts[@]}" CLAUDE_SKILLS= just install </dev/null
+test ! -L "$T/s3/aq"
+cmp -s deploy/skills/claude/aq/SKILL.md "$T/s3/aq/SKILL.md"
+# When the replacement fails halfway, the installer puts back what was there.
+mkdir "$T/shim"
+printf '#!/bin/sh\n[ "$FAIL_MV" = "$2" ] && case "$1" in */aq) exit 1 ;; esac\nexec %s "$@"\n' "$(command -v mv)" > "$T/shim/mv"
+chmod +x "$T/shim/mv"
+rm -rf "$T/s3/aq"
+ln -s "$T/gone/aq" "$T/s3/aq"
+! env "${opts[@]}" PATH="$T/shim:$PATH" FAIL_MV="$T/s3/aq" just install </dev/null >/dev/null 2>&1
+[ "$(readlink "$T/s3/aq")" = "$T/gone/aq" ]
+[ "$(ls -A "$T/s3")" = aq ]
 # A config that lists agent processes without openclaude keeps its list: the
 # installer only says so, on one line or several.
 printf '[stats]\nagent_processes = ["claude", "codex"]\n' > "$T/conf/config.toml"

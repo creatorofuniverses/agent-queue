@@ -78,14 +78,16 @@ install: build (check-idle "restarting")
         *) echo "hint: agent_processes in {{ confdir }}/config.toml does not list openclaude."
            echo "      add it, or OpenClaude's sessions are not counted and its commands belong to cli." ;;
     esac
+    # A symlink whose target is gone is still an entry: -e alone says it is not.
+    present() { test -e "$1" || test -L "$1"; }
     for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}" "claude:{{ openclaude_skills }}"; do
         agent=${target%%:*}; dir=${target#*:}
         [ -n "$dir" ] || continue
         install -d "$dir"
         stage=$(mktemp -d "$dir/.aq.XXXXXX")
-        trap 'if test -d "$stage/old" && ! test -e "$dir/aq"; then mv "$stage/old" "$dir/aq"; fi; rm -rf "$stage"' EXIT
+        trap 'if present "$stage/old" && ! present "$dir/aq"; then mv "$stage/old" "$dir/aq"; fi; rm -rf "$stage"' EXIT
         cp -R "deploy/skills/$agent/aq" "$stage/aq"
-        if test -e "$dir/aq"; then mv "$dir/aq" "$stage/old"; fi
+        if present "$dir/aq"; then mv "$dir/aq" "$stage/old"; fi
         mv "$stage/aq" "$dir/aq"
         rm -rf "$stage"
         trap - EXIT
