@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -221,6 +222,47 @@ func TestLookupUnverified(t *testing.T) {
 		if src, info, ok := r.Lookup(pid); ok {
 			t.Errorf("Lookup(%d) = %+v, %+v; want no verified file", pid, src, info)
 		}
+	}
+}
+
+// A session file is a regular file. Reading a FIFO waits for a writer that may
+// never come, so Lookup skips it and goes on to the next source, as the listing
+// does; a symbolic link is not a session file either.
+func TestLookupSkipsNonRegularFiles(t *testing.T) {
+	fifos, links, files, proc := t.TempDir(), t.TempDir(), t.TempDir(), procDir(t, "5", 50, true)
+	if err := syscall.Mkfifo(filepath.Join(fifos, "5.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"pid":5,"sessionId":"oc-session","updatedAt":1000000500,"startedAt":1000000503}`
+	if err := os.WriteFile(filepath.Join(files, "5.json"), []byte(record), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(files, "5.json"), filepath.Join(links, "5.json")); err != nil {
+		t.Fatal(err)
+	}
+	r := Reader{Sources: []Source{
+		{Dir: fifos, IdentityEnv: "CLAUDE_CODE_SESSION_ID"},
+		{Dir: links, IdentityEnv: "CLAUDE_CODE_SESSION_ID"},
+		{Dir: files, IdentityEnv: "CLAUDE_CODE_SESSION_ID"},
+	}, ProcRoot: proc}
+	want := Info{ProcStart: 50, SessionID: "oc-session", StatusSince: time.UnixMilli(1000000500)}
+	type lookup struct {
+		src  Source
+		info Info
+		ok   bool
+	}
+	done := make(chan lookup, 1)
+	go func() {
+		src, info, ok := r.Lookup(5)
+		done <- lookup{src, info, ok}
+	}()
+	select {
+	case got := <-done:
+		if !got.ok || got.src.Dir != files || got.info != want {
+			t.Fatalf("Lookup(5) = %+v, %+v, %v; want the regular file of the third source with %+v", got.src, got.info, got.ok, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Lookup(5) blocked on a FIFO: a session file must be a regular file")
 	}
 }
 

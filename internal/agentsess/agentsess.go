@@ -110,6 +110,11 @@ func sessionPID(name string, typ fs.FileMode) (int, bool) {
 // lookup reads and verifies <src.Dir>/<pid>.json against the live process.
 func (r Reader) lookup(src Source, pid int) (Info, bool) {
 	path := filepath.Join(src.Dir, strconv.Itoa(pid)+".json")
+	// Only a regular file is a session file, as in the listing: opening a FIFO
+	// would wait for a writer that may never come.
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return Info{}, false
+	}
 	var record struct {
 		PID             int    `json:"pid"`
 		SessionID       string `json:"sessionId"`
