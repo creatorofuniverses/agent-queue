@@ -309,7 +309,7 @@ func cmdList(c *cmdCtx, args []string) error {
 		return usagef("list: unexpected argument %q", pos[0])
 	}
 	if *mine && *session == "" {
-		id, err := client.DetectIdentity(c.clientConfig().Agents, c.env, "", "")
+		id, err := client.DetectIdentity(client.Parent{}, c.clientConfig().Agents, c.env, "", "")
 		if err != nil {
 			return err
 		}
@@ -521,7 +521,7 @@ func cmdMCP(c *cmdCtx, args []string) error {
 	cfg := c.clientConfig()
 	ctx, cancel := signal.NotifyContext(c.ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	return mcp.Serve(ctx, os.Stdin, c.stdout, func(ctx context.Context, op string, args, out any) error { return callOn(ctx, p, op, args, out) }, cfg.Agents, c.env, daemon.Version)
+	return mcp.Serve(ctx, os.Stdin, c.stdout, func(ctx context.Context, op string, args, out any) error { return callOn(ctx, p, op, args, out) }, client.Parent{}, cfg.Agents, c.env, daemon.Version)
 }
 
 func cmdHook(c *cmdCtx, args []string) error {
@@ -539,7 +539,7 @@ func cmdHook(c *cmdCtx, args []string) error {
 	if e != nil {
 		patterns, _ = hook.Compile(config.Default().Hook.Patterns)
 	}
-	id, _ := client.DetectIdentity(cfg.Agents, c.env, "", "")
+	id, _ := client.DetectIdentity(client.Parent{}, cfg.Agents, c.env, "", "")
 	hook.PreToolUse(os.Stdin, c.stdout, patterns, func(idx int) {
 		if err == nil {
 			_ = hook.AppendHit(p.StateDir, time.Now(), idx, id.ClientType)

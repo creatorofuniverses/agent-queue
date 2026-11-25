@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/creatorofuniverses/agent-queue/internal/client"
 	"github.com/creatorofuniverses/agent-queue/internal/config"
 	"io"
 	"sync"
@@ -29,7 +30,7 @@ type response struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
-func Serve(ctx context.Context, in io.Reader, out io.Writer, call Caller, agents []config.AgentConfig, env func(string) string, version string) error {
+func Serve(ctx context.Context, in io.Reader, out io.Writer, call Caller, parent client.Parent, agents []config.AgentConfig, env func(string) string, version string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Closing a closable input interrupts a blocked Scan when the server is cancelled.
@@ -122,7 +123,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Caller, agents
 				r.Error = &rpcError{-32602, "invalid tools/call params"}
 				break
 			}
-			r.Result = callTool(ctx, call, agents, env, p.Name, p.Arguments)
+			r.Result = callTool(ctx, call, parent, agents, env, p.Name, p.Arguments)
 		default:
 			r.Error = &rpcError{-32601, fmt.Sprintf("method not found: %s", req.Method)}
 		}

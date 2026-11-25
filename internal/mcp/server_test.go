@@ -23,7 +23,7 @@ func serveText(t *testing.T, input string, call Caller, vars map[string]string) 
 	if call == nil {
 		call = func(context.Context, string, any, any) error { t.Error("unexpected call"); return nil }
 	}
-	if e := Serve(context.Background(), strings.NewReader(input), &b, call, config.Default().Agents, func(k string) string { return vars[k] }, "test"); e != nil {
+	if e := Serve(context.Background(), strings.NewReader(input), &b, call, client.Parent{}, config.Default().Agents, func(k string) string { return vars[k] }, "test"); e != nil {
 		t.Fatal(e)
 	}
 	var out []map[string]any
@@ -236,7 +236,7 @@ func TestServeCancelsPipe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(ctx, r, io.Discard, nil, config.Default().Agents, func(string) string { return "" }, "t")
+		done <- Serve(ctx, r, io.Discard, nil, client.Parent{}, config.Default().Agents, func(string) string { return "" }, "t")
 	}()
 	cancel()
 	select {

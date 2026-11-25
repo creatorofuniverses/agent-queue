@@ -187,7 +187,7 @@ const logsMaxBytes = 256 << 10
 
 const identityUnknown = "session identity unknown: pass client and session_id (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID of your session), or no_notify=true"
 
-func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env func(string) string, name string, raw json.RawMessage) toolResult {
+func callTool(ctx context.Context, call Caller, parent client.Parent, agents []config.AgentConfig, env func(string) string, name string, raw json.RawMessage) toolResult {
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
 	}
@@ -217,7 +217,7 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 		args = v
 		op = "estimate"
 	case "queue_submit", "queue_reserve":
-		id, err := client.DetectIdentity(agents, env, a.Client, a.SessionID)
+		id, err := client.DetectIdentity(parent, agents, env, a.Client, a.SessionID)
 		if errors.Is(err, client.ErrAmbiguousIdentity) {
 			id, err = client.Identity{ClientType: "cli", SessionID: a.SessionID}, nil
 		}
@@ -273,7 +273,7 @@ func callTool(ctx context.Context, call Caller, agents []config.AgentConfig, env
 	case "queue_list":
 		op = "list"
 		if a.Mine && a.SessionID == "" {
-			id, err := client.DetectIdentity(agents, env, "", "")
+			id, err := client.DetectIdentity(parent, agents, env, "", "")
 			if err != nil {
 				return toolError(err)
 			}

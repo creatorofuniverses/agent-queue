@@ -54,7 +54,7 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 		return err
 	}
 	cfg := c.clientConfig()
-	identity, err := client.DetectIdentity(cfg.Agents, c.env, *flagClient, *session)
+	identity, err := client.DetectIdentity(client.Parent{}, cfg.Agents, c.env, *flagClient, *session)
 	if err != nil {
 		return err
 	}

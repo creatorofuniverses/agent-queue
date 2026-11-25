@@ -23,12 +23,12 @@ func TestDetectIdentity(t *testing.T) {
 		{nil, "codex", "", Identity{}, true}, {nil, "zzz", "", Identity{}, true},
 		{map[string]string{"CODEX_THREAD_ID": "t", "CLAUDE_CODE_SESSION_ID": "c"}, "claude", "", Identity{"claude", "c"}, false},
 	} {
-		got, e := DetectIdentity(config.Default().Agents, func(k string) string { return tc.env[k] }, tc.c, tc.s)
+		got, e := DetectIdentity(Parent{}, config.Default().Agents, func(k string) string { return tc.env[k] }, tc.c, tc.s)
 		if (e != nil) != tc.bad || (!tc.bad && got != tc.want) {
 			t.Fatal(tc, got, e)
 		}
 	}
-	_, e := DetectIdentity(config.Default().Agents, func(k string) string { return "x" }, "", "")
+	_, e := DetectIdentity(Parent{}, config.Default().Agents, func(k string) string { return "x" }, "", "")
 	var ue *UsageError
 	if !errors.Is(e, ErrAmbiguousIdentity) || !errors.As(e, &ue) {
 		t.Fatal(e)

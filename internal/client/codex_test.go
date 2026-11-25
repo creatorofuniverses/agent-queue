@@ -76,7 +76,7 @@ func TestCodexSubagentNotifiesRootThread(t *testing.T) {
 		for k, v := range tc.env {
 			env[k] = v
 		}
-		got, err := DetectIdentity(agents, func(k string) string { return env[k] }, tc.client, tc.id)
+		got, err := DetectIdentity(Parent{}, agents, func(k string) string { return env[k] }, tc.client, tc.id)
 		if err != nil || got != tc.want {
 			t.Errorf("%v %q %q: got %v %v, want %v", tc.env, tc.client, tc.id, got, err, tc.want)
 		}
@@ -87,7 +87,7 @@ func TestCodexSubagentNotifiesRootThread(t *testing.T) {
 	if err := os.Rename(home, filepath.Join(env["HOME"], ".codex")); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := DetectIdentity(agents, func(k string) string { return env[k] }, "", ""); got.SessionID != root {
+	if got, _ := DetectIdentity(Parent{}, agents, func(k string) string { return env[k] }, "", ""); got.SessionID != root {
 		t.Errorf("default CODEX_HOME: %v", got)
 	}
 
