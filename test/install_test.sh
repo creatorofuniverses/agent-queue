@@ -15,20 +15,24 @@ for dir in "$T/bin" "$T/units" "$T/conf" "$T/state" "$T/s1" "$T/s2" "$T/s3"; do
  [[ $dir == "$T/"* && $T != / ]] || exit 1
 done
 run() { env "${opts[@]}" "$@" just "$recipe" </dev/null; }
+# set -e lets a failing "! grep" pass: an absent pattern needs its own check.
+absent() { ! grep -q "$1" "$2" || { echo "unexpected '$1' in $2" >&2; exit 1; }; }
 
 # A daemon with work in its queue is listed before the restart, which proceeds.
 mkdir -p "$T/bin"
 printf '#!/bin/sh\nprintf "ID  NAME  STATE\\nabc  tests  RUNNING\\n"\n' > "$T/bin/aq"
 chmod +x "$T/bin/aq"
 recipe=install
-run 2>"$T/err"
+run >"$T/out" 2>"$T/err"
 grep -q "1 queued or running" "$T/err"
 grep -q "reconnect" "$T/err"
 test -f "$T/units/aq.service"
+# The example config it just installed lists openclaude: nothing to hint about.
+absent "hint: agent_processes" "$T/out"
 
 # The real binary now answers "daemon not running" (69) for $T/run: no warning.
 run 2>"$T/err"
-! grep -q warning "$T/err"
+absent warning "$T/err"
 test -f "$T/s1/aq/SKILL.md"
 test -f "$T/s2/aq/references/aq-reference.md"
 # Each agent gets its own version of the skill.
@@ -49,6 +53,22 @@ test ! -e "$T/s3/aq"
 test -f "$T/s1/aq/SKILL.md"
 run
 test -f "$T/s3/aq/SKILL.md"
+# A config that lists agent processes without openclaude keeps its list: the
+# installer only says so, on one line or several.
+printf '[stats]\nagent_processes = ["claude", "codex"]\n' > "$T/conf/config.toml"
+run >"$T/out"
+grep -q "hint: agent_processes" "$T/out"
+grep -q 'agent_processes = \["claude", "codex"\]' "$T/conf/config.toml"
+printf '[stats]\nagent_processes = [\n  "claude",\n  "codex",\n]\n' > "$T/conf/config.toml"
+run >"$T/out"
+grep -q "hint: agent_processes" "$T/out"
+# With openclaude in the list, or with no list of its own, nothing to hint about.
+printf '[stats]\nagent_processes = [\n  "claude",\n  "openclaude",\n]\n' > "$T/conf/config.toml"
+run >"$T/out"
+absent "hint: agent_processes" "$T/out"
+printf '[stats]\nsample_interval = "30s"\n' > "$T/conf/config.toml"
+run >"$T/out"
+absent "hint: agent_processes" "$T/out"
 recipe=uninstall
 run
 test ! -e "$T/s1/aq"

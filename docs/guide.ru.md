@@ -43,6 +43,9 @@ just install
 - кладёт `aq.service` и `aq.slice` в `~/.config/systemd/user/`;
 - копирует `deploy/config.example.toml` в `~/.config/agent-queue/config.toml`,
   только если конфига ещё нет (существующий не трогается);
+- если в существующем конфиге `agent_processes` задан без `openclaude`, печатает
+  подсказку: пока его нет в списке, сессии OpenClaude не считаются, а его команды
+  принадлежат `cli`;
 - выполняет `systemctl --user daemon-reload`, включает `aq.service` и
   (пере)запускает его — повторный `just install` обновляет работающий демон;
 - копирует скилл `aq` каждому агенту свой: `deploy/skills/claude/aq` в
@@ -606,7 +609,9 @@ agent_processes = ["claude", "openclaude", "codex"]
 и при поиске агента-предка команды (`openclaude` — OpenClaude). OpenClaude даёт
 процессу это имя через заголовок терминала; с заданной
 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` процесс остаётся `node`, и aq не считает
-его агентом.
+его агентом. `openclaude` есть в списке по умолчанию; конфиг, написанный ранней
+версией, сохраняет свой список — добавьте `openclaude` туда: пока его нет,
+установщик печатает подсказку.
 
 ## Диагностика: `aq doctor`
 

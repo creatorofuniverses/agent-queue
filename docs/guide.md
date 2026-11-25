@@ -43,6 +43,9 @@ just install
 - puts `aq.service` and `aq.slice` in `~/.config/systemd/user/`;
 - copies `deploy/config.example.toml` to `~/.config/agent-queue/config.toml`
   only if there is no config yet (an existing one is not touched);
+- if an existing config sets `agent_processes` without `openclaude`, prints a
+  hint: until the list has it, OpenClaude's sessions are not counted and its
+  commands belong to `cli`;
 - runs `systemctl --user daemon-reload`, enables `aq.service` and
   (re)starts it, so running `just install` again updates the running daemon;
 - copies the `aq` skill separately for each agent: `deploy/skills/claude/aq` to
@@ -593,7 +596,9 @@ no `/`. The names are the processes aq counts as agents when it measures memory,
 in `aq top --sessions` and when it looks for the agent process a command was
 started from (`openclaude` is OpenClaude). OpenClaude gives its process this
 name through the terminal title; with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` set
-the process stays `node`, and aq does not count it as an agent.
+the process stays `node`, and aq does not count it as an agent. `openclaude` is
+in the default list; a config written by an earlier version keeps its own list,
+so add `openclaude` there — the installer prints a hint while it is missing.
 
 ## Diagnostics: `aq doctor`
 

@@ -70,6 +70,13 @@ install: build (check-idle "restarting")
         chmod 0644 "{{ unitdir }}/aq.service"
     fi
     test -e "{{ confdir }}/config.toml" || install -m 0600 deploy/config.example.toml "{{ confdir }}/config.toml"
+    # An existing config keeps its own list of agent processes.
+    agents=$(awk '/^[[:space:]]*agent_processes[[:space:]]*=/{f=1} f{printf "%s ", $0} f && index($0, "]"){exit}' "{{ confdir }}/config.toml" 2>/dev/null || true)
+    case "$agents" in
+        *openclaude* | "") ;;
+        *) echo "hint: agent_processes in {{ confdir }}/config.toml does not list openclaude."
+           echo "      add it, or OpenClaude's sessions are not counted and its commands belong to cli." ;;
+    esac
     for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}" "claude:{{ openclaude_skills }}"; do
         agent=${target%%:*}; dir=${target#*:}
         [ -n "$dir" ] || continue
