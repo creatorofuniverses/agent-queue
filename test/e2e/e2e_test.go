@@ -122,7 +122,9 @@ func newHarness(t *testing.T, extra string) *harness {
 	h.env = append(h.env,
 		"AQ_STATE_DIR="+filepath.Join(dir, "state"),
 		"AQ_RUNTIME_DIR="+filepath.Join(dir, "run"),
-		"AQ_CONFIG="+cfg)
+		"AQ_CONFIG="+cfg,
+		// The test runner's ancestors (an agent, maybe) must not give the commands a session.
+		"AQ_NO_PARENT_SESSION=1")
 	h.socket = filepath.Join(dir, "run", "aq.sock")
 	if h.logf, err = os.Create(filepath.Join(dir, "daemon.log")); err != nil {
 		t.Fatal(err)
