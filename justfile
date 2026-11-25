@@ -10,10 +10,11 @@ statedir := env("STATEDIR", home_directory() / ".local/state/agent-queue")
 systemctl := env("SYSTEMCTL", "systemctl --user")
 loginctl := env("LOGINCTL", "loginctl")
 
-# Each agent gets its own copy of the aq skill: deploy/skills/<agent>/aq.
-# An empty value skips that agent.
+# Each agent gets its own copy of the aq skill: deploy/skills/<agent>/aq;
+# OpenClaude uses the Claude Code skill. An empty value skips that agent.
 claude_skills := env("CLAUDE_SKILLS", home_directory() / ".claude/skills")
 codex_skills := env("CODEX_SKILLS", home_directory() / ".codex/skills")
+openclaude_skills := env("OPENCLAUDE_SKILLS", home_directory() / ".openclaude/skills")
 
 default:
     @just --list
@@ -69,7 +70,7 @@ install: build (check-idle "restarting")
         chmod 0644 "{{ unitdir }}/aq.service"
     fi
     test -e "{{ confdir }}/config.toml" || install -m 0600 deploy/config.example.toml "{{ confdir }}/config.toml"
-    for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}"; do
+    for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}" "claude:{{ openclaude_skills }}"; do
         agent=${target%%:*}; dir=${target#*:}
         [ -n "$dir" ] || continue
         install -d "$dir"
@@ -81,7 +82,7 @@ install: build (check-idle "restarting")
         rm -rf "$stage"
         trap - EXIT
     done
-    echo "hooks are opt-in: see deploy/hooks/claude-settings.json and deploy/hooks/codex-hooks.json"
+    echo "hooks are opt-in: see deploy/hooks/claude-settings.json (Claude Code and OpenClaude, ~/.openclaude/settings.json) and deploy/hooks/codex-hooks.json"
     {{ systemctl }} daemon-reload
     {{ systemctl }} enable aq.service
     # restart rather than start: a reinstall must pick up the new binary.
@@ -95,7 +96,7 @@ install: build (check-idle "restarting")
 uninstall: (check-idle "stopping")
     -{{ systemctl }} disable --now aq.service
     rm -f "{{ bindir }}/aq" "{{ unitdir }}/aq.service" "{{ unitdir }}/aq.slice"
-    for dir in "{{ claude_skills }}" "{{ codex_skills }}"; do [ -z "$dir" ] || rm -rf "$dir/aq"; done
+    for dir in "{{ claude_skills }}" "{{ codex_skills }}" "{{ openclaude_skills }}"; do [ -z "$dir" ] || rm -rf "$dir/aq"; done
     {{ systemctl }} daemon-reload
 
 # uninstall, then delete the database and all task logs; the config is kept

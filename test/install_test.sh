@@ -5,13 +5,13 @@ T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 # Never touch the live installation: every destination, both service commands
 # and the runtime dir (the daemon socket) point into $T.
-opts=("BINDIR=$T/bin" "UNITDIR=$T/units" "CONFDIR=$T/conf" "STATEDIR=$T/state" "CLAUDE_SKILLS=$T/s1" "CODEX_SKILLS=$T/s2" SYSTEMCTL=true LOGINCTL=true "AQ_RUNTIME_DIR=$T/run")
-for key in BINDIR UNITDIR CONFDIR STATEDIR CLAUDE_SKILLS CODEX_SKILLS SYSTEMCTL LOGINCTL AQ_RUNTIME_DIR; do
+opts=("BINDIR=$T/bin" "UNITDIR=$T/units" "CONFDIR=$T/conf" "STATEDIR=$T/state" "CLAUDE_SKILLS=$T/s1" "CODEX_SKILLS=$T/s2" "OPENCLAUDE_SKILLS=$T/s3" SYSTEMCTL=true LOGINCTL=true "AQ_RUNTIME_DIR=$T/run")
+for key in BINDIR UNITDIR CONFDIR STATEDIR CLAUDE_SKILLS CODEX_SKILLS OPENCLAUDE_SKILLS SYSTEMCTL LOGINCTL AQ_RUNTIME_DIR; do
  found=false
  for arg in "${opts[@]}"; do [[ $arg == "$key="* ]] && found=true; done
  $found || { echo "missing override: $key" >&2; exit 1; }
 done
-for dir in "$T/bin" "$T/units" "$T/conf" "$T/state" "$T/s1" "$T/s2"; do
+for dir in "$T/bin" "$T/units" "$T/conf" "$T/state" "$T/s1" "$T/s2" "$T/s3"; do
  [[ $dir == "$T/"* && $T != / ]] || exit 1
 done
 run() { env "${opts[@]}" "$@" just "$recipe" </dev/null; }
@@ -34,16 +34,26 @@ test -f "$T/s2/aq/references/aq-reference.md"
 # Each agent gets its own version of the skill.
 cmp -s deploy/skills/claude/aq/SKILL.md "$T/s1/aq/SKILL.md"
 cmp -s deploy/skills/codex/aq/SKILL.md "$T/s2/aq/SKILL.md"
+# OpenClaude gets the Claude Code skill.
+cmp -s deploy/skills/claude/aq/SKILL.md "$T/s3/aq/SKILL.md"
 rg -q '^Environment=PATH=' "$T/units/aq.service"
 grep -q "$T/bin/aq" "$T/units/aq.service"
 # Replacement of an existing skill must remove stale contents.
 touch "$T/s1/aq/stale"
 run
 test ! -e "$T/s1/aq/stale"
+# An empty destination installs no skill for that agent and leaves the others.
+rm -rf "$T/s3/aq"
+env "${opts[@]}" OPENCLAUDE_SKILLS= just install </dev/null >/dev/null
+test ! -e "$T/s3/aq"
+test -f "$T/s1/aq/SKILL.md"
+run
+test -f "$T/s3/aq/SKILL.md"
 recipe=uninstall
 run
 test ! -e "$T/s1/aq"
 test ! -e "$T/s2/aq"
+test ! -e "$T/s3/aq"
 test ! -e "$T/bin/aq"
 test -f "$T/conf/config.toml"
 echo 'install and uninstall recipes: PASS (isolated)'
