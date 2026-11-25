@@ -3,6 +3,7 @@ package agentsess
 
 import (
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -125,6 +126,10 @@ func (r Reader) lookup(src Source, pid int) (Info, bool) {
 		err = json.Unmarshal(b, &record)
 	}
 	if err != nil {
+		// No file is the common case: this source holds no session for the pid.
+		if errors.Is(err, fs.ErrNotExist) {
+			return Info{}, false
+		}
 		warnSessionFile.Do(func() {
 			slog.Warn("cannot read agent session file", "path", path, "error", err)
 		})

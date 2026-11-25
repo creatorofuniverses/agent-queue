@@ -1,11 +1,15 @@
 package agentsess
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,6 +71,35 @@ func TestReadMissingDir(t *testing.T) {
 	r := Reader{Sources: []Source{{Dir: filepath.Join(t.TempDir(), "missing"), IdentityEnv: "CLAUDE_CODE_SESSION_ID"}}}
 	if got := r.Read(); got == nil || len(got) != 0 {
 		t.Fatalf("Read() = %#v, want an empty map", got)
+	}
+}
+
+// A file the source does not have is not worth a word: under OpenClaude the first
+// source never holds one, and every command looks there first. Broken files are
+// reported once.
+func TestReadWarnsAboutBrokenFilesOnly(t *testing.T) {
+	var log bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&log, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	warnSessionFile = sync.Once{}
+
+	dir, proc := t.TempDir(), procDir(t, "5", 50, true)
+	for name, content := range map[string]string{"5.json": "not JSON", "7.json": "{"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := Reader{Sources: []Source{{Dir: dir, IdentityEnv: "CLAUDE_CODE_SESSION_ID"}}, ProcRoot: proc}
+	if _, _, ok := r.Lookup(6); ok {
+		t.Fatal("Lookup(6) verified a file the source does not have")
+	}
+	if strings.Contains(log.String(), "level=WARN") {
+		t.Fatalf("a missing session file was reported:\n%s", log.String())
+	}
+	r.Read()
+	if n := strings.Count(log.String(), "level=WARN"); n != 1 || !strings.Contains(log.String(), "5.json") {
+		t.Fatalf("%d warning(s) for two broken files, want one about 5.json:\n%s", n, log.String())
 	}
 }
 
