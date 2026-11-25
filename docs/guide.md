@@ -46,8 +46,9 @@ just install
 - runs `systemctl --user daemon-reload`, enables `aq.service` and
   (re)starts it, so running `just install` again updates the running daemon;
 - copies the `aq` skill separately for each agent: `deploy/skills/claude/aq` to
-  `~/.claude/skills/aq`, `deploy/skills/codex/aq` to `~/.codex/skills/aq` (the
-  paths can be changed with `CLAUDE_SKILLS`/`CODEX_SKILLS`; an empty value means
+  `~/.claude/skills/aq` and, for OpenClaude, to `~/.openclaude/skills/aq`,
+  `deploy/skills/codex/aq` to `~/.codex/skills/aq` (the paths can be changed
+  with `CLAUDE_SKILLS`/`CODEX_SKILLS`/`OPENCLAUDE_SKILLS`; an empty value means
   do not install); hooks are set up separately;
 - if linger is off, prints a hint: without `loginctl enable-linger $USER`
   the daemon and all tasks stop when the last session ends.
@@ -57,9 +58,9 @@ Before installing, check `pool_memory` in the example config: the default
 daemon will not start (`CONFIG_INVALID`).
 
 Directories can be overridden with environment variables: `BINDIR`, `UNITDIR`,
-`CONFDIR`, `STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, and `SYSTEMCTL` (default
-`systemctl --user`). For example, `SYSTEMCTL=true just install` only lays out
-the files.
+`CONFDIR`, `STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, `OPENCLAUDE_SKILLS`, and
+`SYSTEMCTL` (default `systemctl --user`). For example, `SYSTEMCTL=true just
+install` only lays out the files.
 
 If the installed `aq` responds and the queue has tasks or reservations,
 `install`, `uninstall` and `purge` first list them. A restart is safe for them:
@@ -581,14 +582,16 @@ samples_max_age = "30d"
 samples_full_res = "2d"
 [stats]
 sample_interval = "30s"
-agent_processes = ["claude", "codex"]
+agent_processes = ["claude", "openclaude", "codex"]
 ```
 
 Config durations support days: `7d`, `1d12h`. History takes 1–100 runs,
 percentiles are 50–100, limit margin is 1–4. Retention values must be positive,
 `samples_full_res < samples_max_age`, the total log limit is at least 256 MiB,
 the host interval is from 5 s to 5 min; process names are non-empty and contain
-no `/`.
+no `/`. The names are the processes aq counts as agents when it measures memory,
+in `aq top --sessions` and when it looks for the agent process a command was
+started from (`openclaude` is OpenClaude).
 
 ## Diagnostics: `aq doctor`
 
@@ -848,18 +851,22 @@ go to the operator (see below).
 
 ## Notifications
 
-The client detects the session through a configured adapter with a non-empty
-`identity_env`: Codex (`CODEX_THREAD_ID`, push via `codex queue`) or Claude
-(`CLAUDE_CODE_SESSION_ID`, client-wait via a background `aq wait`). If the
-variables of several adapters are non-empty (the session was started from
-another agent's shell and inherited its variable), aq does not guess:
-submit/reserve exit with code 64, and MCP requires explicit `client` and
-`session_id`. `--client NAME --session S` set them explicitly; `--no-notify` on
-submit/reserve turns off only session notifications. Without a detected session
-the CLI works as `cli`. A push adapter that is named but has no session is an
-error; a delivery command missing from the daemon's PATH rejects the request
-before it is saved. The service PATH includes
-`%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
+The client detects the session from the agent process aq was started from (a
+process named in `stats.agent_processes`: Codex, Claude Code, OpenClaude). First
+the identity variable that the agent set for this command and did not itself
+receive at start (Codex `CODEX_THREAD_ID`, Claude `CLAUDE_CODE_SESSION_ID`),
+then that agent's session file (`~/.claude/sessions/<pid>.json`,
+`~/.openclaude/sessions/<pid>.json`), which is how OpenClaude is recognized: it
+exports no variable. Without an agent among the ancestors (a plain shell, tmux,
+a systemd unit) the variables of the configured adapters decide as before, and
+several non-empty ones are ambiguous: submit/reserve exit with code 64, and
+MCP requires explicit `client` and `session_id`. `AQ_NO_PARENT_SESSION=1` turns
+the ancestor lookup off. `--client NAME --session S` set them explicitly and
+turn the lookup off; `--no-notify` on submit/reserve turns off only session
+notifications. Without a detected session the CLI works as `cli`. A push
+adapter that is named but has no session is an error; a delivery command
+missing from the daemon's PATH rejects the request before it is saved. The
+service PATH includes `%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
 
 A Codex multi-agent v2 sub-agent has its own `CODEX_THREAD_ID`, but Codex
 refuses `codex queue` into a sub-agent's thread. When the session (detected or
@@ -967,6 +974,7 @@ separately. Connection examples (run them yourself):
 
 ```sh
 claude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
+openclaude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
 ```
 
 In the Codex config:
@@ -1007,8 +1015,9 @@ client, without the command text; it rotates after 1 MiB.
 Installation does not change hook settings. Merge the fragment you need,
 [Claude](../deploy/hooks/claude-settings.json) or [Codex](../deploy/hooks/codex-hooks.json),
 into the client's settings by hand (do not overwrite existing hooks). The
-matcher is `Bash` in both; Codex requires you to trust the new definition
-through `/hooks`.
+Claude fragment also suits OpenClaude (`~/.openclaude/settings.json`, same
+format). The matcher is `Bash` in both; Codex requires you to trust the new
+definition through `/hooks`.
 The aq skill ([Claude](../deploy/skills/claude/aq/SKILL.md), [Codex](../deploy/skills/codex/aq/SKILL.md))
 describes how an agent should work with aq: what counts as heavy, how to
 estimate memory, when to `submit` and when to `reserve` with a stand, how to get

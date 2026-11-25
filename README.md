@@ -23,7 +23,7 @@ user account. One binary provides the CLI, background service, and MCP server.
 - **Room for containers:** reservations account for Docker environments and their test jobs together.
 - **Results you can come back to:** logs, exit reasons, memory peaks, and queue statistics.
 - **Gentler on your SSD:** each job's temp files live in RAM and count toward its memory, and each job records how much it wrote to disk, so a suite that wears the drive shows up in `aq stats`.
-- **Agent integration:** bundled Claude Code and Codex skills, optional reminder hooks, and completion delivery.
+- **Agent integration:** bundled Claude Code, OpenClaude and Codex skills, optional reminder hooks, and completion delivery.
 
 Tasks can run concurrently when they fit. aq helps contain resource exhaustion;
 it does not guarantee that a machine can never run out of memory. Containers
@@ -109,10 +109,11 @@ with `aq status ID` and `aq logs ID --stream stderr`; the guide explains
 
 ## Using aq with coding agents
 
-`just install` installs separate skills for Claude Code and Codex. The skills
-explain when to queue a job, when to reserve resources for a container environment,
-and how to collect results. Optional hooks remind an agent when it starts heavy
-work outside aq; they do not block commands.
+`just install` installs separate skills for Claude Code, OpenClaude (the Claude
+Code skill, into `~/.openclaude/skills`) and Codex. The skills explain when to
+queue a job, when to reserve resources for a container environment, and how to
+collect results. Optional hooks remind an agent when it starts heavy work
+outside aq; they do not block commands.
 
 Follow the [notification setup](docs/guide.md#notifications) for completion delivery,
 and the [MCP](docs/guide.md#mcp) and [hook](docs/guide.md#hook) sections if you use them.

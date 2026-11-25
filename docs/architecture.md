@@ -304,13 +304,25 @@ Operator events for temporary storage, swap and sessions use the same delivery p
 | `tmp_orphans` | `tmp_orphans_normal` |
 
 The host sampler enriches the session inventory from that same process scan
-with Claude Code's session files whose PID and process start time match the
-sample. The process scan captures start time before reading process details
+with the session files of Claude Code (`~/.claude/sessions`) and OpenClaude
+(`~/.openclaude/sessions`) whose PID and process start time match the sample; a
+file without `procStart` (OpenClaude) is verified by `startedAt` against the
+process start time (boot time plus start ticks) and must not be older than the
+process by more than a minute.
+The process scan captures start time before reading process details
 and verifies it after reading memory and cwd. It drops changed identities
 before grouping processes into sessions. Successful samples replace the
 published inventory. After a failed process scan, the dashboard keeps the
 last session inventory and the session alarms record a missing measurement.
 Each `top` response enriches sessions from its own physical memory scan.
+
+Command identity is resolved on the client side (`client.Parent`): aq looks
+for the nearest process named in `stats.agent_processes` among its own
+ancestors. With an agent found, its own identity variable (one that is absent
+from the agent's exec-time environment or differs from the value there) wins,
+then the agent's verified session file, then `cli`. With no agent among the
+ancestors the environment rules apply as before; `AQ_NO_PARENT_SESSION`
+disables the lookup.
 
 A separate loop inventories `/tmp` for the daemon's UID. The socket's `tmp`
 operation returns the report and current filesystem usage of its scan root.

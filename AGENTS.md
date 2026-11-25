@@ -27,7 +27,8 @@ user-facing behaviour you must keep true.
 - `internal/notify`, `internal/mcp`, `internal/hook`, `internal/profile`,
   `internal/stats`, `internal/client`, `internal/protocol`, `internal/runner`.
 - `deploy/` — systemd units, example config, opt-in hooks, and the agent
-  skills `deploy/skills/claude/aq` and `deploy/skills/codex/aq`.
+  skills `deploy/skills/claude/aq` (installed for Claude Code and OpenClaude)
+  and `deploy/skills/codex/aq`.
 - `test/e2e` — end-to-end tests against the real systemd user manager.
 
 ## Commands

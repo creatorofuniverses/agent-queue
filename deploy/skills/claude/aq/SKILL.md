@@ -201,8 +201,10 @@ TTL runs out.
   command directly.
 - A sandbox cannot reach the socket: ask for approval to run the `aq` command on
   the host.
-- `session identity unknown` / exit 64 about clients: you were started from
-  another agent's shell; pass `--client claude --session "$CLAUDE_CODE_SESSION_ID"`.
+- `session identity unknown` / exit 64 about clients: aq detects the session
+  from the agent it was started from (the variable the agent gives its tool
+  shells, else the agent's own session file). When it still cannot tell, pass
+  `--client NAME` and `--session ID` of your session explicitly.
 - MCP tools (`queue_submit`, `queue_estimate`, …) do the same as the CLI, but
   cannot wake you: still run `aq wait ID` in background.
 

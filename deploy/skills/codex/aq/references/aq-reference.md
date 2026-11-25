@@ -22,10 +22,18 @@ submissions are rejected; after the last task ends an expired held stand is
 removed immediately. `extend --ttl` sets a minimum remaining lifetime without
 accumulating repeats.
 
-Notification identity: `--client NAME --session S` overrides discovery. Otherwise
-the one configured adapter with a nonempty identity_env is used (Codex
-CODEX_THREAD_ID, Claude CLAUDE_CODE_SESSION_ID); when several are set the
-environment is ambiguous and submit/reserve need an explicit client.
+Notification identity: `--client NAME --session S` overrides discovery and
+turns the ancestor lookup off. Otherwise aq looks at the agent process it was
+started from (Claude Code, OpenClaude, Codex — the names in
+`stats.agent_processes`): first the identity variable the agent set for this
+command and did not itself receive at start (Codex CODEX_THREAD_ID, Claude
+CLAUDE_CODE_SESSION_ID), then that agent's verified session file
+(`~/.claude/sessions/<pid>.json`, `~/.openclaude/sessions/<pid>.json`),
+otherwise `cli`. OpenClaude exports no variable: aq reads its session file.
+With no agent among aq's ancestors the adapter variables of the environment
+decide as before; when several are set the environment is ambiguous and
+submit/reserve need an explicit client. `AQ_NO_PARENT_SESSION=1` turns the
+lookup off.
 A Codex multi-agent v2 sub-agent's thread is replaced with the thread above it
 (from the rollout's session_meta in $CODEX_HOME/sessions), because Codex refuses
 `codex queue` into a sub-agent; listings by the sub-agent's thread map the same way.

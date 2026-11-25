@@ -89,10 +89,12 @@ Pass argv after `--`; use a quoted shell for `$AQ_CPUS`, pipes or `&&`. Tasks
 run in the submit cwd. `--cpus` (default 1) is a real CPU quota: size workers
 with `"$AQ_CPUS"`, never a fixed `-n 8` over fewer `--cpus` (submit warns with
 `hint: the command starts N workers …`). Read your own `CODEX_THREAD_ID` from the session shell;
-never borrow another session's identity. Explicit client/session also resolves
-ambiguity when an inherited `CLAUDE_CODE_SESSION_ID` is set. In a multi-agent v2
-sub-agent pass your own thread too: Codex refuses messages into a sub-agent's
-thread, so aq files the item under the thread that spawned you and notifies it.
+never borrow another session's identity. Without a Codex process among aq's
+ancestors (tmux, a systemd unit) an inherited `CLAUDE_CODE_SESSION_ID` still
+makes the environment ambiguous; explicit client/session resolves it. In a
+multi-agent v2 sub-agent pass your own thread too: Codex refuses messages into
+a sub-agent's thread, so aq files the item under the thread that spawned you
+and notifies it.
 If you need the outcome before you finish, wait for it with `aq wait ID`.
 
 **Tests needing containers or a stand** (testcontainers, compose, e2e): containers

@@ -46,9 +46,10 @@ just install
 - выполняет `systemctl --user daemon-reload`, включает `aq.service` и
   (пере)запускает его — повторный `just install` обновляет работающий демон;
 - копирует скилл `aq` каждому агенту свой: `deploy/skills/claude/aq` в
-  `~/.claude/skills/aq`, `deploy/skills/codex/aq` в `~/.codex/skills/aq` (пути
-  меняются через `CLAUDE_SKILLS`/`CODEX_SKILLS`, пустое значение — не ставить);
-  хуки подключаются отдельно;
+  `~/.claude/skills/aq` и, для OpenClaude, в `~/.openclaude/skills/aq`,
+  `deploy/skills/codex/aq` в `~/.codex/skills/aq` (пути меняются через
+  `CLAUDE_SKILLS`/`CODEX_SKILLS`/`OPENCLAUDE_SKILLS`, пустое значение — не
+  ставить); хуки подключаются отдельно;
 - если linger выключен, печатает подсказку: без `loginctl enable-linger $USER`
   демон и все задачи останавливаются при выходе из последней сессии.
 
@@ -57,8 +58,9 @@ just install
 не запустится (`CONFIG_INVALID`).
 
 Каталоги переопределяются переменными окружения: `BINDIR`, `UNITDIR`, `CONFDIR`,
-`STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
-`SYSTEMCTL=true just install` только раскладывает файлы.
+`STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, `OPENCLAUDE_SKILLS`, а `SYSTEMCTL`
+(по умолчанию `systemctl --user`) — например, `SYSTEMCTL=true just install`
+только раскладывает файлы.
 
 Если установленный `aq` отвечает и в очереди есть задачи или резервы, `install`,
 `uninstall` и `purge` сначала их показывают. Перезапуск для них безопасен: задачи
@@ -593,13 +595,15 @@ samples_max_age = "30d"
 samples_full_res = "2d"
 [stats]
 sample_interval = "30s"
-agent_processes = ["claude", "codex"]
+agent_processes = ["claude", "openclaude", "codex"]
 ```
 
 Длительности конфига поддерживают дни: `7d`, `1d12h`. История берёт 1–100
 прогонов, процентили — 50–100, запас лимита — 1–4. Хранение положительно,
 `samples_full_res < samples_max_age`, общий предел логов не меньше 256 MiB,
-интервал хоста — от 5 с до 5 мин; имена процессов непусты и без `/`.
+интервал хоста — от 5 с до 5 мин; имена процессов непусты и без `/`. Это имена
+процессов, которые aq считает агентами при замере памяти, в `aq top --sessions`
+и при поиске агента-предка команды (`openclaude` — OpenClaude).
 
 ## Диагностика: `aq doctor`
 
@@ -852,12 +856,18 @@ aq release --force "$id"   # стенд убран вручную: освобо�
 
 ## Уведомления
 
-Клиент обнаруживает сессию по настроенному адаптеру с непустой `identity_env`:
-Codex (`CODEX_THREAD_ID`, push через `codex queue`) или Claude
-(`CLAUDE_CODE_SESSION_ID`, client-wait через фоновый `aq wait`). Если непусты
-переменные нескольких адаптеров (сессия запущена из шелла другого агента и
-унаследовала его переменную), aq не угадывает: submit/reserve завершаются с кодом
-64, MCP требует явные `client` и `session_id`. `--client NAME --session S` задают их явно; `--no-notify` у submit/reserve
+Клиент обнаруживает сессию по процессу агента, из которого запущен aq (процесс с
+именем из `stats.agent_processes`: Codex, Claude Code, OpenClaude). Сначала
+берётся своя переменная идентичности — заданная агентом для этой команды и не
+унаследованная им при запуске (Codex `CODEX_THREAD_ID`, Claude
+`CLAUDE_CODE_SESSION_ID`), — затем подтверждённый файл сессии этого процесса
+(`~/.claude/sessions/<pid>.json`, `~/.openclaude/sessions/<pid>.json`); так
+распознаётся OpenClaude: переменной он не экспортирует. Если среди предков нет
+агента (обычный шелл, tmux, systemd unit), решают переменные настроенных
+адаптеров, как раньше, и несколько непустых неоднозначны: submit/reserve
+завершаются с кодом 64, MCP требует явные `client` и `session_id`.
+`AQ_NO_PARENT_SESSION=1` выключает поиск по предкам. `--client NAME --session S`
+задают их явно и выключают поиск; `--no-notify` у submit/reserve
 отключает только уведомления сессии. Без обнаруженной сессии CLI работает как
 `cli`. Указанный push-адаптер без сессии — ошибка; отсутствующая в PATH демона
 команда доставки отклоняет заявку до сохранения. PATH сервиса включает
@@ -970,6 +980,7 @@ format = "gong"
 
 ```sh
 claude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
+openclaude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
 ```
 
 В конфиге Codex:
@@ -1006,8 +1017,9 @@ compose up/run, docker run. Он не обращается к демону, не
 
 Установка не меняет настройки хуков. Вручную объедините нужный фрагмент
 [Claude](../deploy/hooks/claude-settings.json) или [Codex](../deploy/hooks/codex-hooks.json)
-с настройками клиента (не перезаписывайте существующие hooks). В обоих matcher
-`Bash`; Codex требует доверить новое определение через `/hooks`.
+с настройками клиента (не перезаписывайте существующие hooks). Фрагмент Claude
+подходит и OpenClaude (`~/.openclaude/settings.json`, тот же формат). В обоих
+matcher `Bash`; Codex требует доверить новое определение через `/hooks`.
 Скилл aq ([Claude](../deploy/skills/claude/aq/SKILL.md), [Codex](../deploy/skills/codex/aq/SKILL.md))
 описывает, как агенту работать с aq: что считать тяжёлым, как оценить память,
 когда `submit`, а когда `reserve` со стендом, как получить результат и убрать за собой.
