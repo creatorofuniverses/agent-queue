@@ -45,7 +45,7 @@ just install
   only if there is no config yet (an existing one is not touched);
 - if an existing config sets `agent_processes` without `openclaude`, prints a
   hint: until the list has it, OpenClaude's sessions are not counted and its
-  commands belong to `cli`;
+  commands belong to `cli` or to the session of an agent it was started from;
 - runs `systemctl --user daemon-reload`, enables `aq.service` and
   (re)starts it, so running `just install` again updates the running daemon;
 - copies the `aq` skill separately for each agent: `deploy/skills/claude/aq` to

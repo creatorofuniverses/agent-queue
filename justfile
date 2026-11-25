@@ -71,13 +71,13 @@ install: build (check-idle "restarting")
     fi
     test -e "{{ confdir }}/config.toml" || install -m 0600 deploy/config.example.toml "{{ confdir }}/config.toml"
     # An existing config keeps its own list of agent processes. A hint, not a TOML
-    # parser: comments are cut first, and the key may be written stats.agent_processes.
+    # parser: comments are cut first, the key may be written stats.agent_processes,
+    # and a name counts only as a whole string, as aq matches process names.
     agents=$(awk '/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)*agent_processes[[:space:]]*=/{f=1} f{sub(/#.*/, ""); printf "%s ", $0} f && index($0, "]"){exit}' "{{ confdir }}/config.toml" 2>/dev/null || true)
-    case "$agents" in
-        *openclaude* | "") ;;
-        *) echo "hint: agent_processes in {{ confdir }}/config.toml does not list openclaude."
-           echo "      add it, or OpenClaude's sessions are not counted and its commands belong to cli." ;;
-    esac
+    if [ -n "$agents" ] && ! grep -q -e '"openclaude"' -e "'openclaude'" <<< "$agents"; then
+        echo "hint: agent_processes in {{ confdir }}/config.toml does not list openclaude."
+        echo "      add it, or OpenClaude's sessions are not counted and its commands belong to cli or to the session of an agent it was started from."
+    fi
     # A symlink whose target is gone is still an entry: -e alone says it is not.
     present() { test -e "$1" || test -L "$1"; }
     for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}" "claude:{{ openclaude_skills }}"; do
