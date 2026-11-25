@@ -224,6 +224,24 @@ func TestDetectIdentityUnderAgentOptions(t *testing.T) {
 	}
 }
 
+// The walk changes where the session comes from, not where it is notified: a sub-agent
+// thread of a codex ancestor resolves to the root thread, as without an ancestor.
+func TestDetectIdentityUnderCodexSubagent(t *testing.T) {
+	const (
+		root = "01a1b12c-34a4-79e2-9d46-42a2e28309b3"
+		sub  = "01a1b131-4886-7ca3-8ec7-7b69b601d554"
+	)
+	codexHome := t.TempDir()
+	writeRollout(t, codexHome, "2026/11/06", root, map[string]any{"session_id": root, "thread_source": "user"})
+	writeRollout(t, codexHome, "2026/11/06", sub, subagentMeta(root, root))
+	parent := fakeParent(t, chain(fakeProc{name: "codex", environ: noVars}, fakeProc{name: "sh", environ: noVars}), nil)
+	env := map[string]string{"CODEX_HOME": codexHome, "CODEX_THREAD_ID": sub}
+	want := Identity{"codex", root}
+	if got, err := DetectIdentity(parent, config.Default().Agents, envOf(env), "", ""); err != nil || got != want {
+		t.Fatalf("DetectIdentity() = %v, %v; want %v", got, err, want)
+	}
+}
+
 func TestParentFrom(t *testing.T) {
 	cfg := config.Default()
 	env := map[string]string{"HOME": "/home/agent"}
