@@ -209,6 +209,20 @@ func TestScanInUsePathEndingInDeleted(t *testing.T) {
 	}
 }
 
+// openclaude is among the default agent names: what an OpenClaude process holds is in use.
+func TestScanHeldByOpenClaude(t *testing.T) {
+	o := fixture(t)
+	file := filepath.Join(o.Root, "held by openclaude")
+	writeFile(t, file, "x")
+	agent := fakeProcess(t, o, 101, 0, "openclaude", "/work")
+	makeDir(t, filepath.Join(agent, "fd"))
+	must(t, os.Symlink(file, filepath.Join(agent, "fd", "3")))
+
+	if item := itemAt(t, scanFixture(t, o), "held by openclaude"); item.State != "in_use" || !slices.Equal(item.PIDs, []int{101}) {
+		t.Errorf("OpenClaude's open file was not counted as in use: %+v", item)
+	}
+}
+
 func TestScanUnreadableCwdKeepsProjectsAlive(t *testing.T) {
 	o := agedFixture(t)
 	scratchpad(t, o, "-p-b", "s2", 30*time.Hour)

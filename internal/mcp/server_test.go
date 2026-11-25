@@ -166,26 +166,34 @@ func fakeAgentTree(t *testing.T) string {
 	return proc
 }
 
+// ocFile is the session file OpenClaude writes for pid 101 of fakeAgentTree: no procStart.
+const ocFile = `{"pid":101,"sessionId":"oc-session","status":"shell","updatedAt":1000000500,"startedAt":1000000503}`
+
+// ocParent is the ancestor lookup over the fake tree, aq started by OpenClaude, with
+// the session file content in a fake home or, with "", without one.
+func ocParent(t *testing.T, content string) client.Parent {
+	t.Helper()
+	home := t.TempDir()
+	if content != "" {
+		path := filepath.Join(home, ".openclaude", "sessions", "101.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proc := fakeAgentTree(t)
+	return client.Parent{ProcRoot: proc, Self: 100, Names: []string{"openclaude"}, Sessions: agentsess.Reader{Sources: agentsess.Sources(home), ProcRoot: proc}}
+}
+
 // Under an agent ancestor the session comes from its session file; without one
 // the identity is unknown as before.
 func TestMCPParentSessionFile(t *testing.T) {
-	proc := fakeAgentTree(t)
-	// The file OpenClaude writes for 101: no procStart.
-	for _, file := range []string{`{"pid":101,"sessionId":"oc-session","status":"shell","updatedAt":1000000500,"startedAt":1000000503}`, ""} {
-		home := t.TempDir()
-		if file != "" {
-			path := filepath.Join(home, ".openclaude", "sessions", "101.json")
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		parent := client.Parent{ProcRoot: proc, Self: 100, Names: []string{"openclaude"}, Sessions: agentsess.Reader{Sources: agentsess.Sources(home), ProcRoot: proc}}
+	for _, file := range []string{ocFile, ""} {
 		called := false
 		var sent daemon.SubmitArgs
-		out := serveParent(t, parent, tool("queue_submit", submitArgs()), func(_ context.Context, _ string, a, _ any) error {
+		out := serveParent(t, ocParent(t, file), tool("queue_submit", submitArgs()), func(_ context.Context, _ string, a, _ any) error {
 			called = true
 			sent = a.(daemon.SubmitArgs)
 			return nil
@@ -200,6 +208,23 @@ func TestMCPParentSessionFile(t *testing.T) {
 		if !called || r["isError"] == true || sent.ClientType != "claude" || sent.SessionID != "oc-session" {
 			t.Fatal(called, sent, r)
 		}
+	}
+}
+
+// queue_list --mine asks for the ancestor's session when the caller gives none.
+func TestMCPParentSessionList(t *testing.T) {
+	called := false
+	var args map[string]any
+	serveParent(t, ocParent(t, ocFile), tool("queue_list", map[string]any{"mine": true}), func(_ context.Context, op string, a, out any) error {
+		called = true
+		if op != "list" {
+			t.Errorf("op %s, want list", op)
+		}
+		args = a.(map[string]any)
+		return json.Unmarshal([]byte(`[]`), out)
+	}, nil)
+	if !called || args["session_id"] != "oc-session" {
+		t.Fatal(called, args)
 	}
 }
 func testMCPIdentityRequired(t *testing.T, env map[string]string) {
