@@ -101,6 +101,20 @@ func TestReadWarnsAboutBrokenFilesOnly(t *testing.T) {
 	if n := strings.Count(log.String(), "level=WARN"); n != 1 || !strings.Contains(log.String(), "5.json") {
 		t.Fatalf("%d warning(s) for two broken files, want one about 5.json:\n%s", n, log.String())
 	}
+
+	// A file the source cannot read is a broken one, not a missing one.
+	unreadable := filepath.Join(dir, "9.json")
+	if err := os.WriteFile(unreadable, []byte(`{"pid":9}`), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+	warnSessionFile = sync.Once{}
+	if _, _, ok := r.Lookup(9); ok {
+		t.Fatal("Lookup(9) verified a file it cannot read")
+	}
+	if n := strings.Count(log.String(), "level=WARN"); n != 2 || !strings.Contains(log.String(), "9.json") || !strings.Contains(log.String(), "permission denied") {
+		t.Fatalf("%d warning(s), want a second one about the unreadable 9.json:\n%s", n, log.String())
+	}
 }
 
 // procDir writes <root>/<pid>/stat with the given start ticks and, with btime, the
