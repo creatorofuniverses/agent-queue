@@ -15,11 +15,11 @@ import (
 	"github.com/creatorofuniverses/agent-queue/internal/platform"
 )
 
-// Info is what a Claude Code session file says about a live process.
+// Info is what a Claude Code or OpenClaude session file says about a live process.
 type Info struct {
 	SessionID, Name, Cwd, Status string
 	ProcStart                    uint64    // start time in kernel clock ticks
-	StatusSince                  time.Time // statusUpdatedAt; zero when absent
+	StatusSince                  time.Time // statusUpdatedAt, else updatedAt as OpenClaude writes; zero when absent
 }
 
 // Session is a SessionUsage with what the client's own files add.

@@ -109,6 +109,7 @@ func TestReadVerifiesStartedAt(t *testing.T) {
 		{"exact procStart without boot time", "5.json", `{"pid":5,"sessionId":"oc","procStart":"50"}`, false, &Info{ProcStart: 50, SessionID: "oc"}},
 		{"no sessionId", "5.json", `{"pid":5,"sessionId":"","status":"busy","startedAt":1000000503}`, true, &Info{ProcStart: 50, Status: "busy"}},
 		{"pid differs from the file name", "5.json", `{"pid":4,"sessionId":"oc","startedAt":1000000503}`, true, nil},
+		{"the process is gone: no <pid> directory", "9.json", `{"pid":9,"sessionId":"oc","startedAt":1000000503}`, true, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
