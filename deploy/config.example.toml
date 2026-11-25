@@ -116,9 +116,10 @@ samples_max_age = "30d"
 samples_full_res = "2d"
 
 [stats]
-# Host sampling period and agent process names.
+# Host sampling period and agent process names: Claude Code (claude), OpenClaude
+# (openclaude) and Codex (codex).
 sample_interval = "30s"
-agent_processes = ["claude", "codex"]
+agent_processes = ["claude", "openclaude", "codex"]
 
 [disk]
 # Disk-write alarm: fires when the host writes at least this many bytes per
