@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	osexec "os/exec"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -122,7 +121,7 @@ func Run(ctx context.Context, paths config.Paths, cfg config.Config, exec platfo
 	d := &server{
 		host: host, opts: opts, sched: sched, st: st, paths: paths, tmp: tmp, router: router, outbox: outbox, cfg: cfg, initialUsageDone: initialUsageDone,
 		lastDisk:      &atomic.Pointer[DiskRate]{},
-		sessionReader: agentsess.Reader{Dir: filepath.Join(home, ".claude", "sessions"), ProcRoot: "/proc"},
+		sessionReader: agentsess.Reader{Sources: agentsess.Sources(home), ProcRoot: "/proc"},
 		lastSessions:  &atomic.Pointer[[]agentsess.Session]{},
 		lastTmp:       &atomic.Pointer[tmpscan.Report]{},
 		alerts:        newAlertSet(cfg),

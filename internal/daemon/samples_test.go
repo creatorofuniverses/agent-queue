@@ -376,7 +376,7 @@ func TestSamplerSessions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proc, "1", "stat"), []byte(stat), 0600); err != nil {
 		t.Fatal(err)
 	}
-	d.Sessions = agentsess.Reader{Dir: dir, ProcRoot: proc}
+	d.Sessions = agentsess.Reader{Sources: []agentsess.Source{{Dir: dir, IdentityEnv: "CLAUDE_CODE_SESSION_ID"}}, ProcRoot: proc}
 	d.LastSessions = &atomic.Pointer[[]agentsess.Session]{}
 	usage.Set(platform.Usage{Sessions: []platform.SessionUsage{
 		{PID: 1, Start: 123, Client: "claude", AgentBytes: 321},

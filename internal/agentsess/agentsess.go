@@ -3,6 +3,7 @@ package agentsess
 
 import (
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -30,75 +31,174 @@ type Session struct {
 	IdleSeconds *float64 `json:"idle_seconds"` // nil: unknown
 }
 
-// Reader reads ~/.claude/sessions/<pid>.json; ProcRoot checks procStart.
-type Reader struct{ Dir, ProcRoot string }
+// Source is one client's session directory and the adapter identity_env its
+// sessions belong to.
+type Source struct {
+	Dir         string
+	IdentityEnv string
+}
+
+// Sources lists the session directories of the known clients, most trusted first.
+func Sources(home string) []Source {
+	if home == "" {
+		return nil
+	}
+	return []Source{
+		{Dir: filepath.Join(home, ".claude", "sessions"), IdentityEnv: "CLAUDE_CODE_SESSION_ID"},
+		{Dir: filepath.Join(home, ".openclaude", "sessions"), IdentityEnv: "CLAUDE_CODE_SESSION_ID"},
+	}
+}
+
+// Reader reads the clients' session files; ProcRoot verifies them against live processes.
+type Reader struct {
+	Sources  []Source
+	ProcRoot string
+}
+
+func (r Reader) procRoot() string {
+	if r.ProcRoot == "" {
+		return "/proc"
+	}
+	return r.ProcRoot
+}
 
 var warnSessionFile sync.Once
 
-// Read returns session metadata by PID, skipping unreadable or stale files.
+// Read returns session metadata by PID, skipping unreadable or unverified files.
 func (r Reader) Read() map[int]Info {
 	info := make(map[int]Info)
-	entries, err := os.ReadDir(r.Dir)
-	if err != nil {
-		return info
-	}
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		path := filepath.Join(r.Dir, entry.Name())
-		var record struct {
-			PID             int    `json:"pid"`
-			SessionID       string `json:"sessionId"`
-			Name            string `json:"name"`
-			Cwd             string `json:"cwd"`
-			Status          string `json:"status"`
-			StatusUpdatedAt *int64 `json:"statusUpdatedAt"`
-			ProcStart       string `json:"procStart"`
-		}
-		b, err := os.ReadFile(path)
-		if err == nil {
-			err = json.Unmarshal(b, &record)
-		}
+	for _, src := range r.Sources {
+		entries, err := os.ReadDir(src.Dir)
 		if err != nil {
-			warnSessionFile.Do(func() {
-				slog.Warn("cannot read Claude Code session file", "path", path, "error", err)
-			})
 			continue
 		}
-		pid := strconv.Itoa(record.PID)
-		if record.PID <= 0 || entry.Name() != pid+".json" ||
-			!matchesProcStart(filepath.Join(r.ProcRoot, pid, "stat"), record.ProcStart) {
-			continue
+		for _, entry := range entries {
+			pid, ok := sessionPID(entry.Name(), entry.Type())
+			if !ok {
+				continue
+			}
+			if session, ok := r.lookup(src, pid); ok {
+				if _, seen := info[pid]; !seen {
+					info[pid] = session
+				}
+			}
 		}
-		start, err := strconv.ParseUint(record.ProcStart, 10, 64)
-		if err != nil || start == 0 {
-			continue
-		}
-		session := Info{ProcStart: start, SessionID: record.SessionID, Name: record.Name, Cwd: record.Cwd, Status: record.Status}
-		if record.StatusUpdatedAt != nil {
-			session.StatusSince = time.UnixMilli(*record.StatusUpdatedAt)
-		}
-		info[record.PID] = session
 	}
 	return info
 }
 
-func matchesProcStart(path, start string) bool {
-	if start == "" {
-		return false
+// Lookup returns the verified session file of pid from the first source that has one.
+func (r Reader) Lookup(pid int) (Source, Info, bool) {
+	for _, src := range r.Sources {
+		if session, ok := r.lookup(src, pid); ok {
+			return src, session, true
+		}
+	}
+	return Source{}, Info{}, false
+}
+
+// sessionPID accepts exactly <pid>.json; other names are not session files.
+func sessionPID(name string, typ fs.FileMode) (int, bool) {
+	if typ&fs.ModeType != 0 || filepath.Ext(name) != ".json" { // regular files only
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSuffix(name, ".json"))
+	return pid, err == nil && pid > 0 && name == strconv.Itoa(pid)+".json"
+}
+
+// lookup reads and verifies <src.Dir>/<pid>.json against the live process.
+func (r Reader) lookup(src Source, pid int) (Info, bool) {
+	path := filepath.Join(src.Dir, strconv.Itoa(pid)+".json")
+	var record struct {
+		PID             int    `json:"pid"`
+		SessionID       string `json:"sessionId"`
+		Name            string `json:"name"`
+		Cwd             string `json:"cwd"`
+		Status          string `json:"status"`
+		StatusUpdatedAt *int64 `json:"statusUpdatedAt"`
+		UpdatedAt       *int64 `json:"updatedAt"`
+		ProcStart       string `json:"procStart"`
+		StartedAt       *int64 `json:"startedAt"`
 	}
 	b, err := os.ReadFile(path)
+	if err == nil {
+		err = json.Unmarshal(b, &record)
+	}
 	if err != nil {
-		return false
+		warnSessionFile.Do(func() {
+			slog.Warn("cannot read agent session file", "path", path, "error", err)
+		})
+		return Info{}, false
+	}
+	start, known := procStartTicks(filepath.Join(r.procRoot(), strconv.Itoa(pid), "stat"))
+	if record.PID != pid || !known {
+		return Info{}, false
+	}
+	if record.ProcStart != "" {
+		// An exact start time names one incarnation of the pid: a mismatch is
+		// another process, whatever startedAt says.
+		if claimed, err := strconv.ParseUint(record.ProcStart, 10, 64); err != nil || claimed != start {
+			return Info{}, false
+		}
+	} else {
+		// OpenClaude writes no procStart. Its file is written once, right after the
+		// process starts, so it cannot be much older than the process; the minute
+		// covers clock adjustment after boot.
+		began := processStart(r.procRoot(), start)
+		if record.StartedAt == nil || began.IsZero() ||
+			time.UnixMilli(*record.StartedAt).Before(began.Add(-time.Minute)) {
+			return Info{}, false
+		}
+	}
+	session := Info{ProcStart: start, SessionID: record.SessionID, Name: record.Name, Cwd: record.Cwd, Status: record.Status}
+	switch {
+	case record.StatusUpdatedAt != nil:
+		session.StatusSince = time.UnixMilli(*record.StatusUpdatedAt)
+	case record.UpdatedAt != nil:
+		session.StatusSince = time.UnixMilli(*record.UpdatedAt)
+	}
+	return session, true
+}
+
+// procStartTicks is field 22 of /proc/<pid>/stat: the start time in kernel clock ticks.
+func procStartTicks(path string) (uint64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
 	}
 	stat := string(b)
 	end := strings.LastIndexByte(stat, ')')
 	if end < 0 {
-		return false
+		return 0, false
 	}
 	fields := strings.Fields(stat[end+1:]) // Field 3 follows the parenthesized command.
-	return len(fields) >= 20 && fields[19] == start
+	if len(fields) < 20 {
+		return 0, false
+	}
+	start, err := strconv.ParseUint(fields[19], 10, 64)
+	return start, err == nil
+}
+
+// processStart is when a process with these start ticks began: boot time from
+// /proc/stat plus ticks, zero without a readable btime.
+func processStart(procRoot string, ticks uint64) time.Time {
+	b, err := os.ReadFile(filepath.Join(procRoot, "stat"))
+	if err != nil {
+		return time.Time{}
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 || f[0] != "btime" {
+			continue
+		}
+		sec, err := strconv.ParseInt(f[1], 10, 64)
+		if err != nil {
+			return time.Time{}
+		}
+		// /proc reports starttime in Linux user clock ticks (USER_HZ).
+		return time.Unix(sec, 0).Add(time.Duration(ticks) * (time.Second / 100))
+	}
+	return time.Time{}
 }
 
 // Enrich preserves sample order and fills in the available client metadata.
