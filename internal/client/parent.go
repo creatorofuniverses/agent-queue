@@ -3,6 +3,7 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -88,7 +89,14 @@ func (p Parent) identity(pid int, agents []config.AgentConfig, env func(string) 
 			id.SessionID = codexRootThread(env, id.SessionID)
 		}
 	default:
-		src, info, ok := p.Sessions.Lookup(pid)
+		// The agent wrote its session file under the home it was started with: a
+		// command without HOME (env -i, unset) or with another one still finds it
+		// there, after the command's own home.
+		sessions := p.Sessions
+		if home := agentEnv["HOME"]; home != "" && home != env("HOME") {
+			sessions.Sources = slices.Concat(sessions.Sources, agentsess.Sources(home))
+		}
+		src, info, ok := sessions.Lookup(pid)
 		if !ok || info.SessionID == "" {
 			return id, nil
 		}

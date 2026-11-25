@@ -864,7 +864,9 @@ the agent's own identity variable, absent from the agent's start environment
 or different there (Codex `CODEX_THREAD_ID`, Claude `CLAUDE_CODE_SESSION_ID`),
 then that agent's session file (`~/.claude/sessions/<pid>.json`,
 `~/.openclaude/sessions/<pid>.json`), which is how OpenClaude is recognized: it
-exports no variable. Without an agent among the ancestors (a plain shell, tmux,
+exports no variable. The files are looked for under the command's `HOME`, then
+under the home the agent itself was started with, so a command run with `env -i`
+still finds them. Without an agent among the ancestors (a plain shell, tmux,
 a systemd unit) the variables of the configured adapters decide as before, and
 several non-empty ones are ambiguous: submit/reserve exit with code 64, and
 MCP requires explicit `client` and `session_id`. `AQ_NO_PARENT_SESSION=1` turns

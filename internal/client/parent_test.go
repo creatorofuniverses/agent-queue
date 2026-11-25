@@ -242,6 +242,58 @@ func TestDetectIdentityUnderCodexSubagent(t *testing.T) {
 	}
 }
 
+// The agent wrote its session file under the home it was started with. A command
+// without HOME (env -i, unset) or with another one still finds it there: the
+// agent's home is looked at after the command's own.
+func TestDetectIdentityAgentHome(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		agent      string
+		named      bool          // the agent's start environment names the home with its files
+		unreadable bool          // the agent's environment cannot be read
+		files      []sessionFile // under the agent's home
+		command    string        // the command's HOME: none, other or the agent's
+		otherFiles []sessionFile // under that other home
+		want       Identity
+	}{
+		{"OpenClaude under env -i", "openclaude", true, false, ocSession(nearest), "none", nil, Identity{"claude", "oc-session"}},
+		{"OpenClaude with another HOME", "openclaude", true, false, ocSession(nearest), "other", nil, Identity{"claude", "oc-session"}},
+		{"Claude Code under env -i: the exact procStart", "claude", true, false, claudeSession(nearest), "none", nil, Identity{"claude", "claude-session"}},
+		{"the command's home is looked at first", "openclaude", true, false, ocSession(nearest), "other", claudeSession(nearest), Identity{"claude", "claude-session"}},
+		{"no HOME in the agent's environment", "openclaude", false, false, ocSession(nearest), "none", nil, Identity{"cli", ""}},
+		{"an unreadable environment of the agent", "openclaude", true, true, ocSession(nearest), "none", nil, Identity{"cli", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			for _, f := range tc.files {
+				mustWrite(t, filepath.Join(home, "."+f.client, "sessions", strconv.Itoa(f.pid)+".json"), f.body)
+			}
+			agent := fakeProc{name: tc.agent}
+			switch {
+			case tc.unreadable:
+			case tc.named:
+				agent.environ = map[string]string{"HOME": home}
+			default:
+				agent.environ = noVars
+			}
+			var commandHome string
+			if tc.command == "other" {
+				commandHome = t.TempDir()
+				for _, f := range tc.otherFiles {
+					mustWrite(t, filepath.Join(commandHome, "."+f.client, "sessions", strconv.Itoa(f.pid)+".json"), f.body)
+				}
+			}
+			proc := writeTree(t, chain(agent, fakeProc{name: "sh", environ: noVars}))
+			parent := Parent{ProcRoot: proc, Self: selfPID, Names: []string{"claude", "openclaude", "codex"},
+				Sessions: agentsess.Reader{Sources: agentsess.Sources(commandHome), ProcRoot: proc}}
+			got, err := DetectIdentity(parent, config.Default().Agents, envOf(nil), "", "")
+			if err != nil || got != tc.want {
+				t.Fatalf("DetectIdentity() = %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestParentFrom(t *testing.T) {
 	cfg := config.Default()
 	env := map[string]string{"HOME": "/home/agent"}
