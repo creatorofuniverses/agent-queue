@@ -15,8 +15,13 @@ for dir in "$T/bin" "$T/units" "$T/conf" "$T/state" "$T/s1" "$T/s2" "$T/s3"; do
  [[ $dir == "$T/"* && $T != / ]] || exit 1
 done
 run() { env "${opts[@]}" "$@" just "$recipe" </dev/null; }
-# set -e lets a failing "! grep" pass: an absent pattern needs its own check.
-absent() { ! grep -q "$1" "$2" || { echo "unexpected '$1' in $2" >&2; exit 1; }; }
+# set -e lets a failing "! grep" pass: an absent pattern needs its own check,
+# and a file grep cannot read (exit 2) proves nothing either.
+absent() {
+    local rc=0
+    grep -q "$1" "$2" || rc=$?
+    [ "$rc" -eq 1 ] || { echo "'$1' in $2: grep exit $rc, want 1" >&2; exit 1; }
+}
 
 # A daemon with work in its queue is listed before the restart, which proceeds.
 mkdir -p "$T/bin"
