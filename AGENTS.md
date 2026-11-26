@@ -64,6 +64,8 @@ green. Run `just test-integration` when you touch the executor
 - **Local records stay local.** `docs/codex/`, `docs/superpowers/`,
   `docs/notes/` and `.private-history/` are ignored on purpose; never commit or
   link them from public files.
+- **Working notes live in `docs/notes/`**: read the matching note before
+  changing a topic, and update it in place afterwards.
 - Do not push, tag or open pull requests unless asked.
 
 ## Contracts to keep
