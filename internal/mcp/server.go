@@ -118,12 +118,13 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Caller, parent
 			var p struct {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
+				Meta      json.RawMessage `json:"_meta"`
 			}
 			if err := json.Unmarshal(req.Params, &p); err != nil {
 				r.Error = &rpcError{-32602, "invalid tools/call params"}
 				break
 			}
-			r.Result = callTool(ctx, call, parent, agents, env, p.Name, p.Arguments)
+			r.Result = callTool(ctx, call, parent, agents, env, p.Name, p.Arguments, metaSession(p.Meta))
 		default:
 			r.Error = &rpcError{-32601, fmt.Sprintf("method not found: %s", req.Method)}
 		}

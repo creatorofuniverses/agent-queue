@@ -299,3 +299,50 @@ func TestMCPCommandFromOpenCode(t *testing.T) {
 		t.Fatal(sent, out.String())
 	}
 }
+
+// underOpenCodeService is underOpenCode for a process the OpenCode service started itself,
+// aq mcp, and not a tool shell: the same tree, without OPENCODE_SESSION_ID.
+func underOpenCodeService(t *testing.T, h *harness, out *bytes.Buffer) *cmdCtx {
+	t.Helper()
+	proc := fakeOpenCodeTree(t)
+	session := client.Parent{ProcRoot: proc, Self: 100, Names: []string{"opencode"}}
+	return &cmdCtx{ctx: context.Background(), env: func(k string) string { return h.vars[k] }, stdout: out, stderr: out, parent: func(config.Config) client.Parent { return session }}
+}
+
+// aq mcp holds no OPENCODE_SESSION_ID, so OpenCode names the session of a call in its
+// _meta: queue_submit sends {opencode, that session}. A call without _meta is still refused.
+func TestMCPCommandMetaSession(t *testing.T) {
+	calls := 0
+	var sent client.Identity
+	h := socketHarness(t, func(_ context.Context, op string, raw json.RawMessage, _ protocol.StreamWriter) (any, error) {
+		calls++
+		var a struct {
+			ClientType string `json:"client_type"`
+			SessionID  string `json:"session_id"`
+		}
+		if e := json.Unmarshal(raw, &a); e != nil {
+			t.Error(e)
+		}
+		if op != "submit" {
+			t.Errorf("op %s", op)
+		}
+		sent = client.Identity{ClientType: a.ClientType, SessionID: a.SessionID}
+		return daemon.ItemView{ID: "i"}, nil
+	})
+	call := func(meta map[string]any) string {
+		params := map[string]any{"name": "queue_submit", "arguments": map[string]any{"cwd": h.cwd, "argv": []string{"true"}, "memory": "64M", "timeout": "1m"}}
+		if meta != nil {
+			params["_meta"] = meta
+		}
+		req, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+		return string(req) + "\n"
+	}
+	feedStdin(t, call(map[string]any{"ai.opencode/sessionID": "ses_meta"})+call(nil))
+	var out bytes.Buffer
+	if err := cmdMCP(underOpenCodeService(t, h, &out), nil); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || sent != (client.Identity{ClientType: "opencode", SessionID: "ses_meta"}) || strings.Count(out.String(), `"isError":true`) != 1 || !strings.Contains(out.String(), "session identity unknown") {
+		t.Fatal(calls, sent, out.String())
+	}
+}

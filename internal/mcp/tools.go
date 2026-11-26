@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"unicode"
 )
 
 type toolDef struct {
@@ -22,7 +23,7 @@ type toolDef struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
-const wakeDescription = "MCP calls cannot wake an idle session: after submitting, Claude Code runs aq wait <id> as a background command; Codex is pinged by the daemon via codex queue."
+const wakeDescription = "MCP calls cannot wake an idle session: after submitting, Claude Code and OpenCode run aq wait <id> as a background command; Codex is pinged by the daemon via codex queue."
 
 func toolDefinitions() []toolDef {
 	str := func() map[string]any { return map[string]any{"type": "string"} }
@@ -40,7 +41,7 @@ func toolDefinitions() []toolDef {
 		p["cpus"] = map[string]any{"type": "integer"}
 		p["env"] = map[string]any{"type": "array", "items": str()}
 		p["no_notify"] = map[string]any{"type": "boolean"}
-		p["session_id"].(map[string]any)["description"] = "Defaults to CODEX_THREAD_ID / CLAUDE_CODE_SESSION_ID of the aq mcp process if set; pass it explicitly if your client does not propagate it"
+		p["session_id"].(map[string]any)["description"] = "Defaults to the session aq detects: CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID or OPENCODE_SESSION_ID of the aq mcp process if set, or the session OpenCode attaches to the call; pass it explicitly if your client provides neither"
 	}
 	submit["properties"].(map[string]any)["argv"] = map[string]any{"type": "array", "items": str()}
 	reserve["properties"].(map[string]any)["task_cpus"] = map[string]any{"type": "integer"}
@@ -185,9 +186,83 @@ func toolError(err error) toolResult {
 // logsMaxBytes bounds queue_logs: one progress-bar "line" can be megabytes of agent context.
 const logsMaxBytes = 256 << 10
 
-const identityUnknown = "session identity unknown: pass client and session_id (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID of your session), or no_notify=true"
+const identityUnknown = "session identity unknown: pass client and session_id (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID / OPENCODE_SESSION_ID of your session), or no_notify=true"
 
-func callTool(ctx context.Context, call Caller, parent client.Parent, agents []config.AgentConfig, env func(string) string, name string, raw json.RawMessage) toolResult {
+const opencodeIdentityEnv = "OPENCODE_SESSION_ID"
+
+// metaSession reads params._meta, where OpenCode names the session a call is made for under
+// "ai.opencode/sessionID"; a value is usable when it is a non-empty string of at most 128
+// bytes without control characters. aq assumes no format for the id, as for a session_id.
+func metaSession(raw json.RawMessage) string {
+	var meta map[string]any
+	if json.Unmarshal(raw, &meta) != nil {
+		return ""
+	}
+	s, _ := meta["ai.opencode/sessionID"].(string)
+	if s == "" || len(s) > 128 {
+		return ""
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	return s
+}
+
+// metaAdapter is the adapter a usable _meta session belongs to: the one whose identity_env
+// is opencodeIdentityEnv, and only one, as with a session file: two adapters on one variable
+// give no identity.
+func metaAdapter(agents []config.AgentConfig, meta string) (config.AgentConfig, bool) {
+	if meta == "" {
+		return config.AgentConfig{}, false
+	}
+	var found []config.AgentConfig
+	for _, a := range agents {
+		if a.IdentityEnv == opencodeIdentityEnv {
+			found = append(found, a)
+		}
+	}
+	if len(found) != 1 {
+		return config.AgentConfig{}, false
+	}
+	return found[0], true
+}
+
+// toolIdentity is the identity of queue_submit and queue_reserve: the explicit arguments,
+// then the session OpenCode attaches to the call (_meta), then the process. An ambiguous
+// environment is no identity rather than an error.
+func toolIdentity(parent client.Parent, agents []config.AgentConfig, env func(string) string, flagClient, flagSession, meta string) (client.Identity, error) {
+	adapter, ok := metaAdapter(agents, meta)
+	if !ok || flagClient == "cli" { // no usable _meta, or an explicit cli: as before _meta
+		id, err := client.DetectIdentity(parent, agents, env, flagClient, flagSession)
+		if errors.Is(err, client.ErrAmbiguousIdentity) {
+			id, err = client.Identity{ClientType: "cli", SessionID: flagSession}, nil
+		}
+		return id, err
+	}
+	if flagClient == "" || flagClient == adapter.Name {
+		if flagSession == "" {
+			flagSession = meta
+		}
+		// No process lookup: not even an ambiguous environment stands in the way of the call's session.
+		return client.Identity{ClientType: adapter.Name, SessionID: flagSession}, nil
+	}
+	// Another adapter: _meta names an OpenCode session, and the adapter's variable in the
+	// environment of aq mcp may be one the OpenCode service inherited from an outer agent,
+	// so only an explicit session_id stands.
+	for _, a := range agents {
+		if a.Name == flagClient {
+			// As aq recorded that id: a Codex sub-agent's thread is filed under its root.
+			return client.Identity{ClientType: a.Name, SessionID: client.ListSession(agents, env, flagSession)}, nil
+		}
+	}
+	return client.Identity{}, &client.UsageError{Message: fmt.Sprintf("unknown client %s", flagClient)}
+}
+
+// meta is the session OpenCode attaches to a tools/call request
+// (params._meta["ai.opencode/sessionID"]), "" when absent or unusable.
+func callTool(ctx context.Context, call Caller, parent client.Parent, agents []config.AgentConfig, env func(string) string, name string, raw json.RawMessage, meta string) toolResult {
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
 	}
@@ -217,10 +292,7 @@ func callTool(ctx context.Context, call Caller, parent client.Parent, agents []c
 		args = v
 		op = "estimate"
 	case "queue_submit", "queue_reserve":
-		id, err := client.DetectIdentity(parent, agents, env, a.Client, a.SessionID)
-		if errors.Is(err, client.ErrAmbiguousIdentity) {
-			id, err = client.Identity{ClientType: "cli", SessionID: a.SessionID}, nil
-		}
+		id, err := toolIdentity(parent, agents, env, a.Client, a.SessionID, meta)
 		if err != nil {
 			return toolError(err)
 		}
@@ -273,14 +345,18 @@ func callTool(ctx context.Context, call Caller, parent client.Parent, agents []c
 	case "queue_list":
 		op = "list"
 		if a.Mine && a.SessionID == "" {
-			id, err := client.DetectIdentity(parent, agents, env, "", "")
-			if err != nil {
-				return toolError(err)
+			if _, ok := metaAdapter(agents, meta); ok {
+				a.SessionID = meta
+			} else {
+				id, err := client.DetectIdentity(parent, agents, env, "", "")
+				if err != nil {
+					return toolError(err)
+				}
+				if id.SessionID == "" {
+					return toolError(errors.New("list: --mine needs a session (CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, OPENCODE_SESSION_ID or --session)"))
+				}
+				a.SessionID = id.SessionID
 			}
-			if id.SessionID == "" {
-				return toolError(errors.New("list: --mine needs a session (CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID or --session)"))
-			}
-			a.SessionID = id.SessionID
 		} else {
 			a.SessionID = client.ListSession(agents, env, a.SessionID)
 		}
