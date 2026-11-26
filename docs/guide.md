@@ -56,6 +56,10 @@ just install
   belong to `cli` (with the `opencode` name in the list; without it the
   environment decides, as above) and its MCP submissions are rejected with
   `session identity unknown`;
+- both hints read the config as text (comments cut), not as TOML, so in unusual
+  forms they can be wrong: `agents = []` keeps the default adapters but gets
+  the hint, a quoted header like `[["agents"]]` is not noticed, and a string
+  that merely contains the assignment counts as the adapter.
 - runs `systemctl --user daemon-reload`, enables `aq.service` and
   (re)starts it, so running `just install` again updates the running daemon;
 - copies the `aq` skill separately for each agent: `deploy/skills/claude/aq` to
@@ -911,9 +915,9 @@ name and the `opencode` adapter (the defaults), a command with the variable
 belongs to its OpenCode session and a command without it to `cli`, never to
 another agent's session; with only one of the two entries this does not
 hold, see [Installation](#installation). If aq still cannot tell,
-`--client opencode --session "$OPENCODE_SESSION_ID"` sets the session;
-in MCP OpenCode names the calling session in the request itself, see
-[MCP](#mcp).
+`--client NAME --session "$OPENCODE_SESSION_ID"` sets the session (`NAME` is
+the adapter's name in the config, `opencode` unless renamed); in MCP
+OpenCode names the calling session in the request itself, see [MCP](#mcp).
 
 A Codex multi-agent v2 sub-agent has its own `CODEX_THREAD_ID`, but Codex
 refuses `codex queue` into a sub-agent's thread. When the session (detected or
