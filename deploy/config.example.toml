@@ -117,9 +117,10 @@ samples_full_res = "2d"
 
 [stats]
 # Host sampling period and agent process names: Claude Code (claude), OpenClaude
-# (openclaude) and Codex (codex).
+# (openclaude), Codex (codex) and OpenCode (opencode: its shared background service
+# and each of its terminals; opencode-pty is not an agent).
 sample_interval = "30s"
-agent_processes = ["claude", "openclaude", "codex"]
+agent_processes = ["claude", "openclaude", "codex", "opencode"]
 
 [disk]
 # Disk-write alarm: fires when the host writes at least this many bytes per

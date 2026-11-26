@@ -148,7 +148,7 @@ func Default() Config {
 		Profiles:            ProfilesConfig{10, 90, 90, 1.2},
 		Scheduler:           SchedulerConfig{true},
 		Retention:           RetentionConfig{7 * 24 * time.Hour, 5 * gib, 90 * 24 * time.Hour, 30 * 24 * time.Hour, 2 * 24 * time.Hour},
-		Stats:               StatsConfig{30 * time.Second, []string{"claude", "openclaude", "codex"}},
+		Stats:               StatsConfig{30 * time.Second, []string{"claude", "openclaude", "codex", "opencode"}},
 		Disk:                DiskConfig{50 * gib, 10 * time.Minute},
 		TmpScan:             TmpScanConfig{10 * time.Minute, 24 * time.Hour, 70, 2 * gib},
 		Sessions:            SessionsConfig{12 * time.Hour, 6 * gib, 3},

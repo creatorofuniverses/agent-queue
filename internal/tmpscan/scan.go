@@ -58,7 +58,7 @@ type Options struct {
 	OrphanAfter    time.Duration
 	ItemBudget     time.Duration // per-item walk limit; default 5s
 	Now            func() time.Time
-	Agents         []string // process names; defaults to claude, openclaude and codex
+	Agents         []string // process names; defaults to claude, openclaude, codex and opencode
 	TaskSlices     []string // cgroup slice names for aq tasks and teardowns
 }
 
@@ -92,7 +92,7 @@ func scan(ctx context.Context, o Options, lstat func(string) (fs.FileInfo, error
 		o.Now = time.Now
 	}
 	if len(o.Agents) == 0 {
-		o.Agents = []string{"claude", "openclaude", "codex"}
+		o.Agents = []string{"claude", "openclaude", "codex", "opencode"}
 	}
 
 	rootInfo, err := lstat(o.Root)

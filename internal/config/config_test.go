@@ -367,7 +367,7 @@ func TestExampleConfigMatchesDefault(t *testing.T) {
 
 func TestDefaultPlan4Sections(t *testing.T) {
 	c := Default()
-	if c.Profiles != (ProfilesConfig{10, 90, 90, 1.2}) || !c.Scheduler.Backfill || c.Retention != (RetentionConfig{168 * time.Hour, 5 * gib, 2160 * time.Hour, 720 * time.Hour, 48 * time.Hour}) || c.Stats.SampleInterval != 30*time.Second || !reflect.DeepEqual(c.Stats.AgentProcesses, []string{"claude", "openclaude", "codex"}) {
+	if c.Profiles != (ProfilesConfig{10, 90, 90, 1.2}) || !c.Scheduler.Backfill || c.Retention != (RetentionConfig{168 * time.Hour, 5 * gib, 2160 * time.Hour, 720 * time.Hour, 48 * time.Hour}) || c.Stats.SampleInterval != 30*time.Second || !reflect.DeepEqual(c.Stats.AgentProcesses, []string{"claude", "openclaude", "codex", "opencode"}) {
 		t.Fatal(c)
 	}
 }

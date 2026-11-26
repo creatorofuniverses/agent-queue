@@ -111,6 +111,52 @@ func TestUsageMeterCountsWhatAgentsRun(t *testing.T) {
 	}
 }
 
+// OpenCode is one shared service (parent 1) that runs the pty helper, which
+// runs the tool shells, and a separate TUI per terminal. The service and each
+// TUI are agents and session roots. opencode-pty is not a name (the match is
+// exact), so it counts as run by the service while it is its child; a detached
+// helper has no agent root and lands in no session, which is why its 13 MiB
+// are in none of the totals below.
+func TestUsageMeterOpenCodeShape(t *testing.T) {
+	root := t.TempDir()
+	manager := "user.slice/user-1000.slice/user@1000.service"
+	usageFile(t, root, "proc/self/cgroup", "0::/"+manager+"/app.slice/aq.service\n")
+	proc := func(pid, ppid int, comm string, pssMiB int) {
+		base := fmt.Sprintf("proc/%d/", pid)
+		usageFile(t, root, base+"comm", comm+"\n")
+		usageFile(t, root, base+"cmdline", comm+"\x00")
+		usageFile(t, root, base+"status", fmt.Sprintf("Name:\t%s\nPPid:\t%d\n", comm, ppid))
+		usageFile(t, root, base+"cgroup", "0::/user.slice/user-1000.slice/session-3.scope\n")
+		usageFile(t, root, base+"smaps_rollup", fmt.Sprintf("Pss: %d kB\n", pssMiB*1024))
+	}
+	proc(20, 1, "opencode", 300)     // the shared service: an agent and a session root
+	proc(21, 20, "opencode-pty", 13) // its pty helper: run by the service
+	proc(22, 21, "bash", 5)          // a tool shell under the helper: the service's too
+	proc(23, 1, "opencode", 40)      // a TUI started from a terminal: a session of its own
+	proc(24, 1, "opencode-pty", 13)  // a detached helper: no agent, no agent root
+	m := NewUsageMeter(UsageMeterConfig{ProcRoot: filepath.Join(root, "proc"), CgroupRoot: filepath.Join(root, "cg"), Slices: []string{"aq.slice"}})
+	v, e := m.Usage(context.Background(), []string{"opencode"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	const mib = 1 << 20
+	if len(v.Agents) != 1 {
+		t.Fatalf("agents = %+v, want only opencode", v.Agents)
+	}
+	if a := v.Agents[0]; a.Name != "opencode" || a.Bytes != 340*mib || a.Procs != 2 || a.Spawned != 18*mib || a.SpawnedProcs != 2 {
+		t.Errorf("opencode = %+v, want 340 MiB in 2 processes and 18 MiB run by them in 2", a)
+	}
+	if len(v.Sessions) != 2 {
+		t.Fatalf("sessions = %+v, want the service and the TUI", v.Sessions)
+	}
+	if s := v.Sessions[0]; s.PID != 20 || s.Client != "opencode" || s.AgentBytes != 300*mib || s.RunBytes != 18*mib {
+		t.Errorf("service session = %+v, want pid 20 with 300 MiB agent and 18 MiB run", s)
+	}
+	if s := v.Sessions[1]; s.PID != 23 || s.Client != "opencode" || s.AgentBytes != 40*mib || s.RunBytes != 0 {
+		t.Errorf("TUI session = %+v, want pid 23 with 40 MiB agent and no run", s)
+	}
+}
+
 func TestUsageMeterSessions(t *testing.T) {
 	m := usageAgentFixture(t, true)
 	root := filepath.Dir(m.cfg.ProcRoot)
