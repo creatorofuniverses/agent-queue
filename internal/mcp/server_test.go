@@ -201,6 +201,10 @@ func TestMCPMetaSession(t *testing.T) {
 	}
 	noOpenCode := []config.AgentConfig{adapter("codex", "CODEX_THREAD_ID"), adapter("claude", "CLAUDE_CODE_SESSION_ID")}
 	twoOpenCode := []config.AgentConfig{adapter("codex", "CODEX_THREAD_ID"), adapter("claude", "CLAUDE_CODE_SESSION_ID"), adapter("opencode", "OPENCODE_SESSION_ID"), adapter("opencode2", "OPENCODE_SESSION_ID")}
+	// Another adapter named without a session_id is refused by a message that names the client.
+	named := func(client string) []string {
+		return []string{"without a session_id", fmt.Sprintf(`client %q was named without a session_id`, client)}
+	}
 	for _, tc := range []struct {
 		name    string
 		agents  []config.AgentConfig // nil: the default adapters
@@ -209,35 +213,37 @@ func TestMCPMetaSession(t *testing.T) {
 		refusal string         // the error carries this text, and the daemon is not called
 		op      string         // the operation the daemon receives
 		want    map[string]any // part of its arguments
+		also    []string       // a refusal carries these texts too
+		never   string         // and never this one
 	}{
-		{"1 queue_submit without identity arguments", nil, openCodeInEnv, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), "", "submit", identity("opencode", meta)},
-		{"1 queue_reserve without identity arguments", nil, openCodeInEnv, toolMeta("queue_reserve", map[string]any{"cwd": "/tmp", "memory": "64M", "ttl": "1h", "teardown_file": teardown}, sessionMeta(meta)), "", "reserve", identity("opencode", meta)},
-		{"2 client of the OPENCODE_SESSION_ID adapter without a session", nil, openCodeInEnv, toolMeta("queue_submit", with(map[string]any{"client": "opencode"}), sessionMeta(meta)), "", "submit", identity("opencode", meta)},
-		{"3 session without a client", nil, nil, toolMeta("queue_submit", with(map[string]any{"session_id": "S"}), sessionMeta(meta)), "", "submit", identity("opencode", "S")},
-		{"4 another adapter without a session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude"}), sessionMeta(meta)), noIdentity, "", nil},
-		{"4 another adapter without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "claude", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil},
-		{"4 another adapter codex without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "codex", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil},
-		{"4 another adapter with an explicit session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude", "session_id": "c"}), sessionMeta(meta)), "", "submit", identity("claude", "c")},
-		{"4 another adapter with an explicit Codex sub-agent session", nil, map[string]string{"CODEX_HOME": home}, toolMeta("queue_submit", with(map[string]any{"client": "codex", "session_id": "sub"}), sessionMeta(meta)), "", "submit", identity("codex", "root")},
-		{"4 a client no adapter has", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "kimi", "session_id": "k"}), sessionMeta(meta)), "unknown client", "", nil},
-		{"5 another adapter without a session, no _meta", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, tool("queue_submit", with(map[string]any{"client": "claude"})), "", "submit", identity("claude", "outer")},
-		{"6 queue_list mine", nil, nil, toolMeta("queue_list", map[string]any{"mine": true}, sessionMeta(meta)), "", "list", map[string]any{"session_id": meta}},
-		{"6 queue_list mine with a session", nil, nil, toolMeta("queue_list", map[string]any{"mine": true, "session_id": "S"}, sessionMeta(meta)), "", "list", map[string]any{"session_id": "S"}},
-		{"6 queue_list without mine", nil, nil, toolMeta("queue_list", map[string]any{}, sessionMeta(meta)), "", "list", map[string]any{"session_id": ""}},
-		{"7 empty _meta session", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta("")), noIdentity, "", nil},
-		{"7 129-byte _meta session", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(strings.Repeat("s", 129))), noIdentity, "", nil},
-		{"7 _meta session with a line break", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta("ses\nmeta")), noIdentity, "", nil},
-		{"7 _meta session that is a number", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(42)), noIdentity, "", nil},
-		{"8 no adapter with OPENCODE_SESSION_ID", noOpenCode, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), noIdentity, "", nil},
-		{"8 queue_list mine without OPENCODE_SESSION_ID", noOpenCode, nil, toolMeta("queue_list", map[string]any{"mine": true}, sessionMeta(meta)), "--mine needs a session", "", nil},
-		{"9 two adapters with OPENCODE_SESSION_ID", twoOpenCode, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), noIdentity, "", nil},
-		{"9 queue_list mine with two adapters on OPENCODE_SESSION_ID", twoOpenCode, nil, toolMeta("queue_list", map[string]any{"mine": true}, sessionMeta(meta)), "--mine needs a session", "", nil},
-		{"10 ambiguous environment", nil, map[string]string{"CODEX_THREAD_ID": "parent", "CLAUDE_CODE_SESSION_ID": "mine"}, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), "", "submit", identity("opencode", meta)},
-		{"11 no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"no_notify": true}), sessionMeta(meta)), "", "submit", map[string]any{"client_type": "opencode", "session_id": meta, "no_notify": true}},
-		{"12 _meta with other keys only", nil, nil, toolMeta("queue_submit", submitArgs(), map[string]any{"progressToken": "p", "ai.opencode/other": "x"}), noIdentity, "", nil},
-		{"13 client cli", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "cli"}), sessionMeta(meta)), noIdentity, "", nil},
-		{"13 client cli with no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "cli", "no_notify": true}), sessionMeta(meta)), "", "submit", map[string]any{"client_type": "cli", "session_id": "", "no_notify": true}},
-		{"14 queue_status", nil, nil, toolMeta("queue_status", map[string]any{"id": "i"}, sessionMeta(meta)), "", "status", map[string]any{"id": "i"}},
+		{"1 queue_submit without identity arguments", nil, openCodeInEnv, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), "", "submit", identity("opencode", meta), nil, ""},
+		{"1 queue_reserve without identity arguments", nil, openCodeInEnv, toolMeta("queue_reserve", map[string]any{"cwd": "/tmp", "memory": "64M", "ttl": "1h", "teardown_file": teardown}, sessionMeta(meta)), "", "reserve", identity("opencode", meta), nil, ""},
+		{"2 client of the OPENCODE_SESSION_ID adapter without a session", nil, openCodeInEnv, toolMeta("queue_submit", with(map[string]any{"client": "opencode"}), sessionMeta(meta)), "", "submit", identity("opencode", meta), nil, ""},
+		{"3 session without a client", nil, nil, toolMeta("queue_submit", with(map[string]any{"session_id": "S"}), sessionMeta(meta)), "", "submit", identity("opencode", "S"), nil, ""},
+		{"4 another adapter without a session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude"}), sessionMeta(meta)), noIdentity, "", nil, named("claude"), "no_notify"},
+		{"4 another adapter without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "claude", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil, named("claude"), "no_notify"},
+		{"4 another adapter codex without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "codex", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil, named("codex"), "no_notify"},
+		{"4 another adapter with an explicit session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude", "session_id": "c"}), sessionMeta(meta)), "", "submit", identity("claude", "c"), nil, ""},
+		{"4 another adapter with an explicit Codex sub-agent session", nil, map[string]string{"CODEX_HOME": home}, toolMeta("queue_submit", with(map[string]any{"client": "codex", "session_id": "sub"}), sessionMeta(meta)), "", "submit", identity("codex", "root"), nil, ""},
+		{"4 a client no adapter has", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "kimi", "session_id": "k"}), sessionMeta(meta)), "unknown client", "", nil, nil, ""},
+		{"5 another adapter without a session, no _meta", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, tool("queue_submit", with(map[string]any{"client": "claude"})), "", "submit", identity("claude", "outer"), nil, ""},
+		{"6 queue_list mine", nil, nil, toolMeta("queue_list", map[string]any{"mine": true}, sessionMeta(meta)), "", "list", map[string]any{"session_id": meta}, nil, ""},
+		{"6 queue_list mine with a session", nil, nil, toolMeta("queue_list", map[string]any{"mine": true, "session_id": "S"}, sessionMeta(meta)), "", "list", map[string]any{"session_id": "S"}, nil, ""},
+		{"6 queue_list without mine", nil, nil, toolMeta("queue_list", map[string]any{}, sessionMeta(meta)), "", "list", map[string]any{"session_id": ""}, nil, ""},
+		{"7 empty _meta session", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta("")), noIdentity, "", nil, nil, ""},
+		{"7 129-byte _meta session", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(strings.Repeat("s", 129))), noIdentity, "", nil, nil, ""},
+		{"7 _meta session with a line break", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta("ses\nmeta")), noIdentity, "", nil, nil, ""},
+		{"7 _meta session that is a number", nil, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(42)), noIdentity, "", nil, nil, ""},
+		{"8 no adapter with OPENCODE_SESSION_ID", noOpenCode, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), noIdentity, "", nil, nil, ""},
+		{"8 queue_list mine without OPENCODE_SESSION_ID", noOpenCode, nil, toolMeta("queue_list", map[string]any{"mine": true}, sessionMeta(meta)), "--mine needs a session", "", nil, nil, ""},
+		{"9 two adapters with OPENCODE_SESSION_ID", twoOpenCode, nil, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), noIdentity, "", nil, nil, ""},
+		{"9 queue_list mine with two adapters on OPENCODE_SESSION_ID", twoOpenCode, nil, toolMeta("queue_list", map[string]any{"mine": true}, sessionMeta(meta)), "--mine needs a session", "", nil, nil, ""},
+		{"10 ambiguous environment", nil, map[string]string{"CODEX_THREAD_ID": "parent", "CLAUDE_CODE_SESSION_ID": "mine"}, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), "", "submit", identity("opencode", meta), nil, ""},
+		{"11 no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"no_notify": true}), sessionMeta(meta)), "", "submit", map[string]any{"client_type": "opencode", "session_id": meta, "no_notify": true}, nil, ""},
+		{"12 _meta with other keys only", nil, nil, toolMeta("queue_submit", submitArgs(), map[string]any{"progressToken": "p", "ai.opencode/other": "x"}), noIdentity, "", nil, nil, ""},
+		{"13 client cli", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "cli"}), sessionMeta(meta)), noIdentity, "", nil, nil, ""},
+		{"13 client cli with no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "cli", "no_notify": true}), sessionMeta(meta)), "", "submit", map[string]any{"client_type": "cli", "session_id": "", "no_notify": true}, nil, ""},
+		{"14 queue_status", nil, nil, toolMeta("queue_status", map[string]any{"id": "i"}, sessionMeta(meta)), "", "status", map[string]any{"id": "i"}, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agents := tc.agents
@@ -260,6 +266,15 @@ func TestMCPMetaSession(t *testing.T) {
 			if tc.refusal != "" {
 				if called || r["isError"] != true || !strings.Contains(r["content"].([]any)[0].(map[string]any)["text"].(string), tc.refusal) {
 					t.Fatal(called, r)
+				}
+				text := r["content"].([]any)[0].(map[string]any)["text"].(string)
+				for _, s := range tc.also {
+					if !strings.Contains(text, s) {
+						t.Errorf("the error does not say %q: %s", s, text)
+					}
+				}
+				if tc.never != "" && strings.Contains(text, tc.never) {
+					t.Errorf("the error says %q: %s", tc.never, text)
 				}
 				return
 			}
