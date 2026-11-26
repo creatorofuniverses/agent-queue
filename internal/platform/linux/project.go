@@ -13,18 +13,23 @@ import (
 
 // ProjectRoot is the project a working directory belongs to, by the same rule
 // as the profiles but without running git: walk up to the nearest .git. A .git
-// directory makes its parent the root. A .git file ("gitdir: X", a worktree)
-// is followed through X/commondir to the main repository, so every worktree
-// of a repository is one project; without such a link the checkout itself is
-// the root. With no repository above dir, dir is returned.
+// directory makes its parent the root, unless it is empty: git finds no
+// repository there either, as it needs a HEAD, and the Codex CLI sandbox
+// leaves an empty /tmp/.git behind when bwrap is killed. A .git file
+// ("gitdir: X", a worktree) is followed through X/commondir to the main
+// repository, so every worktree of a repository is one project; without such
+// a link the checkout itself is the root. With no repository above dir, dir is
+// returned.
 func ProjectRoot(dir string) string {
 	for d := dir; ; d = filepath.Dir(d) {
 		g := filepath.Join(d, ".git")
 		if fi, err := os.Stat(g); err == nil {
-			if fi.IsDir() {
+			if !fi.IsDir() {
+				return worktreeRoot(d, g)
+			}
+			if entries, err := os.ReadDir(g); err != nil || len(entries) > 0 {
 				return d
 			}
-			return worktreeRoot(d, g)
 		}
 		if parent := filepath.Dir(d); parent == d {
 			return dir

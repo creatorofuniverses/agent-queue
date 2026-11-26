@@ -277,9 +277,8 @@ func TestUsageProcIO(t *testing.T) {
 	manager := "user.slice/user-1000.slice/user@1000.service"
 	usageFile(t, root, "proc/self/cgroup", "0::/"+manager+"/app.slice/aq.service\n")
 	repo := filepath.Join(root, "r")
-	if e := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); e != nil {
-		t.Fatal(e)
-	}
+	// A repository: .git has a HEAD, an empty one would be no project root.
+	usageFile(t, root, "r/.git/HEAD", "ref: refs/heads/main\n")
 	session := "user.slice/user-1000.slice/session-3.scope"
 	proc := func(pid, ppid int, comm, cg string, io string) {
 		base := fmt.Sprintf("proc/%d/", pid)

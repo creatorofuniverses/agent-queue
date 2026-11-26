@@ -24,7 +24,8 @@ func TestProjectRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mk("r/.git")
+	// A repository has a HEAD in .git.
+	write("r/.git/HEAD", "ref: refs/heads/main\n")
 	deep := mk("r/a/b")
 	if got, want := ProjectRoot(deep), filepath.Join(root, "r"); got != want {
 		t.Errorf("repo: %q, want %q", got, want)
@@ -46,5 +47,17 @@ func TestProjectRoot(t *testing.T) {
 	plain := mk("plain/dir")
 	if got := ProjectRoot(plain); got != plain {
 		t.Errorf("plain: %q, want %q", got, plain)
+	}
+	// An empty .git is no repository: git finds none there either, and the
+	// Codex CLI sandbox leaves one behind under /tmp when bwrap is killed.
+	mk("e/.git")
+	if got, want := ProjectRoot(mk("e/a")), filepath.Join(root, "e/a"); got != want {
+		t.Errorf("empty .git: %q, want %q", got, want)
+	}
+	// The walk goes on past it to a repository above.
+	write("p/.git/HEAD", "ref: refs/heads/main\n")
+	mk("p/e/.git")
+	if got, want := ProjectRoot(mk("p/e/x")), filepath.Join(root, "p"); got != want {
+		t.Errorf("empty .git below a repository: %q, want %q", got, want)
 	}
 }
