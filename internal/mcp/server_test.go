@@ -215,6 +215,8 @@ func TestMCPMetaSession(t *testing.T) {
 		{"2 client of the OPENCODE_SESSION_ID adapter without a session", nil, openCodeInEnv, toolMeta("queue_submit", with(map[string]any{"client": "opencode"}), sessionMeta(meta)), "", "submit", identity("opencode", meta)},
 		{"3 session without a client", nil, nil, toolMeta("queue_submit", with(map[string]any{"session_id": "S"}), sessionMeta(meta)), "", "submit", identity("opencode", "S")},
 		{"4 another adapter without a session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude"}), sessionMeta(meta)), noIdentity, "", nil},
+		{"4 another adapter without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "claude", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil},
+		{"4 another adapter codex without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "codex", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil},
 		{"4 another adapter with an explicit session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude", "session_id": "c"}), sessionMeta(meta)), "", "submit", identity("claude", "c")},
 		{"4 another adapter with an explicit Codex sub-agent session", nil, map[string]string{"CODEX_HOME": home}, toolMeta("queue_submit", with(map[string]any{"client": "codex", "session_id": "sub"}), sessionMeta(meta)), "", "submit", identity("codex", "root")},
 		{"4 a client no adapter has", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "kimi", "session_id": "k"}), sessionMeta(meta)), "unknown client", "", nil},

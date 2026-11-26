@@ -253,6 +253,9 @@ func toolIdentity(parent client.Parent, agents []config.AgentConfig, env func(st
 	// so only an explicit session_id stands.
 	for _, a := range agents {
 		if a.Name == flagClient {
+			if flagSession == "" {
+				return client.Identity{}, errors.New(identityUnknown) // before the gate, which no_notify skips
+			}
 			// As aq recorded that id: a Codex sub-agent's thread is filed under its root.
 			return client.Identity{ClientType: a.Name, SessionID: client.ListSession(agents, env, flagSession)}, nil
 		}
