@@ -26,6 +26,7 @@ func TestE2EHarnessScrubsIdentity(t *testing.T) {
 	t.Setenv("CODEX_THREAD_ID", "x")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "y")
 	t.Setenv("FAKE_SESSION", "z")
+	t.Setenv("OPENCODE_SESSION_ID", "w")
 	h := newHarness(t, "")
 	id := h.submit(mem("64M"), "true")
 	v := h.status(id)
@@ -33,7 +34,7 @@ func TestE2EHarnessScrubsIdentity(t *testing.T) {
 		t.Fatal(v)
 	}
 	for _, kv := range h.env {
-		if strings.HasPrefix(kv, "CODEX_THREAD_ID=") || strings.HasPrefix(kv, "CLAUDE_CODE_SESSION_ID=") || strings.HasPrefix(kv, "FAKE_SESSION=") {
+		if strings.HasPrefix(kv, "CODEX_THREAD_ID=") || strings.HasPrefix(kv, "CLAUDE_CODE_SESSION_ID=") || strings.HasPrefix(kv, "FAKE_SESSION=") || strings.HasPrefix(kv, "OPENCODE_SESSION_ID=") {
 			t.Fatal("identity leaked to base environment")
 		}
 	}

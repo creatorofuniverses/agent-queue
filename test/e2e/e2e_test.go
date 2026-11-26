@@ -109,7 +109,7 @@ func newHarness(t *testing.T, extra string) *harness {
 		os.RemoveAll(dir)
 		t.Fatal(err)
 	}
-	identities := map[string]bool{"CODEX_THREAD_ID": true, "CLAUDE_CODE_SESSION_ID": true}
+	identities := map[string]bool{"CODEX_THREAD_ID": true, "CLAUDE_CODE_SESSION_ID": true, "OPENCODE_SESSION_ID": true}
 	for _, a := range loaded.Agents {
 		identities[a.IdentityEnv] = true
 	}
