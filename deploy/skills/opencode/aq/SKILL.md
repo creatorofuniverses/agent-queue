@@ -1,0 +1,232 @@
+---
+name: aq
+description: Use before running heavy work on this host — full or parallel test suites (pytest -n, go test ./..., e2e), docker compose stands and testcontainers, big builds, an experimental stand you will keep up — to size it, queue it with a memory budget, and get woken when it ends instead of hanging the machine.
+---
+
+# Running heavy work through aq
+
+This host runs several agents at once. A heavy command started directly competes
+for memory with everyone else and can freeze the whole machine. `aq` queues it
+with a memory limit and starts it when the memory is really free. You lose a few
+seconds of queueing at worst; an OOM-frozen host loses everyone's work.
+
+## 1. Is it heavy?
+
+Run through aq anything likely to take **more than ~1 GiB or more than a few
+minutes**, or anything that starts containers:
+
+| Through aq | Directly |
+|---|---|
+| the full test suite, `pytest -n`, `go test ./...` of a big repo, e2e | one test file, a single focused test |
+| `docker compose up`, testcontainers, a stand for manual checks | `docker ps`, `docker logs`, compose `config` |
+| big builds: webpack/vite production, cargo/go of large trees, image builds | lint, format, `git`, small scripts |
+
+OpenCode has no hook that hints "aq: this command looks heavy": judge each
+command by the table above, through aq or directly.
+
+## 2. Size it before you run it
+
+1. **Known workload?** Give repeated work a stable `--name` (`tests`, `e2e`,
+   `build`). Check history: `aq profile show tests`. With usable history you may
+   omit `--memory`; aq takes the limit from past peaks.
+
+   **Name the workload, not the run.** History accumulates per name, so the
+   same suite must get the same name every time: `tests`, `e2e`, `build-web`.
+   Keep out of it whatever changes between runs: the version or release
+   (`tests-b15`), date, commit hash, branch, ticket, plan task or wave number.
+   That context goes in your receipt (step 4), not in the name. Use a different
+   name only when the memory shape differs: another suite, another worker count
+   (`tests-serial` vs `tests`), another stand. A version belongs in the name
+   only when the versions are separate workloads you keep running side by side,
+   e.g. a matrix `tests-pg15` / `tests-pg16`. Do not pass `--project` with a
+   worktree path: without it, all worktrees of a repository share one history.
+   If submit warns `hint: no history for name …; names with history: …` and
+   one of those is the same workload, use that name from the next run on.
+2. **New workload?** Pick `--memory` from what you know: about 300–800M per
+   pytest worker, the sum of `docker stats` for a stand, 2× the last observed
+   peak if you have one. Too low → OOM (exit 2) and you rerun with more; too high
+   → you wait longer. Never blindly retry an OOM with the same limit — except
+   `OOM_HOST_GUARD`: the host ran short, usually from outside aq, so rerun the
+   same once memory is back (`aq stats` names who held it).
+   `--memory` is the kill limit; the pool is charged `--expected` (default: the
+   limit). When you know the usual peak is well below the limit, pass it as
+   `--expected`: the task starts sooner and the limit still catches a spike.
+   `$TMPDIR` of a task is in RAM (tmpfs) and counts against `--memory`: add what
+   the task writes there (pytest `tmp_path`, unpacked wheels, build output). Do
+   not point `TMPDIR` or pytest `--basetemp` at a disk directory to "save" memory:
+   that wears the SSD; raise `--memory` instead, and tell the user if temp files
+   are huge.
+3. **Timeout:** about 2× the expected duration. It is a kill switch, not a
+   forecast.
+4. **Will it start soon?** `aq estimate --name tests --cpus 4 --timeout 30m`
+   (or `--memory 6G`). If the queue is long, do other work first, or ask the
+   user whether to wait. `aq top` shows who uses host memory right now and any
+   active alerts. `aq top --sessions` shows each session's memory, swap and idle time;
+   its `opencode` rows come without a session id and without an idle time.
+   If process sampling fails, the text view prints the error and exits with code 69.
+   `aq tmp [--all] [--json] [--rescan]` shows the 30 largest /tmp entries and
+   totals by state. Use `--all` for every entry or `--json` for the full report,
+   including scan-root filesystem usage in `fs`.
+   `--rescan` joins a running scan before checking the one-minute report cache.
+   The report states are `aq_task`, `in_use`, `live`, `candidate`, `orphan` and `recent`.
+   An unreadable or unsearchable `claude-<uid>` appears as one partial `in_use` entry.
+
+## 3. Pick the shape
+
+**One command** (tests, a build): `aq submit`.
+
+```sh
+aq submit --name tests --memory 4G --cpus 4 --timeout 30m -- \
+  bash -lc 'pytest -n "$AQ_CPUS" tests'
+```
+
+Pass argv after `--`; quote a shell (`bash -lc '…'`) when you need `$AQ_CPUS`,
+pipes or `&&`. The task runs in the submit cwd. `--cpus` (default 1) is a real
+CPU quota: size workers with `"$AQ_CPUS"`, never a fixed `-n 8` over fewer
+`--cpus` (submit warns with `hint: the command starts N workers …`). If it cannot start at once,
+`submit` (and `reserve`, `wait`) prints `queued: position N, blocked by …` on
+stderr. A request that waits on `live_memory` or `pool_memory` with numbers far
+above what the work needs starts sooner when you declare less; `queue` means it
+waits its turn behind the head.
+
+**Tests that need containers or a stand** (testcontainers, compose, e2e): the
+containers live outside the task's cgroup, so reserve the stand memory *and* a
+budget for the tests, then run the tests inside the reservation:
+
+```sh
+aq reserve --name e2e-stand --memory 3G --task-memory 4G --task-cpus 4 --ttl 1h \
+  --docker-project myapp-e2e --teardown /abs/path/stand-down.sh
+# aq wait RES_ID in background → GRANTED; only then bring the stand up
+docker compose -p myapp-e2e up -d
+aq submit --within RES_ID --name e2e --memory 4G --cpus 4 --timeout 30m -- \
+  bash -lc 'pytest -n "$AQ_CPUS" tests/e2e'
+```
+
+**Containers the tests start themselves** (testcontainers): a nested task gets
+`AQ_DOCKER_PROJECT` (and `AQ_RESERVATION_ID`). Label every container it starts
+`com.docker.compose.project=$AQ_DOCKER_PROJECT` (testcontainers: the container
+request's labels) so aq counts them in the stand; an unlabeled container is
+memory nobody accounts for. If you cannot label them, size `--memory` of the
+reservation for them anyway and do not pass `--docker-project`.
+
+**`docker build`:** the build runs in dockerd/buildkit, not in your task, so a
+task's peak shows next to nothing. Reserve its memory as a stand without
+`--docker-project` (`aq reserve --name image-build --memory 4G --task-memory
+256M --task-cpus 1 …`) and run `docker build` with `aq submit --within RES_ID`.
+
+**An experimental stand you keep up** (manual checks, a demo, a long debugging
+session, an app the user clicks through for hours): `aq reserve` with a
+realistic `--ttl`, no task budget unless you will run tests in it. Expiry runs
+the teardown script, which stops the stand: `aq extend RES_ID --ttl 1h` while
+you still need it (no restart); `aq release RES_ID` after you shut it down.
+
+The teardown script must be idempotent and self-contained (it may run after the
+worktree is gone): embed the compose definition instead of relying on cwd. Use
+`--docker-project` so aq measures the stand and frees the unused part of it.
+
+**MCP:** the tools of the `aq` server arrive as `aq_queue_submit` … (with the
+server registered as `"codemode": false`) or, in Code Mode (the default), as
+`tools.aq.queue_submit(…)` through `execute`. aq fills in the identity from the
+call's context: pass neither `client` nor `session_id`. If a tool still answers
+`session identity unknown`: `queue_submit` and `queue_reserve` take `client`
+with the name of the OpenCode adapter from the config (`opencode` by default)
+and `session_id` from your tool shell's `$OPENCODE_SESSION_ID`; `queue_list` has
+no `client` argument, pass `session_id` alone (with `mine` and no session aq
+answers "needs a session"). MCP cannot wake you: still start `aq wait ID` in
+the background.
+
+## 4. Get woken, do not poll
+
+After `submit`/`reserve`, start `aq wait ID` with the `shell` tool and
+**`background: true`** (not `run_in_background`: OpenCode has no such
+parameter). Its completion wakes this session. Write a receipt into your notes
+or todo: item ID, what it runs, why, and what to do with the result. Continue
+independent work; if nothing else is left, end the turn — do not sleep or poll
+`aq status`. A subagent's tasks are filed under the subagent's own session: the
+parent's `aq list --mine` does not show them.
+
+For reservations also start `aq wait RES_ID --until expiring` in background. It
+returns before the TTL runs out (extend or release then) or early with a
+`stand_over_declared` or `reservation_idle` warning: handle it (for idle: release
+the reservation unless you will use it soon, and reserve again for the next
+batch), `aq ack EVENT_ID`, and **start the expiry waiter again**. After every
+`aq extend`, start it again too.
+
+## 5. Read the result
+
+`aq wait` prints one line and exits with the outcome:
+0 ok / granted / expiry warning · 1 the command failed · 2 OOM · 3 timeout ·
+4 cancelled · 5 infrastructure or rejected · 6 reservation no longer held ·
+64 usage · 69 daemon down · 130 interrupted.
+
+Then `aq result ID` (a failed task ends with `stderr tail:`, which `aq wait`
+also prints) and, if that is not enough, `aq logs ID --tail 100` (`--stream
+stderr` for errors).
+On exit 2 resubmit with a higher `--memory` (say 1.5×) and tell the user; on 3
+check whether it hung before raising `--timeout`; on 5 read the diagnostic
+(rejected: the request can never fit the pool). Ack the item's event with
+`aq ack EVENT_ID` once the outcome is recorded.
+
+If the line ends with `memory: peak … (underestimated|overestimated: …)`, your
+estimate missed the real peak. Fix it with `--expected` (what the pool is
+charged) near that peak; keep `--memory` as the kill limit with headroom, since
+one run's peak is no safe limit for the next. `aq release` reports the same for
+the stand against `--memory` (with `--docker-project`) and for the most your
+nested tasks used at once against `--task-memory`, with the amount to declare
+next time: an overestimated reservation holds memory other agents wait for. Keep
+the reservation's `--name` stable: aq then charges it what earlier reservations
+of that name used (never more than declared), as it does for tasks. On
+`stand_over_declared`, declare more next time.
+
+`aq result` also shows `disk:` (bytes written to physical disks) when the host
+records it. Gigabytes per run for a test suite wears the SSD and slows everyone:
+tell the user and look for the cause (a test database without `fsync=off`, an
+uncached dependency install, a fresh build directory every run). `aq stats` prints a
+one-screen overview with a "Worth a look" list; `aq stats disk` names who wrote
+to the disk (aq tasks, docker projects, system units, agent sessions; "≈ claude
+~/proj" is an estimate, not part of the sum), and `aq stats AREA --all` shows an
+area in full. The host sends a disk-write alarm to the user on heavy writing;
+if you caused it, stop that work.
+
+## 6. Clean up before you finish
+
+`aq list --mine` shows your items and unacknowledged events. Shut your stands
+down and `aq release` their reservations; cancel queued work you no longer need
+(`aq cancel ID`). An abandoned reservation holds memory from everyone until its
+TTL runs out.
+
+## Recipes
+
+- **End of a branch: full verification.** Run the full suite (and e2e) as named
+  aq tasks, in background, then do the review or write-up while it runs. With
+  history, `aq submit --name tests --timeout 40m -- …` needs no `--memory`.
+- **Several suites.** Submit them as separate named tasks; aq starts each when
+  it fits and may backfill short ones ahead of a big one.
+- **Repeat after a fix, or on the next release.** Use the same `--name` so the
+  profile keeps learning.
+- **Retrying a submit after an error.** Add `--key some-stable-key`: the same
+  request returns the same task instead of a duplicate.
+
+## When aq itself is in the way
+
+- A daemon restart does not lose your wait: `aq wait` prints
+  `aq: lost the daemon (restart?); reconnecting` and keeps waiting for up to
+  10 minutes. Do not resubmit the work.
+- `aq: daemon is not running` (69) after that: tell the user; do not silently run the heavy
+  command directly.
+- OpenCode may ask before it runs an `aq` command: the prompt comes from the
+  session's permission rules, not from aq. Answer it, or ask the user to; do
+  not work around it.
+- `session identity unknown` / exit 64 about clients: aq detects the session
+  from the agent it was started from (the variable the agent gives its tool
+  shells, else the agent's own session file). When it still cannot tell,
+  `aq submit` and `aq reserve` take `--client NAME` with the name of the
+  OpenCode adapter from the config (`opencode` by default) and `--session
+  "$OPENCODE_SESSION_ID"`; `aq list` has no `--client` flag:
+  `aq list --session "$OPENCODE_SESSION_ID"`.
+- MCP tools (`queue_submit`, `queue_estimate`, …) do the same as the CLI, but
+  cannot wake you: still run `aq wait ID` in background.
+
+Details (sizes, TTL rules, MCP fields, events, operator recovery, profiles,
+stats): [the reference](references/aq-reference.md). `aq help CMD` lists every
+flag with examples.

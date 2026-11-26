@@ -41,6 +41,9 @@ Claude Code passes CLAUDE_CODE_SESSION_ID to `aq mcp` itself.
 `--no-notify` suppresses session events, while operator alerts remain enabled.
 Codex MCP 0.164 does not propagate session identity by default: pass `client` and
 `session_id` from the invoking session, or intentionally set `no_notify`.
+OpenCode exports `OPENCODE_SESSION_ID` to its tool shells (a subagent's shell
+gets the subagent's own id); in MCP the session arrives in the call's metadata
+(`_meta`) when the arguments do not name it.
 MCP `cwd` and `teardown_file` must be absolute; it captures the MCP process's
 environment, not a fresh shell's. `queue_logs` allows 1..2000 tail lines (default
 200), without follow, and at most 256 KiB of the newest output. MCP has eleven queue tools, including `queue_estimate`.
