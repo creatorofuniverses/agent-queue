@@ -909,9 +909,9 @@ OpenCode the nearest agent is its shared background service (`opencode-pty` in
 between is not an agent). While the config holds both the `opencode` process
 name and the `opencode` adapter (the defaults), a command with the variable
 belongs to its OpenCode session and a command without it to `cli`, never to
-another agent's session; with only one of the two entries OpenCode commands
-are not recognized, see [Installation](#installation). If aq still cannot
-tell, `--client opencode --session "$OPENCODE_SESSION_ID"` sets the session;
+another agent's session; with only one of the two entries this does not
+hold, see [Installation](#installation). If aq still cannot tell,
+`--client opencode --session "$OPENCODE_SESSION_ID"` sets the session;
 in MCP OpenCode names the calling session in the request itself, see
 [MCP](#mcp).
 
