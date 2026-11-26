@@ -34,7 +34,7 @@ func cmdSubmit(c *cmdCtx, args []string) error {
 	profile := fs.String("profile", "", "explicit profile `KEY` instead of <repo root>:<name>")
 	name := fs.String("name", "", "task `NAME`; also selects the memory/duration profile")
 	key := fs.String("key", "", "idempotency `KEY`: resubmitting with it returns the same task")
-	flagClient := fs.String("client", "", "agent adapter `NAME` (claude, codex) or cli")
+	flagClient := fs.String("client", "", "agent adapter `NAME` (claude, codex, opencode) or cli")
 	noNotify := fs.Bool("no-notify", false, "disable session notifications")
 	session := fs.String("session", "", "agent session `ID` to notify (default: detected)")
 	project := fs.String("project", "", "project `DIR` (default: git root of cwd)")

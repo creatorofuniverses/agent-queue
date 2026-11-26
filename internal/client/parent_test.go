@@ -110,6 +110,12 @@ func claudeSession(pid int) []sessionFile {
 // fakeParent is the lookup over a fake tree, with the session files of a fake home.
 func fakeParent(t *testing.T, tree map[int]fakeProc, files []sessionFile) Parent {
 	t.Helper()
+	return fakeParentNames(t, tree, files, []string{"claude", "openclaude", "codex"})
+}
+
+// fakeParentNames is fakeParent with the agent process names the walk looks for.
+func fakeParentNames(t *testing.T, tree map[int]fakeProc, files []sessionFile, names []string) Parent {
+	t.Helper()
 	home := t.TempDir()
 	for _, f := range files {
 		mustWrite(t, filepath.Join(home, "."+f.client, "sessions", strconv.Itoa(f.pid)+".json"), f.body)
@@ -118,7 +124,7 @@ func fakeParent(t *testing.T, tree map[int]fakeProc, files []sessionFile) Parent
 	return Parent{
 		ProcRoot: proc,
 		Self:     selfPID,
-		Names:    []string{"claude", "openclaude", "codex"},
+		Names:    names,
 		Sessions: agentsess.Reader{Sources: agentsess.Sources(home), ProcRoot: proc},
 	}
 }
@@ -177,6 +183,58 @@ func TestDetectIdentityUnderAgent(t *testing.T) {
 				agents = config.Default().Agents
 			}
 			got, err := DetectIdentity(fakeParent(t, tc.tree, tc.files), agents, envOf(tc.env), "", "")
+			if tc.ambiguous {
+				var ue *UsageError
+				if !errors.Is(err, ErrAmbiguousIdentity) || !errors.As(err, &ue) {
+					t.Fatalf("DetectIdentity() = %v, %v; want exit 64 on several own variables", got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("DetectIdentity() = %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// OpenCode gives every tool shell OPENCODE_SESSION_ID. The service the shell is started from
+// holds no identity variable in its start environment and writes no session file. The rule of
+// the test above resolves the shell's commands through the service process: opencode-pty is
+// skipped, and only a variable that is the agent's own gives the session. A variable the
+// service, or another agent, was started with is not its own.
+func TestDetectIdentityUnderOpenCode(t *testing.T) {
+	names := []string{"claude", "openclaude", "codex", "opencode"}
+	ocVar := map[string]string{"OPENCODE_SESSION_ID": "s"}
+	codexAndOC := map[string]string{"CODEX_THREAD_ID": "t", "OPENCODE_SESSION_ID": "s"}
+	claudeAndOC := map[string]string{"CLAUDE_CODE_SESSION_ID": "c", "OPENCODE_SESSION_ID": "s"}
+	pty := fakeProc{name: "opencode-pty", environ: noVars}
+	toolShell := chain(pty, fakeProc{name: "opencode", environ: noVars})
+	serviceFromCodex := chain(pty, fakeProc{name: "opencode", environ: map[string]string{"CODEX_THREAD_ID": "t"}})
+	lonePty := chain(pty)
+	for _, tc := range []struct {
+		name      string
+		tree      map[int]fakeProc
+		env       map[string]string
+		files     []sessionFile
+		off       bool // AQ_NO_PARENT_SESSION
+		want      Identity
+		ambiguous bool // several of aq's own variables: exit 64
+	}{
+		{"a tool shell: its variable is the service's own", toolShell, ocVar, nil, false, Identity{"opencode", "s"}, false},
+		{"a tool shell without the variable: no file, cli", toolShell, nil, nil, false, Identity{"cli", ""}, false},
+		{"a service started from a Codex shell: the inherited variable is not the agent's own", serviceFromCodex, codexAndOC, nil, false, Identity{"opencode", "s"}, false},
+		{"the own variable wins over a session file on the service's pid", toolShell, ocVar, ocSession(nearest + 1), false, Identity{"opencode", "s"}, false},
+		{"AQ_NO_PARENT_SESSION keeps the environment rules", toolShell, ocVar, nil, true, Identity{"opencode", "s"}, false},
+		{"codex started from a tool shell: its variable is its own, the inherited one is not", chain(fakeProc{name: "codex", environ: ocVar}), codexAndOC, nil, false, Identity{"codex", "t"}, false},
+		{"claude started from a tool shell: its variable is its own, the inherited one is not", chain(fakeProc{name: "claude", environ: ocVar}), claudeAndOC, nil, false, Identity{"claude", "c"}, false},
+		{"opencode-pty without the service above is no agent: the environment rules hold", lonePty, ocVar, nil, false, Identity{"opencode", "s"}, false},
+		{"opencode-pty without the service above is no agent: the ambiguity stays", lonePty, codexAndOC, nil, false, Identity{}, true},
+		{"an unreadable environment of the service: no variable is trusted", chain(fakeProc{name: "opencode"}), ocVar, nil, false, Identity{"cli", ""}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := fakeParentNames(t, tc.tree, tc.files, names)
+			parent.Off = tc.off
+			got, err := DetectIdentity(parent, config.Default().Agents, envOf(tc.env), "", "")
 			if tc.ambiguous {
 				var ue *UsageError
 				if !errors.Is(err, ErrAmbiguousIdentity) || !errors.As(err, &ue) {

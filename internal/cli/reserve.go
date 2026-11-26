@@ -24,7 +24,7 @@ func cmdReserve(c *cmdCtx, args []string) error {
 	priority := fs.String("priority", "normal", "`P`riority: low, normal or high")
 	name := fs.String("name", "", "reservation `NAME`")
 	key := fs.String("key", "", "idempotency `KEY`")
-	flagClient := fs.String("client", "", "agent adapter `NAME` (claude, codex) or cli")
+	flagClient := fs.String("client", "", "agent adapter `NAME` (claude, codex, opencode) or cli")
 	noNotify := fs.Bool("no-notify", false, "disable session notifications")
 	session := fs.String("session", "", "agent session `ID` to notify (default: detected)")
 	project := fs.String("project", "", "project `DIR` (default: git root of cwd)")

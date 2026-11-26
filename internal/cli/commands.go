@@ -315,7 +315,7 @@ func cmdList(c *cmdCtx, args []string) error {
 			return err
 		}
 		if id.SessionID == "" {
-			return usagef("list: --mine needs a session (CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID or --session)")
+			return usagef("list: --mine needs a session (CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, OPENCODE_SESSION_ID or --session)")
 		}
 		*session = id.SessionID
 	} else {
