@@ -42,17 +42,27 @@ just install
 - кладёт бинарник в `~/.local/bin/aq`;
 - кладёт `aq.service` и `aq.slice` в `~/.config/systemd/user/`;
 - копирует `deploy/config.example.toml` в `~/.config/agent-queue/config.toml`,
-  только если конфига ещё нет (существующий не трогается);
-- если в существующем конфиге `agent_processes` задан без `openclaude`, печатает
-  подсказку: пока его нет в списке, сессии OpenClaude не считаются, а его команды
-  принадлежат `cli` или сессии агента, из которого он запущен;
+  только если конфига ещё нет (существующий не правится; для подсказок ниже
+  закомментированная запись считается отсутствующей);
+- для каждого имени, которого нет в заданном `agent_processes`, печатает
+  подсказку. Без `openclaude` сессии OpenClaude не считаются, а его команды
+  принадлежат `cli` или сессии агента, из которого он запущен; без `opencode`
+  процессы OpenCode не считаются, а его команды опознаются только по окружению:
+  унаследованная переменная другого агента может отнести их к сессии этого
+  агента;
+- печатает подсказку, если существующий конфиг задаёт свои `[[agents]]` без
+  адаптера для OpenCode: пока его нет (`identity_env = "OPENCODE_SESSION_ID"`,
+  `delivery = "client-wait"`), команды OpenCode принадлежат `cli` (если имя
+  `opencode` есть в списке; без него решает окружение, как выше), а его заявки
+  через MCP отклоняются с «session identity unknown»;
 - выполняет `systemctl --user daemon-reload`, включает `aq.service` и
   (пере)запускает его — повторный `just install` обновляет работающий демон;
 - копирует скилл `aq` каждому агенту свой: `deploy/skills/claude/aq` в
   `~/.claude/skills/aq` и, для OpenClaude, в `~/.openclaude/skills/aq`,
-  `deploy/skills/codex/aq` в `~/.codex/skills/aq` (пути меняются через
-  `CLAUDE_SKILLS`/`CODEX_SKILLS`/`OPENCLAUDE_SKILLS`, пустое значение — не
-  ставить); хуки подключаются отдельно;
+  `deploy/skills/codex/aq` в `~/.codex/skills/aq`, `deploy/skills/opencode/aq`
+  в `~/.config/opencode/skills/aq` (пути меняются через
+  `CLAUDE_SKILLS`/`CODEX_SKILLS`/`OPENCLAUDE_SKILLS`/`OPENCODE_SKILLS`, пустое
+  значение — не ставить); хуки подключаются отдельно, у OpenCode хука нет;
 - если linger выключен, печатает подсказку: без `loginctl enable-linger $USER`
   демон и все задачи останавливаются при выходе из последней сессии.
 
@@ -61,9 +71,9 @@ just install
 не запустится (`CONFIG_INVALID`).
 
 Каталоги переопределяются переменными окружения: `BINDIR`, `UNITDIR`, `CONFDIR`,
-`STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, `OPENCLAUDE_SKILLS`, а `SYSTEMCTL`
-(по умолчанию `systemctl --user`) — например, `SYSTEMCTL=true just install`
-только раскладывает файлы.
+`STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, `OPENCLAUDE_SKILLS`,
+`OPENCODE_SKILLS`, а `SYSTEMCTL` (по умолчанию `systemctl --user`) — например,
+`SYSTEMCTL=true just install` только раскладывает файлы.
 
 Если установленный `aq` отвечает и в очереди есть задачи или резервы, `install`,
 `uninstall` и `purge` сначала их показывают. Перезапуск для них безопасен: задачи
@@ -598,7 +608,7 @@ samples_max_age = "30d"
 samples_full_res = "2d"
 [stats]
 sample_interval = "30s"
-agent_processes = ["claude", "openclaude", "codex"]
+agent_processes = ["claude", "openclaude", "codex", "opencode"]
 ```
 
 Длительности конфига поддерживают дни: `7d`, `1d12h`. История берёт 1–100
@@ -606,12 +616,22 @@ agent_processes = ["claude", "openclaude", "codex"]
 `samples_full_res < samples_max_age`, общий предел логов не меньше 256 MiB,
 интервал хоста — от 5 с до 5 мин; имена процессов непусты и без `/`. Это имена
 процессов, которые aq считает агентами при замере памяти, в `aq top --sessions`
-и при поиске агента-предка команды (`openclaude` — OpenClaude). OpenClaude даёт
-процессу это имя через заголовок терминала; с заданной
-`CLAUDE_CODE_DISABLE_TERMINAL_TITLE` процесс остаётся `node`, и aq не считает
-его агентом. `openclaude` есть в списке по умолчанию; конфиг, написанный ранней
-версией, сохраняет свой список — добавьте `openclaude` туда: пока его нет,
-установщик печатает подсказку.
+и при поиске агента-предка команды (`openclaude` — OpenClaude, `opencode` —
+OpenCode). OpenClaude даёт процессу это имя через заголовок терминала; с
+заданной `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` процесс остаётся `node`, и aq не
+считает его агентом. В OpenCode V2 один общий фоновый сервис исполняет
+инструменты всех сессий, а каждое терминальное приложение — отдельный процесс.
+В `aq top --sessions` сервис — одна строка (его собственная память плюс всё,
+что он запустил), каждое терминальное приложение, запущенное не из другого
+агента, — своя строка; в этих строках только PID, без id сессии, статуса и
+простоя: OpenCode не пишет файл сессии. `opencode-pty` агентом не считается
+(совпадение точное) и считается запущенным сервисом, пока он его ребёнок.
+Память этих строк учитывается в `[sessions] alert_memory`; `sessions_idle` их
+не видит — их простой неизвестен. `opencode` — это имя нативного бинарника:
+OpenCode, запущенный через JS-рантайм под другим именем, не считается, пока это
+имя не добавлено сюда. Оба имени, `openclaude` и `opencode`, есть в списке по
+умолчанию; конфиг, написанный ранней версией, сохраняет свой список —
+добавьте их туда: пока какого-то нет, установщик печатает подсказку.
 
 ## Диагностика: `aq doctor`
 
@@ -865,23 +885,36 @@ aq release --force "$id"   # стенд убран вручную: освобо�
 ## Уведомления
 
 Клиент обнаруживает сессию по процессу агента, из которого запущен aq (процесс с
-именем из `stats.agent_processes`: Codex, Claude Code, OpenClaude). Сначала
-берётся своя переменная идентичности — которой у агента при запуске не было или
-которая отличается от полученной им (Codex `CODEX_THREAD_ID`, Claude
-`CLAUDE_CODE_SESSION_ID`), — затем подтверждённый файл сессии этого процесса
+именем из `stats.agent_processes`: Codex, Claude Code, OpenClaude, OpenCode).
+Сначала берётся своя переменная идентичности — которой у агента при запуске не
+было или которая отличается от полученной им (Codex `CODEX_THREAD_ID`, Claude
+`CLAUDE_CODE_SESSION_ID`, OpenCode `OPENCODE_SESSION_ID`), — затем
+подтверждённый файл сессии этого процесса
 (`~/.claude/sessions/<pid>.json`, `~/.openclaude/sessions/<pid>.json`); так
-распознаётся OpenClaude: переменной он не экспортирует. Файл ищется под `HOME`
-команды, а если его нет или он другой — под домашним каталогом, с которым
-запускался сам агент: команда с `env -i` его тоже находит. Если среди предков
-нет агента (обычный шелл, tmux, systemd unit), решают переменные настроенных
-адаптеров, как раньше, и несколько непустых неоднозначны: submit/reserve
-завершаются с кодом 64, MCP требует явные `client` и `session_id`.
-`AQ_NO_PARENT_SESSION=1` выключает поиск по предкам. `--client NAME --session S`
-задают их явно и выключают поиск; `--no-notify` у submit/reserve
-отключает только уведомления сессии. Без обнаруженной сессии CLI работает как
-`cli`. Указанный push-адаптер без сессии — ошибка; отсутствующая в PATH демона
-команда доставки отклоняет заявку до сохранения. PATH сервиса включает
-`%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
+распознаётся OpenClaude: переменной он не экспортирует; у OpenCode файла
+сессии нет. Файл ищется под `HOME` команды, а если его нет или он другой — под
+домашним каталогом, с которым запускался сам агент: команда с `env -i` его тоже
+находит. Если среди предков нет агента (обычный шелл, tmux, systemd unit),
+решают переменные настроенных адаптеров, как раньше, и несколько непустых
+неоднозначны: submit/reserve завершаются с кодом 64, MCP требует явные `client`
+и `session_id`. `AQ_NO_PARENT_SESSION=1` выключает поиск по предкам.
+`--client NAME --session S` задают их явно и выключают поиск; `--no-notify` у
+submit/reserve отключает только уведомления сессии. Без обнаруженной сессии CLI
+работает как `cli`. Указанный push-адаптер без сессии — ошибка; отсутствующая в
+PATH демона команда доставки отклоняет заявку до сохранения. PATH сервиса
+включает `%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
+
+OpenCode задаёт `OPENCODE_SESSION_ID` каждому шеллу инструментов, а шеллу
+субагента — его собственный id: задачи субагента числятся за сессией субагента,
+и `aq list --mine` родителя их не показывает. Для команды из OpenCode ближайший
+агент — её общий фоновый сервис (`opencode-pty` между ними агентом не
+считается). Пока в конфиге есть и имя процесса `opencode`, и адаптер `opencode`
+(оба в умолчаниях), команда с переменной принадлежит своей сессии OpenCode, а
+без переменной — `cli`, но никогда — сессии другого агента; если есть только
+одна запись из двух, команды OpenCode не распознаются — см.
+[Установку](#установка). Если aq всё же не может определить сессию, задайте
+`--client opencode --session "$OPENCODE_SESSION_ID"`; в MCP OpenCode сам
+называет сессию вызова в запросе — см. [MCP](#mcp).
 
 У суб-агента Codex в режиме multi-agent v2 свой `CODEX_THREAD_ID`, но Codex
 не принимает `codex queue` в тред суб-агента. Если сессия (обнаруженная или
@@ -903,12 +936,17 @@ delivery = "push"
 command = ["pi", "send", "{session}", "{text}"]
 ```
 
-Если есть хотя бы один `[[agents]]`, список **заменяет** умолчания целиком.
+Если есть хотя бы один `[[agents]]`, список **заменяет** умолчания целиком:
+`codex` (push), `claude` и `opencode` (`client-wait`). Конфиг со своим списком
+нуждается и в записи для OpenCode (`identity_env = "OPENCODE_SESSION_ID"`,
+`delivery = "client-wait"`) — пока её нет, установщик печатает подсказку.
 Команда — argv без shell; также поддерживаются `{event_id}`, `{item_id}`,
 `{kind}`. `delivery = "client-wait"` требует пустую command.
 
 После submit/reserve Claude запускает `aq wait ID` с `run_in_background` и
-заканчивает ход; Codex получает пинг автоматически. `aq wait RES_ID --until
+заканчивает ход; OpenCode делает то же своим инструментом `shell`
+(`background: true`) и push-доставки не имеет; Codex получает пинг
+автоматически. `aq wait RES_ID --until
 expiring` ждёт предупреждения об истечении, о превышении заявки стенда или о
 простое резерва. Если он вернулся с `GRANTED`/`stand_over_declared`/
 `reservation_idle`, обработайте и подтвердите событие, затем запустите этот
@@ -991,7 +1029,11 @@ format = "gong"
 ```sh
 claude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
 openclaude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
+opencode mcp add aq --global -- /home/USER/.local/bin/aq mcp
 ```
+
+`opencode mcp add` записывает сервер в глобальный конфиг OpenCode, дополняя
+существующий `~/.config/opencode/opencode.jsonc` на месте.
 
 В конфиге Codex:
 
@@ -1010,11 +1052,34 @@ Codex 0.164 фильтрует окружение MCP: сессия автома
 ошибка, а не молчаливое отключение уведомлений. Если launcher передал правильную
 переменную сессии в MCP env явно, aq обнаружит её.
 
+OpenCode этого не нужно: он называет сессию вызова в метаданных запроса
+(`_meta["ai.opencode/sessionID"]`), и aq берёт её для `queue_submit`,
+`queue_reserve` и `queue_list` с `mine`, когда в конфиге ровно один адаптер с
+`identity_env = "OPENCODE_SESSION_ID"`. Порядок такой: явные аргументы, затем
+метаданные вызова, затем процесс. С годными метаданными aq на процесс вообще не
+смотрит: `client` с именем адаптера OpenCode берёт сессию из `session_id`, а
+если его нет — из вызова; `session_id` без `client` относится к OpenCode;
+`client` с другим адаптером (`codex`, `claude`) требует явный `session_id`,
+иначе ответ — «session identity unknown», что бы ни говорил `no_notify`:
+переменная этого адаптера в окружении `aq mcp` может быть унаследована сервисом
+OpenCode от внешнего агента. `client: "cli"` по-прежнему означает явное «без
+сессии»: без `no_notify: true` такой вызов отклоняется, как и раньше. Вызовы
+без метаданных работают как раньше, поэтому Claude Code и Codex не затронуты.
+
 Инструменты: queue_submit, queue_reserve, queue_extend, queue_release,
 queue_cancel, queue_status, queue_result, queue_list, queue_ack, queue_logs, queue_estimate.
-`cwd` и `teardown_file` абсолютные; queue_logs: tail 1..2000 (по умолчанию 200),
-без follow. MCP не будит простаивающую сессию: Claude всё ещё запускает
-`aq wait ID` фоном после постановки через MCP; Codex получает daemon push.
+В OpenCode они приходят как `tools.aq.queue_submit(…)` через `execute` в Code
+Mode (режим по умолчанию) или, при регистрации сервера с `"codemode": false`,
+как прямые инструменты `aq_queue_submit` …; не передавайте ни `client`, ни
+`session_id`. OpenCode может не прислать метаданные, а их ключ может измениться
+с обновлением: если вызов всё же получает «session identity unknown»,
+`queue_submit` и `queue_reserve` принимают `client` с именем адаптера OpenCode
+из конфига (`opencode` по умолчанию) и `session_id` из `$OPENCODE_SESSION_ID`
+шелла инструментов; у `queue_list` аргумента `client` нет — передайте один
+`session_id`. `cwd` и `teardown_file` абсолютные; queue_logs: tail 1..2000
+(по умолчанию 200), без follow. MCP не будит простаивающую сессию: Claude Code
+и OpenCode всё ещё запускают `aq wait ID` фоном после постановки через MCP;
+Codex получает daemon push.
 
 ## Хук
 
@@ -1028,12 +1093,18 @@ compose up/run, docker run. Он не обращается к демону, не
 Установка не меняет настройки хуков. Вручную объедините нужный фрагмент
 [Claude](../deploy/hooks/claude-settings.json) или [Codex](../deploy/hooks/codex-hooks.json)
 с настройками клиента (не перезаписывайте существующие hooks). Фрагмент Claude
-подходит и OpenClaude (`~/.openclaude/settings.json`, тот же формат).
-В обоих фрагментах хуков matcher `Bash`; Codex требует доверить новое
+подходит и OpenClaude (`~/.openclaude/settings.json`, тот же формат). Хука для
+OpenCode нет: у него плагины, а не хуки `settings.json`, и aq для него ничего
+не ставит. В обоих фрагментах хуков matcher `Bash`; Codex требует доверить новое
 определение через `/hooks`.
-Скилл aq ([Claude](../deploy/skills/claude/aq/SKILL.md), [Codex](../deploy/skills/codex/aq/SKILL.md))
+Скилл aq ([Claude](../deploy/skills/claude/aq/SKILL.md),
+[Codex](../deploy/skills/codex/aq/SKILL.md),
+[OpenCode](../deploy/skills/opencode/aq/SKILL.md))
 описывает, как агенту работать с aq: что считать тяжёлым, как оценить память,
 когда `submit`, а когда `reserve` со стендом, как получить результат и убрать за собой.
+OpenCode читает и `~/.claude/skills`, но при одном id скилла выигрывает его
+собственный `~/.config/opencode/skills` — поэтому там лежит своя копия,
+написанная под его инструменты.
 
 ## Восстановление
 

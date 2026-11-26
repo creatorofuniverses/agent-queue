@@ -308,7 +308,15 @@ with the session files of Claude Code (`~/.claude/sessions`) and OpenClaude
 (`~/.openclaude/sessions`) whose PID and process start time match the sample; a
 file without `procStart` (OpenClaude) is verified by `startedAt` against the
 process start time (boot time plus start ticks) and must not be older than the
-process by more than a minute.
+process by more than a minute. OpenCode (`opencode`, in the default
+`stats.agent_processes`) keeps no session file, so its rows carry no session
+id, status or idle time: they are named by PID, `sessions_idle` cannot count
+them, while their memory does count toward `sessions_heavy`. One shared
+background service runs the tools of all OpenCode sessions; the scan groups
+every process under the topmost agent in its ancestry, so the service is one
+row with everything it started and each terminal app outside another agent is
+a row of its own. `opencode-pty` is not an agent (the match is exact) and is
+part of the service row while it is its child.
 The process scan captures start time before reading process details
 and verifies it after reading memory and cwd. It drops changed identities
 before grouping processes into sessions. Successful samples replace the
@@ -322,7 +330,39 @@ ancestors. With an agent found, its own identity variable (one that is absent
 from the agent's exec-time environment or differs from the value there) wins,
 then the agent's verified session file, then `cli`. With no agent among the
 ancestors the environment rules apply as before; `AQ_NO_PARENT_SESSION`
-disables the lookup.
+disables the lookup. For OpenCode the nearest agent is its shared service
+(`opencode-pty` between them is skipped) and the variable is
+`OPENCODE_SESSION_ID`, which OpenCode exports to every tool shell and the
+service did not have at start; a subagent's shell carries the subagent's own
+id, so its tasks belong to the subagent's session. With no session file, a
+command without the variable is `cli`, never a session of another agent. The
+process name and the `opencode` adapter (`identity_env =
+"OPENCODE_SESSION_ID"`, `client-wait`) are both in the defaults, and that
+needs both. Without the process name the environment rules decide, so an
+identity variable the service inherited from an outer agent can file an
+OpenCode command under that agent's session, or make it ambiguous (exit 64);
+without the adapter such a command is `cli` even with the variable, and an MCP
+call that relies on the metadata below is refused with `session identity
+unknown`.
+
+A CLI command resolves its identity once, when it starts; each MCP call
+resolves its own. The `aq mcp` process is started by the agent harness and
+does not always carry a session: Codex filters its environment, and OpenCode
+starts it from its shared service, which has no session of its own. OpenCode
+names the session a call is made for in the request (`tools/call` params
+`_meta["ai.opencode/sessionID"]`). For `queue_submit`, `queue_reserve` and
+`queue_list` with `mine`, `aq mcp` takes that session when the config holds
+exactly one adapter with `OPENCODE_SESSION_ID` — the rule of a session file:
+two adapters on one variable give none. The precedence is explicit arguments,
+then the call's metadata, then the process: with usable metadata there is no
+process lookup, the metadata loses only to explicit arguments, and a `client`
+that names another adapter needs an explicit `session_id`, because that
+adapter's variable in the environment of `aq mcp` may be one the OpenCode
+service inherited from an outer agent. Calls without the metadata are resolved
+as before. aq does not verify the metadata: it is routing information of the
+same trust as an explicit `session_id`, and if OpenCode leaves it out or
+changes its key, the tools answer `session identity unknown` until the
+arguments name the session.
 
 A separate loop inventories `/tmp` for the daemon's UID. The socket's `tmp`
 operation returns the report and current filesystem usage of its scan root.

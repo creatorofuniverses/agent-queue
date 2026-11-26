@@ -23,7 +23,7 @@ user account. One binary provides the CLI, background service, and MCP server.
 - **Room for containers:** reservations account for Docker environments and their test jobs together.
 - **Results you can come back to:** logs, exit reasons, memory peaks, and queue statistics.
 - **Gentler on your SSD:** each job's temp files live in RAM and count toward its memory, and each job records how much it wrote to disk, so a suite that wears the drive shows up in `aq stats`.
-- **Agent integration:** bundled agent skills (one shared by Claude Code and OpenClaude, one separate for Codex), optional reminder hooks, and completion delivery.
+- **Agent integration:** bundled agent skills (one shared by Claude Code and OpenClaude, one for Codex, one for OpenCode), optional reminder hooks, and completion delivery.
 
 Tasks can run concurrently when they fit. aq helps contain resource exhaustion;
 it does not guarantee that a machine can never run out of memory. Containers
@@ -110,10 +110,13 @@ with `aq status ID` and `aq logs ID --stream stderr`; the guide explains
 ## Using aq with coding agents
 
 `just install` installs the same skill for Claude Code and OpenClaude (into
-`~/.claude/skills` and `~/.openclaude/skills`) and a separate skill for Codex.
-The skills explain when to queue a job, when to reserve resources for a
-container environment, and how to collect results. Optional hooks remind an
-agent when it starts heavy work outside aq; they do not block commands.
+`~/.claude/skills` and `~/.openclaude/skills`), a separate skill for Codex and
+one for OpenCode (into `~/.config/opencode/skills`). The skills explain when to
+queue a job, when to reserve resources for a container environment, and how to
+collect results. The installer never edits an existing config: when it lacks an
+entry for OpenCode, it prints a hint instead. Optional hooks remind an agent
+when it starts heavy work outside aq; they do not block commands. OpenCode has
+no hook.
 
 Follow the [notification setup](docs/guide.md#notifications) for completion delivery,
 and the [MCP](docs/guide.md#mcp) and [hook](docs/guide.md#hook) sections if you use them.

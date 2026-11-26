@@ -42,17 +42,29 @@ just install
 - puts the binary in `~/.local/bin/aq`;
 - puts `aq.service` and `aq.slice` in `~/.config/systemd/user/`;
 - copies `deploy/config.example.toml` to `~/.config/agent-queue/config.toml`
-  only if there is no config yet (an existing one is not touched);
-- if an existing config sets `agent_processes` without `openclaude`, prints a
-  hint: until the list has it, OpenClaude's sessions are not counted and its
-  commands belong to `cli` or to the session of an agent it was started from;
+  only if there is no config yet (an existing one is never edited; for the
+  hints below a commented-out entry counts as absent);
+- prints a hint for each name a configured `agent_processes` lacks. Without
+  `openclaude`, OpenClaude's sessions are not counted and its commands belong
+  to `cli` or to the session of an agent it was started from; without
+  `opencode`, OpenCode's processes are not counted and its commands are
+  identified by the environment alone, so an inherited variable of another
+  agent can file them under that agent's session;
+- prints a hint when an existing config lists its own `[[agents]]` without an
+  adapter for OpenCode: until there is one (`identity_env =
+  "OPENCODE_SESSION_ID"`, `delivery = "client-wait"`), OpenCode's commands
+  belong to `cli` (with the `opencode` name in the list; without it the
+  environment decides, as above) and its MCP submissions are rejected with
+  `session identity unknown`;
 - runs `systemctl --user daemon-reload`, enables `aq.service` and
   (re)starts it, so running `just install` again updates the running daemon;
 - copies the `aq` skill separately for each agent: `deploy/skills/claude/aq` to
   `~/.claude/skills/aq` and, for OpenClaude, to `~/.openclaude/skills/aq`,
-  `deploy/skills/codex/aq` to `~/.codex/skills/aq` (the paths can be changed
-  with `CLAUDE_SKILLS`/`CODEX_SKILLS`/`OPENCLAUDE_SKILLS`; an empty value means
-  do not install); hooks are set up separately;
+  `deploy/skills/codex/aq` to `~/.codex/skills/aq`, `deploy/skills/opencode/aq`
+  to `~/.config/opencode/skills/aq` (the paths can be changed with
+  `CLAUDE_SKILLS`/`CODEX_SKILLS`/`OPENCLAUDE_SKILLS`/`OPENCODE_SKILLS`; an
+  empty value means do not install); hooks are set up separately, and OpenCode
+  has no hook;
 - if linger is off, prints a hint: without `loginctl enable-linger $USER`
   the daemon and all tasks stop when the last session ends.
 
@@ -61,9 +73,9 @@ Before installing, check `pool_memory` in the example config: the default
 daemon will not start (`CONFIG_INVALID`).
 
 Directories can be overridden with environment variables: `BINDIR`, `UNITDIR`,
-`CONFDIR`, `STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, `OPENCLAUDE_SKILLS`, and
-`SYSTEMCTL` (default `systemctl --user`). For example, `SYSTEMCTL=true just
-install` only lays out the files.
+`CONFDIR`, `STATEDIR`, `CLAUDE_SKILLS`, `CODEX_SKILLS`, `OPENCLAUDE_SKILLS`,
+`OPENCODE_SKILLS`, and `SYSTEMCTL` (default `systemctl --user`). For example,
+`SYSTEMCTL=true just install` only lays out the files.
 
 If the installed `aq` responds and the queue has tasks or reservations,
 `install`, `uninstall` and `purge` first list them. A restart is safe for them:
@@ -585,7 +597,7 @@ samples_max_age = "30d"
 samples_full_res = "2d"
 [stats]
 sample_interval = "30s"
-agent_processes = ["claude", "openclaude", "codex"]
+agent_processes = ["claude", "openclaude", "codex", "opencode"]
 ```
 
 Config durations support days: `7d`, `1d12h`. History takes 1–100 runs,
@@ -594,11 +606,22 @@ percentiles are 50–100, limit margin is 1–4. Retention values must be positi
 the host interval is from 5 s to 5 min; process names are non-empty and contain
 no `/`. The names are the processes aq counts as agents when it measures memory,
 in `aq top --sessions` and when it looks for the agent process a command was
-started from (`openclaude` is OpenClaude). OpenClaude gives its process this
-name through the terminal title; with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` set
-the process stays `node`, and aq does not count it as an agent. `openclaude` is
-in the default list; a config written by an earlier version keeps its own list,
-so add `openclaude` there — the installer prints a hint while it is missing.
+started from (`openclaude` is OpenClaude, `opencode` is OpenCode). OpenClaude
+gives its process this name through the terminal title; with
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE` set the process stays `node`, and aq does
+not count it as an agent. OpenCode V2 runs one shared background service for
+the tools of all its sessions, and each terminal app is a process of its own.
+In `aq top --sessions` the service is a single row (its own memory plus
+everything it started) and each terminal app not started from another agent is
+a row of its own; these rows show a PID and no session id, status or idle time,
+because OpenCode keeps no session file. `opencode-pty` is not an agent (the
+match is exact) and counts as run by the service while it is its child. The
+memory of these rows counts toward `[sessions] alert_memory`; `sessions_idle`
+does not see them, since their idle time is unknown. `opencode` is the name of
+the native binary: an OpenCode started through a JS runtime under another name
+is not counted until that name is added here. Both `openclaude` and `opencode`
+are in the default list; a config written by an earlier version keeps its own
+list, so add them there — the installer prints a hint while one is missing.
 
 ## Diagnostics: `aq doctor`
 
@@ -859,23 +882,38 @@ go to the operator (see below).
 ## Notifications
 
 The client detects the session from the agent process aq was started from (a
-process named in `stats.agent_processes`: Codex, Claude Code, OpenClaude). First
-the agent's own identity variable, absent from the agent's start environment
-or different there (Codex `CODEX_THREAD_ID`, Claude `CLAUDE_CODE_SESSION_ID`),
-then that agent's session file (`~/.claude/sessions/<pid>.json`,
+process named in `stats.agent_processes`: Codex, Claude Code, OpenClaude,
+OpenCode). First the agent's own identity variable, absent from the agent's
+start environment or different there (Codex `CODEX_THREAD_ID`, Claude
+`CLAUDE_CODE_SESSION_ID`, OpenCode `OPENCODE_SESSION_ID`), then that agent's
+session file (`~/.claude/sessions/<pid>.json`,
 `~/.openclaude/sessions/<pid>.json`), which is how OpenClaude is recognized: it
-exports no variable. The files are looked for under the command's `HOME`, then
-under the home the agent itself was started with, so a command run with `env -i`
-still finds them. Without an agent among the ancestors (a plain shell, tmux,
-a systemd unit) the variables of the configured adapters decide as before, and
-several non-empty ones are ambiguous: submit/reserve exit with code 64, and
-MCP requires explicit `client` and `session_id`. `AQ_NO_PARENT_SESSION=1` turns
-the ancestor lookup off. `--client NAME --session S` set them explicitly and
-turn the lookup off; `--no-notify` on submit/reserve turns off only session
-notifications. Without a detected session the CLI works as `cli`. A push
-adapter that is named but has no session is an error; a delivery command
-missing from the daemon's PATH rejects the request before it is saved. The
-service PATH includes `%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
+exports no variable; OpenCode has no session file. The files are looked for
+under the command's `HOME`, then under the home the agent itself was started
+with, so a command run with `env -i` still finds them. Without an agent among
+the ancestors (a plain shell, tmux, a systemd unit) the variables of the
+configured adapters decide as before, and several non-empty ones are ambiguous:
+submit/reserve exit with code 64, and MCP requires explicit `client` and
+`session_id`. `AQ_NO_PARENT_SESSION=1` turns the ancestor lookup off.
+`--client NAME --session S` set them explicitly and turn the lookup off;
+`--no-notify` on submit/reserve turns off only session notifications. Without a
+detected session the CLI works as `cli`. A push adapter that is named but has
+no session is an error; a delivery command missing from the daemon's PATH
+rejects the request before it is saved. The service PATH includes
+`%h/.local/bin:/usr/local/bin:/usr/bin:/bin`.
+
+OpenCode gives every tool shell `OPENCODE_SESSION_ID`, and a subagent's shell
+the subagent's own id: a subagent's tasks are filed under the subagent's
+session, which the parent's `aq list --mine` does not show. For a command from
+OpenCode the nearest agent is its shared background service (`opencode-pty` in
+between is not an agent). While the config holds both the `opencode` process
+name and the `opencode` adapter (the defaults), a command with the variable
+belongs to its OpenCode session and a command without it to `cli`, never to
+another agent's session; with only one of the two entries OpenCode commands
+are not recognized, see [Installation](#installation). If aq still cannot
+tell, `--client opencode --session "$OPENCODE_SESSION_ID"` sets the session;
+in MCP OpenCode names the calling session in the request itself, see
+[MCP](#mcp).
 
 A Codex multi-agent v2 sub-agent has its own `CODEX_THREAD_ID`, but Codex
 refuses `codex queue` into a sub-agent's thread. When the session (detected or
@@ -898,15 +936,21 @@ command = ["pi", "send", "{session}", "{text}"]
 ```
 
 If there is at least one `[[agents]]`, the list **replaces** the defaults
-entirely. The command is argv with no shell; `{event_id}`, `{item_id}`, `{kind}`
-are also supported. `delivery = "client-wait"` requires an empty command.
+entirely: `codex` (push), `claude` and `opencode` (`client-wait`). A config
+with its own list needs an entry for OpenCode too (`identity_env =
+"OPENCODE_SESSION_ID"`, `delivery = "client-wait"`); the installer prints a
+hint while it is missing. The command is argv with no shell; `{event_id}`,
+`{item_id}`, `{kind}` are also supported. `delivery = "client-wait"` requires an
+empty command.
 
 After submit/reserve, Claude starts `aq wait ID` with `run_in_background` and
-ends its turn; Codex gets a ping automatically. `aq wait RES_ID --until
-expiring` waits for the warning about expiry, about the stand exceeding its
-declared amount, or about the reservation sitting idle. If it returned with
-`GRANTED`/`stand_over_declared`/`reservation_idle`, handle and acknowledge the
-event, then start this waiter again in the background for the future expiry.
+ends its turn; OpenCode does the same with its `shell` tool (`background:
+true`) and has no push delivery; Codex gets a ping automatically. `aq wait
+RES_ID --until expiring` waits for the warning about expiry, about the stand
+exceeding its declared amount, or about the reservation sitting idle. If it
+returned with `GRANTED`/`stand_over_declared`/`reservation_idle`, handle and
+acknowledge the event, then start this waiter again in the background for the
+future expiry.
 
 ```sh
 aq list --mine             # own active items + finished ones with unacknowledged events
@@ -984,7 +1028,11 @@ separately. Connection examples (run them yourself):
 ```sh
 claude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
 openclaude mcp add --transport stdio aq -- /home/USER/.local/bin/aq mcp
+opencode mcp add aq --global -- /home/USER/.local/bin/aq mcp
 ```
+
+`opencode mcp add` writes the server into the global OpenCode config, updating
+an existing `~/.config/opencode/opencode.jsonc` in place.
 
 In the Codex config:
 
@@ -1004,12 +1052,35 @@ identity is an error, not a silent disabling of notifications. If the launcher
 passed the correct session variable in the MCP env explicitly, aq will detect
 it.
 
+OpenCode needs neither: it names the session a call is made for in the request
+metadata (`_meta["ai.opencode/sessionID"]`), and aq uses it for
+`queue_submit`, `queue_reserve` and `queue_list` with `mine` when the config
+holds exactly one adapter with `identity_env = "OPENCODE_SESSION_ID"`. The
+order is: explicit arguments, then the call's metadata, then the process. With
+usable metadata aq does not look at the process at all: a `client` naming the
+OpenCode adapter takes its session from `session_id`, else from the call;
+`session_id` without `client` belongs to OpenCode; a `client` naming another
+adapter (`codex`, `claude`) needs an explicit `session_id`, otherwise the
+answer is `session identity unknown`, whatever `no_notify` says, because that
+adapter's variable in the environment of `aq mcp` may be one the OpenCode
+service inherited from an outer agent. `client: "cli"` is still the explicit
+"no session": without `no_notify: true` it is refused as before. Calls without
+the metadata behave as before, so Claude Code and Codex are not affected.
+
 Tools: queue_submit, queue_reserve, queue_extend, queue_release,
 queue_cancel, queue_status, queue_result, queue_list, queue_ack, queue_logs, queue_estimate.
+In OpenCode they arrive as `tools.aq.queue_submit(…)` through `execute` in Code
+Mode (the default) or, with the server registered as `"codemode": false`, as
+direct tools `aq_queue_submit` …; pass neither `client` nor `session_id`.
+OpenCode can leave the metadata out, and its key can change with an update: if
+a call is still answered `session identity unknown`, `queue_submit` and
+`queue_reserve` take `client` with the name of the OpenCode adapter from the
+config (`opencode` by default) and `session_id` from the tool shell's
+`$OPENCODE_SESSION_ID`; `queue_list` has no `client`, pass `session_id` alone.
 `cwd` and `teardown_file` are absolute; queue_logs: tail 1..2000 (default 200),
-no follow. MCP does not wake an idle session: Claude still starts
-`aq wait ID` in the background after submitting through MCP; Codex gets the
-daemon push.
+no follow. MCP does not wake an idle session: Claude Code and OpenCode still
+start `aq wait ID` in the background after submitting through MCP; Codex gets
+the daemon push.
 
 ## Hook
 
@@ -1025,12 +1096,17 @@ Installation does not change hook settings. Merge the fragment you need,
 [Claude](../deploy/hooks/claude-settings.json) or [Codex](../deploy/hooks/codex-hooks.json),
 into the client's settings by hand (do not overwrite existing hooks). The
 Claude fragment also suits OpenClaude (`~/.openclaude/settings.json`, same
-format). The matcher is `Bash` in both hook fragments; Codex requires you to
-trust the new definition through `/hooks`.
-The aq skill ([Claude](../deploy/skills/claude/aq/SKILL.md), [Codex](../deploy/skills/codex/aq/SKILL.md))
+format). There is no hook for OpenCode: it has plugins, not `settings.json`
+hooks, and aq ships none for it. The matcher is `Bash` in both hook fragments;
+Codex requires you to trust the new definition through `/hooks`.
+The aq skill ([Claude](../deploy/skills/claude/aq/SKILL.md),
+[Codex](../deploy/skills/codex/aq/SKILL.md),
+[OpenCode](../deploy/skills/opencode/aq/SKILL.md))
 describes how an agent should work with aq: what counts as heavy, how to
 estimate memory, when to `submit` and when to `reserve` with a stand, how to get
-the result and clean up after itself.
+the result and clean up after itself. OpenCode also reads `~/.claude/skills`,
+but for the same skill id its own `~/.config/opencode/skills` wins, so it gets
+its own copy there, written for its tools.
 
 ## Recovery
 

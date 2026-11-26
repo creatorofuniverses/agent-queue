@@ -27,8 +27,8 @@ user-facing behaviour you must keep true.
 - `internal/notify`, `internal/mcp`, `internal/hook`, `internal/profile`,
   `internal/stats`, `internal/client`, `internal/protocol`, `internal/runner`.
 - `deploy/` — systemd units, example config, opt-in hooks, and the agent
-  skills `deploy/skills/claude/aq` (installed for Claude Code and OpenClaude)
-  and `deploy/skills/codex/aq`.
+  skills `deploy/skills/claude/aq` (installed for Claude Code and OpenClaude),
+  `deploy/skills/codex/aq` and `deploy/skills/opencode/aq`.
 - `test/e2e` — end-to-end tests against the real systemd user manager.
 
 ## Commands
@@ -90,7 +90,7 @@ green. Run `just test-integration` when you touch the executor
 - When behaviour changes, update in the same change: `docs/guide.md` and
   `docs/guide.ru.md`, `README.md`/`README.ru.md` if the summary changes,
   `docs/architecture.md` for design changes, `aq help` text in
-  `internal/cli/help.go`, and both agent skills in `deploy/skills/`.
+  `internal/cli/help.go`, and all three agent skills in `deploy/skills/`.
 - Commit messages: imperative subject with a type prefix (`feat:`, `fix:`,
   `docs:`, `refactor:`, `build:`), body explaining why.
 
