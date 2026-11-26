@@ -245,6 +245,8 @@ func TestMCPMetaSession(t *testing.T) {
 		{"10 ambiguous environment", nil, map[string]string{"CODEX_THREAD_ID": "parent", "CLAUDE_CODE_SESSION_ID": "mine"}, toolMeta("queue_submit", submitArgs(), sessionMeta(meta)), "", "submit", identity("opencode", meta), nil, ""},
 		{"11 no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"no_notify": true}), sessionMeta(meta)), "", "submit", map[string]any{"client_type": "opencode", "session_id": meta, "no_notify": true}, nil, ""},
 		{"12 _meta with other keys only", nil, nil, toolMeta("queue_submit", submitArgs(), map[string]any{"progressToken": "p", "ai.opencode/other": "x"}), noIdentity, "", nil, nil, ""},
+		// 1e309 is no float64: written raw, since the map is marshalled; the call still carries its session.
+		{"12 _meta beside a number no float64 holds", nil, nil, toolMeta("queue_submit", submitArgs(), map[string]any{"ai.opencode/sessionID": meta, "unused": json.RawMessage("1e309")}), "", "submit", identity("opencode", meta), nil, ""},
 		{"13 client cli", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "cli"}), sessionMeta(meta)), noIdentity, "", nil, nil, ""},
 		{"13 client cli with no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "cli", "no_notify": true}), sessionMeta(meta)), "", "submit", map[string]any{"client_type": "cli", "session_id": "", "no_notify": true}, nil, ""},
 		{"14 queue_status", nil, nil, toolMeta("queue_status", map[string]any{"id": "i"}, sessionMeta(meta)), "", "status", map[string]any{"id": "i"}, nil, ""},
@@ -308,6 +310,9 @@ func TestMetaSession(t *testing.T) {
 		{key + `"` + strings.Repeat("é", 64) + `"}`, strings.Repeat("é", 64)}, // 128 bytes in 64 runes
 		{key + `"` + strings.Repeat("é", 65) + `"}`, ""},                      // 130 bytes in 65 runes
 		{`{"ai.opencode/sessionID":"ses","progressToken":"p"}`, "ses"},
+		// An unrelated value is not decoded, so it cannot make the session unusable.
+		{`{"ai.opencode/sessionID":"ses_ok","unused":1e309}`, "ses_ok"},              // a number no float64 holds
+		{`{"ai.opencode/sessionID":"ses_ok","unused":{"nested":[1e309]}}`, "ses_ok"}, // the same deeper in an object
 		{key + `""}`, ""},
 		{key + `42}`, ""},
 		{key + `null}`, ""},

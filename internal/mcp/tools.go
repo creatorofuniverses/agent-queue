@@ -198,12 +198,17 @@ const opencodeIdentityEnv = "OPENCODE_SESSION_ID"
 // metaSession reads params._meta, where OpenCode names the session a call is made for under
 // "ai.opencode/sessionID"; a value is usable when it is a non-empty string of at most 128
 // bytes without control characters. aq assumes no format for the id, as for a session_id.
+// Only that value is decoded: the specification says unknown _meta keys are ignored, so an
+// unrelated value must not decide whether the session is usable.
 func metaSession(raw json.RawMessage) string {
-	var meta map[string]any
+	var meta map[string]json.RawMessage
 	if json.Unmarshal(raw, &meta) != nil {
 		return ""
 	}
-	s, _ := meta["ai.opencode/sessionID"].(string)
+	var s string
+	if json.Unmarshal(meta["ai.opencode/sessionID"], &s) != nil {
+		return ""
+	}
 	if s == "" || len(s) > 128 {
 		return ""
 	}
