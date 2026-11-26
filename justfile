@@ -11,10 +11,12 @@ systemctl := env("SYSTEMCTL", "systemctl --user")
 loginctl := env("LOGINCTL", "loginctl")
 
 # Each agent gets its own copy of the aq skill: deploy/skills/<agent>/aq;
-# OpenClaude uses the Claude Code skill. An empty value skips that agent.
+# OpenClaude uses the Claude Code skill, OpenCode has its own. An empty value
+# skips that agent.
 claude_skills := env("CLAUDE_SKILLS", home_directory() / ".claude/skills")
 codex_skills := env("CODEX_SKILLS", home_directory() / ".codex/skills")
 openclaude_skills := env("OPENCLAUDE_SKILLS", home_directory() / ".openclaude/skills")
+opencode_skills := env("OPENCODE_SKILLS", home_directory() / ".config/opencode/skills")
 
 default:
     @just --list
@@ -74,13 +76,26 @@ install: build (check-idle "restarting")
     # parser: comments are cut first, the key may be written stats.agent_processes,
     # and a name counts only as a whole string, as aq matches process names.
     agents=$(awk '/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)*agent_processes[[:space:]]*=/{f=1} f{sub(/#.*/, ""); printf "%s ", $0} f && index($0, "]"){exit}' "{{ confdir }}/config.toml" 2>/dev/null || true)
-    if [ -n "$agents" ] && ! grep -q -e '"openclaude"' -e "'openclaude'" <<< "$agents"; then
-        echo "hint: agent_processes in {{ confdir }}/config.toml does not list openclaude."
-        echo "      add it, or OpenClaude's sessions are not counted and its commands belong to cli or to the session of an agent it was started from."
+    for missing in openclaude opencode; do
+        if [ -n "$agents" ] && ! grep -q -e "\"$missing\"" -e "'$missing'" <<< "$agents"; then
+            echo "hint: agent_processes in {{ confdir }}/config.toml does not list $missing."
+            case "$missing" in
+            openclaude) echo "      add it, or OpenClaude's sessions are not counted and its commands belong to cli or to the session of an agent it was started from." ;;
+            opencode) echo "      add it, or OpenCode's processes are not counted and its commands are identified by the environment alone: an inherited variable of another agent can file them under that agent's session." ;;
+            esac
+        fi
+    done
+    # A config that names its own adapters needs the OpenCode one too. A hint again,
+    # not a TOML parser: comments are cut first, so a commented-out adapter line
+    # counts as absent. The installer never edits the config.
+    effective=$(sed 's/#.*//' "{{ confdir }}/config.toml" 2>/dev/null || true)
+    if grep -qE '^[[:space:]]*\[\[[[:space:]]*agents[[:space:]]*\]\]' <<< "$effective" && ! grep -q 'OPENCODE_SESSION_ID' <<< "$effective"; then
+        echo "hint: [[agents]] in {{ confdir }}/config.toml has no adapter for OpenCode."
+        echo "      add one with identity_env = \"OPENCODE_SESSION_ID\" and delivery = \"client-wait\", or OpenCode's commands belong to cli and its MCP submissions are rejected with \"session identity unknown\"."
     fi
     # A symlink whose target is gone is still an entry: -e alone says it is not.
     present() { test -e "$1" || test -L "$1"; }
-    for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}" "claude:{{ openclaude_skills }}"; do
+    for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}" "claude:{{ openclaude_skills }}" "opencode:{{ opencode_skills }}"; do
         agent=${target%%:*}; dir=${target#*:}
         [ -n "$dir" ] || continue
         install -d "$dir"
@@ -92,7 +107,7 @@ install: build (check-idle "restarting")
         rm -rf "$stage"
         trap - EXIT
     done
-    echo "hooks are opt-in: see deploy/hooks/claude-settings.json (Claude Code and OpenClaude, ~/.openclaude/settings.json) and deploy/hooks/codex-hooks.json"
+    echo "hooks are opt-in: see deploy/hooks/claude-settings.json (Claude Code and OpenClaude, ~/.openclaude/settings.json) and deploy/hooks/codex-hooks.json; OpenCode has no hook"
     {{ systemctl }} daemon-reload
     {{ systemctl }} enable aq.service
     # restart rather than start: a reinstall must pick up the new binary.
@@ -106,7 +121,7 @@ install: build (check-idle "restarting")
 uninstall: (check-idle "stopping")
     -{{ systemctl }} disable --now aq.service
     rm -f "{{ bindir }}/aq" "{{ unitdir }}/aq.service" "{{ unitdir }}/aq.slice"
-    for dir in "{{ claude_skills }}" "{{ codex_skills }}" "{{ openclaude_skills }}"; do [ -z "$dir" ] || rm -rf "$dir/aq"; done
+    for dir in "{{ claude_skills }}" "{{ codex_skills }}" "{{ openclaude_skills }}" "{{ opencode_skills }}"; do [ -z "$dir" ] || rm -rf "$dir/aq"; done
     {{ systemctl }} daemon-reload
 
 # uninstall, then delete the database and all task logs; the config is kept
