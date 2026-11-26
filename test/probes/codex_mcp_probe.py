@@ -16,6 +16,43 @@ import time
 repo = Path(__file__).resolve().parents[2]
 scratch = repo / "bin/scratch"
 scratch.mkdir(parents=True, exist_ok=True)
+aq = str(repo / "bin/aq")
+
+
+def served_tools(env):
+    """The tool names aq mcp lists over stdio: what Codex has to see as well."""
+    process = subprocess.Popen([aq, "mcp"], env=env, text=True, stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        def request(number, method, params):
+            process.stdin.write(json.dumps(dict(jsonrpc="2.0", id=number, method=method, params=params)) + "\n")
+            process.stdin.flush()
+            for line in process.stdout:
+                try:
+                    response = json.loads(line)
+                except ValueError:
+                    continue
+                # An error has id null when aq could not name the request: fail at
+                # once rather than wait for a reply that does not come.
+                if "error" in response:
+                    raise RuntimeError(response["error"])
+                if response.get("id") == number:
+                    return response["result"]
+            raise RuntimeError("aq mcp closed its output")
+        request(1, "initialize", {"protocolVersion": "2025-06-18", "clientInfo": {"name": "aq_probe", "version": "1"},
+                                  "capabilities": {}})
+        process.stdin.write(json.dumps(dict(jsonrpc="2.0", method="notifications/initialized")) + "\n")
+        process.stdin.flush()
+        return sorted(tool["name"] for tool in request(2, "tools/list", {})["tools"])
+    finally:
+        process.stdin.close()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 for forward in (False, True):
     with tempfile.TemporaryDirectory(prefix="codex-mcp-", dir=scratch) as tmp:
         root = Path(tmp)
@@ -23,7 +60,6 @@ for forward in (False, True):
         home.mkdir()
         identity_log = root / "identity.json"
         wrapper = root / "logger.py"
-        aq = str(repo / "bin/aq")
         wrapper.write_text(
             "import os,json\nfrom pathlib import Path\n"
             f"Path({str(identity_log)!r}).write_text(json.dumps({{k:os.environ.get(k) "
@@ -43,6 +79,9 @@ for forward in (False, True):
         env = os.environ.copy()
         env.update(CODEX_HOME=str(home), CODEX_THREAD_ID="aq-probe-parent",
                    CLAUDE_CODE_SESSION_ID="aq-probe-claude")
+        # Codex must see the tools aq mcp serves, compared with aq mcp's own list
+        # rather than a count that a new tool would leave behind.
+        expected = served_tools({**os.environ, **values})
         messages = queue.Queue()
         with (root / "stderr.log").open("w") as stderr:
             process = subprocess.Popen(
@@ -82,12 +121,14 @@ for forward in (False, True):
                 rpc(2, "thread/start", {"cwd": str(root), "ephemeral": True,
                                        "approvalPolicy": "never", "sandbox": "read-only"})
                 status = rpc(3, "mcpServerStatus/list", {})["data"]
-                assert len(status) == 1 and len(status[0]["tools"]) == 10, status
+                assert len(status) == 1, [s["name"] for s in status]
+                tools = sorted(status[0]["tools"])
+                assert tools == expected, (tools, expected)
                 identity = json.loads(identity_log.read_text())
-                expected = "aq-explicit-thread" if forward else None
-                assert identity["CODEX_THREAD_ID"] == expected, identity
+                expected_thread = "aq-explicit-thread" if forward else None
+                assert identity["CODEX_THREAD_ID"] == expected_thread, identity
                 assert identity["CLAUDE_CODE_SESSION_ID"] is None, identity
-                print(json.dumps({"explicit_forwarding": forward, "tools": 10, **identity}))
+                print(json.dumps({"explicit_forwarding": forward, "tools": len(tools), **identity}))
             finally:
                 try:
                     os.killpg(process.pid, signal.SIGTERM)
