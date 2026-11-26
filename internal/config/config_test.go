@@ -298,7 +298,7 @@ func TestTeardownPaths(t *testing.T) {
 
 func TestDefaultAgents(t *testing.T) {
 	c := Default()
-	want := []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}}
+	want := []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}, {"opencode", "OPENCODE_SESSION_ID", DeliveryClientWait, nil}}
 	if !reflect.DeepEqual(c.Agents, want) {
 		t.Fatalf("%+v", c.Agents)
 	}

@@ -64,7 +64,7 @@ give_up_after = "24h"
 admission_closed_alert = "10m"
 cleaning_stuck_alert = "5m"
 
-# This list replaces the default adapters entirely; the order decides the session.
+# This list replaces the default adapters entirely.
 [[agents]]
 name = "codex"
 identity_env = "CODEX_THREAD_ID"
@@ -74,6 +74,11 @@ command = ["codex", "queue", "--thread", "{session}", "--message", "{text}"]
 [[agents]]
 name = "claude"
 identity_env = "CLAUDE_CODE_SESSION_ID"
+delivery = "client-wait"
+
+[[agents]]
+name = "opencode"
+identity_env = "OPENCODE_SESSION_ID"
 delivery = "client-wait"
 
 [webhook]

@@ -154,7 +154,7 @@ func Default() Config {
 		Sessions:            SessionsConfig{12 * time.Hour, 6 * gib, 3},
 		Host:                HostAlertsConfig{75},
 		Alerts:              AlertsConfig{10 * time.Minute},
-		Agents:              []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}},
+		Agents:              []AgentConfig{{"codex", "CODEX_THREAD_ID", DeliveryPush, []string{"codex", "queue", "--thread", "{session}", "--message", "{text}"}}, {"claude", "CLAUDE_CODE_SESSION_ID", DeliveryClientWait, nil}, {"opencode", "OPENCODE_SESSION_ID", DeliveryClientWait, nil}},
 		Notify:              NotifyConfig{time.Second, 5 * time.Minute, 30 * time.Second, 24 * time.Hour, 10 * time.Minute, 5 * time.Minute},
 		Webhook:             WebhookConfig{Timeout: 10 * time.Second, Format: WebhookFormatAQ},
 		Hook:                HookConfig{Patterns: []string{`(^|[\s;&|(])(pytest|py\.test)\b.*\s(-n|--numprocesses)(\s|=)`, `(^|[\s;&|(])docker\s+compose\b.*\s(up|run)\b`, `(^|[\s;&|(])docker-compose\b.*\s(up|run)\b`, `(^|[\s;&|(])docker\s+run\b`}},

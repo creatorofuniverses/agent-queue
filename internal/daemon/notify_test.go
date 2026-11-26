@@ -93,7 +93,7 @@ func TestPingReportsAdapters(t *testing.T) {
 	e.start(t)
 	var p pingResult
 	e.call(t, "ping", nil, &p)
-	if len(p.Adapters) != 2 || p.Adapters[0].OK || !p.Adapters[1].OK || p.Webhook.Configured {
+	if len(p.Adapters) != 3 || p.Adapters[0].OK || !p.Adapters[1].OK || !p.Adapters[2].OK || p.Webhook.Configured {
 		t.Fatal(p)
 	}
 }
