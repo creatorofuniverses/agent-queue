@@ -174,6 +174,23 @@ absent "$adapter_hint" "$T/out"
 printf '[stats]\nagent_processes = ["claude", "openclaude", "codex", "opencode"]\n\n  [[ agents ]]\nname = "claude"\nidentity_env = "CLAUDE_CODE_SESSION_ID"\n' > "$T/conf/config.toml"
 run >"$T/out"
 grep -q "$adapter_hint" "$T/out"
+# An adapter on a longer variable name is none for OPENCODE_SESSION_ID: aq looks for
+# that exact variable, and does not find an adapter on OPENCODE_SESSION_ID_OLD.
+printf '[stats]\nagent_processes = ["claude", "openclaude", "codex", "opencode"]\n\n[[agents]]\nname = "opencode"\nidentity_env = "OPENCODE_SESSION_ID_OLD"\ndelivery = "client-wait"\n' > "$T/conf/config.toml"
+run >"$T/out"
+grep -q "$adapter_hint" "$T/out"
+# The list may be an array of inline tables instead of [[agents]] blocks: without the
+# OpenCode adapter the hint is due,
+printf 'agents = [ { name = "codex", identity_env = "CODEX_THREAD_ID", delivery = "push", command = ["x", "{session}", "{text}"] }, { name = "claude", identity_env = "CLAUDE_CODE_SESSION_ID", delivery = "client-wait" } ]\n[stats]\nagent_processes = ["claude", "openclaude", "codex", "opencode"]\n' > "$T/conf/config.toml"
+run >"$T/out"
+grep -q "$adapter_hint" "$T/out"
+# and with it, in any quote style, the hint is not.
+printf "agents = [ { name = 'codex', identity_env = 'CODEX_THREAD_ID', delivery = 'push', command = ['x', '{session}', '{text}'] }, { name = 'claude', identity_env = 'CLAUDE_CODE_SESSION_ID', delivery = 'client-wait' }, { name = 'opencode', identity_env = 'OPENCODE_SESSION_ID', delivery = 'client-wait' } ]\n[stats]\nagent_processes = ['claude', 'openclaude', 'codex', 'opencode']\n" > "$T/conf/config.toml"
+run >"$T/out"
+absent "$adapter_hint" "$T/out"
+printf 'agents = [ { name = "codex", identity_env = "CODEX_THREAD_ID", delivery = "push", command = ["x", "{session}", "{text}"] }, { name = "claude", identity_env = "CLAUDE_CODE_SESSION_ID", delivery = "client-wait" }, { name = "opencode", identity_env = "OPENCODE_SESSION_ID", delivery = "client-wait" } ]\n[stats]\nagent_processes = ["claude", "openclaude", "codex", "opencode"]\n' > "$T/conf/config.toml"
+run >"$T/out"
+absent "$adapter_hint" "$T/out"
 # The example config, installed fresh, needs neither hint.
 install -m 0600 deploy/config.example.toml "$T/conf/config.toml"
 run >"$T/out"

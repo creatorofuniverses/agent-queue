@@ -87,9 +87,13 @@ install: build (check-idle "restarting")
     done
     # A config that names its own adapters needs the OpenCode one too. A hint again,
     # not a TOML parser: comments are cut first, so a commented-out adapter line
-    # counts as absent. The installer never edits the config.
+    # counts as absent. The adapter counts only as an assignment of the variable in quotes:
+    # aq looks for OPENCODE_SESSION_ID itself, and a longer name such as
+    # OPENCODE_SESSION_ID_OLD leaves OpenCode without an adapter. The installer never edits
+    # the config.
     effective=$(sed 's/#.*//' "{{ confdir }}/config.toml" 2>/dev/null || true)
-    if grep -qE '^[[:space:]]*\[\[[[:space:]]*agents[[:space:]]*\]\]' <<< "$effective" && ! grep -q 'OPENCODE_SESSION_ID' <<< "$effective"; then
+    re="identity_env[[:space:]]*=[[:space:]]*[\"']OPENCODE_SESSION_ID[\"']"
+    if grep -qE '^[[:space:]]*(\[\[[[:space:]]*agents[[:space:]]*\]\]|agents[[:space:]]*=)' <<< "$effective" && ! grep -qE "$re" <<< "$effective"; then
         echo "hint: [[agents]] in {{ confdir }}/config.toml has no adapter for OpenCode."
         echo "      add one with identity_env = \"OPENCODE_SESSION_ID\" and delivery = \"client-wait\", or OpenCode's commands belong to cli and its MCP submissions are rejected with \"session identity unknown\"."
     fi
