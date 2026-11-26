@@ -201,9 +201,10 @@ func TestMCPMetaSession(t *testing.T) {
 	}
 	noOpenCode := []config.AgentConfig{adapter("codex", "CODEX_THREAD_ID"), adapter("claude", "CLAUDE_CODE_SESSION_ID")}
 	twoOpenCode := []config.AgentConfig{adapter("codex", "CODEX_THREAD_ID"), adapter("claude", "CLAUDE_CODE_SESSION_ID"), adapter("opencode", "OPENCODE_SESSION_ID"), adapter("opencode2", "OPENCODE_SESSION_ID")}
-	// Another adapter named without a session_id is refused by a message that names the client.
+	// Another adapter named without a session_id is refused by a message that names the client
+	// and the whole way to no session: client "cli" alone still meets the gate.
 	named := func(client string) []string {
-		return []string{"without a session_id", fmt.Sprintf(`client %q was named without a session_id`, client)}
+		return []string{"without a session_id", fmt.Sprintf(`client %q was named without a session_id`, client), `client "cli" with no_notify`}
 	}
 	for _, tc := range []struct {
 		name    string
@@ -220,11 +221,14 @@ func TestMCPMetaSession(t *testing.T) {
 		{"1 queue_reserve without identity arguments", nil, openCodeInEnv, toolMeta("queue_reserve", map[string]any{"cwd": "/tmp", "memory": "64M", "ttl": "1h", "teardown_file": teardown}, sessionMeta(meta)), "", "reserve", identity("opencode", meta), nil, ""},
 		{"2 client of the OPENCODE_SESSION_ID adapter without a session", nil, openCodeInEnv, toolMeta("queue_submit", with(map[string]any{"client": "opencode"}), sessionMeta(meta)), "", "submit", identity("opencode", meta), nil, ""},
 		{"3 session without a client", nil, nil, toolMeta("queue_submit", with(map[string]any{"session_id": "S"}), sessionMeta(meta)), "", "submit", identity("opencode", "S"), nil, ""},
-		{"4 another adapter without a session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude"}), sessionMeta(meta)), noIdentity, "", nil, named("claude"), "no_notify"},
-		{"4 another adapter without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "claude", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil, named("claude"), "no_notify"},
-		{"4 another adapter codex without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "codex", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil, named("codex"), "no_notify"},
+		{"4 another adapter without a session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude"}), sessionMeta(meta)), noIdentity, "", nil, named("claude"), ""},
+		{"4 another adapter without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "claude", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil, named("claude"), ""},
+		{"4 another adapter codex without a session, no_notify", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "codex", "no_notify": true}), sessionMeta(meta)), noIdentity, "", nil, named("codex"), ""},
 		{"4 another adapter with an explicit session", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, toolMeta("queue_submit", with(map[string]any{"client": "claude", "session_id": "c"}), sessionMeta(meta)), "", "submit", identity("claude", "c"), nil, ""},
 		{"4 another adapter with an explicit Codex sub-agent session", nil, map[string]string{"CODEX_HOME": home}, toolMeta("queue_submit", with(map[string]any{"client": "codex", "session_id": "sub"}), sessionMeta(meta)), "", "submit", identity("codex", "root"), nil, ""},
+		{"4 another adapter with an explicit session that a Codex rollout names as a sub-agent thread", nil, map[string]string{"CODEX_HOME": home}, toolMeta("queue_submit", with(map[string]any{"client": "claude", "session_id": "sub"}), sessionMeta(meta)), "", "submit", identity("claude", "sub"), nil, ""},
+		{"4 an explicit Codex sub-agent session, no _meta", nil, map[string]string{"CODEX_HOME": home}, tool("queue_submit", with(map[string]any{"client": "codex", "session_id": "sub"})), "", "submit", identity("codex", "root"), nil, ""},
+		{"4 an explicit session that a Codex rollout names as a sub-agent thread, no _meta", nil, map[string]string{"CODEX_HOME": home}, tool("queue_submit", with(map[string]any{"client": "claude", "session_id": "sub"})), "", "submit", identity("claude", "sub"), nil, ""},
 		{"4 a client no adapter has", nil, nil, toolMeta("queue_submit", with(map[string]any{"client": "kimi", "session_id": "k"}), sessionMeta(meta)), "unknown client", "", nil, nil, ""},
 		{"5 another adapter without a session, no _meta", nil, map[string]string{"CLAUDE_CODE_SESSION_ID": "outer"}, tool("queue_submit", with(map[string]any{"client": "claude"})), "", "submit", identity("claude", "outer"), nil, ""},
 		{"6 queue_list mine", nil, nil, toolMeta("queue_list", map[string]any{"mine": true}, sessionMeta(meta)), "", "list", map[string]any{"session_id": meta}, nil, ""},

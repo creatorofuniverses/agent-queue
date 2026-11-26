@@ -189,9 +189,9 @@ const logsMaxBytes = 256 << 10
 const identityUnknown = "session identity unknown: pass client and session_id (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID / OPENCODE_SESSION_ID of your session), or no_notify=true"
 
 // anotherAdapterNeedsSession refuses another adapter named without a session_id under a
-// usable _meta. Unlike identityUnknown it offers no no_notify: such a call may already carry
-// it, and it cannot help here.
-const anotherAdapterNeedsSession = "session identity unknown: client %q was named without a session_id (a call from OpenCode cannot take that adapter's session from the environment); pass session_id, or client \"cli\" for no session"
+// usable _meta. No session takes both settings, so the advice names them together:
+// client "cli" alone still meets the gate, which only no_notify skips.
+const anotherAdapterNeedsSession = "session identity unknown: client %q was named without a session_id (a call from OpenCode cannot take that adapter's session from the environment); pass session_id, or client \"cli\" with no_notify true for no session"
 
 const opencodeIdentityEnv = "OPENCODE_SESSION_ID"
 
@@ -261,8 +261,9 @@ func toolIdentity(parent client.Parent, agents []config.AgentConfig, env func(st
 			if flagSession == "" {
 				return client.Identity{}, fmt.Errorf(anotherAdapterNeedsSession, flagClient) // before the gate, which no_notify skips
 			}
-			// As aq recorded that id: a Codex sub-agent's thread is filed under its root.
-			return client.Identity{ClientType: a.Name, SessionID: client.ListSession(agents, env, flagSession)}, nil
+			// Resolved as the same call without _meta: only a Codex adapter's own session is
+			// filed under its root thread, not any session while a Codex adapter is configured.
+			return client.DetectIdentity(parent, agents, env, flagClient, flagSession)
 		}
 	}
 	return client.Identity{}, &client.UsageError{Message: fmt.Sprintf("unknown client %s", flagClient)}
