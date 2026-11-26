@@ -202,6 +202,40 @@ run >"$T/out"
 grep -q "does not list openclaude" "$T/out"
 grep -q "does not list opencode" "$T/out"
 grep -q "$adapter_hint" "$T/out"
+# The hints come from the config as aq reads it, not from its text. agents = []
+# keeps the default adapters, OpenCode's among them.
+printf 'agents = []\n[stats]\nagent_processes = ["claude", "openclaude", "codex", "opencode"]\n' > "$T/conf/config.toml"
+run >"$T/out"
+absent "does not list" "$T/out"
+absent "$adapter_hint" "$T/out"
+# A header with a quoted key is a list of its own: without the OpenCode adapter
+# the hint is due.
+printf '[["agents"]]\nname = "claude"\nidentity_env = "CLAUDE_CODE_SESSION_ID"\n[stats]\nagent_processes = ["claude", "openclaude", "codex", "opencode"]\n' > "$T/conf/config.toml"
+run >"$T/out"
+grep -q "$adapter_hint" "$T/out"
+absent "does not list" "$T/out"
+# A command that merely contains the assignment is no adapter.
+printf "[[agents]]\nname = \"codex\"\nidentity_env = \"CODEX_THREAD_ID\"\ndelivery = \"push\"\ncommand = [\"codex\", \"identity_env = 'OPENCODE_SESSION_ID'\", \"{session}\", \"{text}\"]\n\n[[agents]]\nname = \"claude\"\nidentity_env = \"CLAUDE_CODE_SESSION_ID\"\n[stats]\nagent_processes = [\"claude\", \"openclaude\", \"codex\", \"opencode\"]\n" > "$T/conf/config.toml"
+run >"$T/out"
+grep -q "$adapter_hint" "$T/out"
+# The key of the process list may be quoted.
+printf '[stats]\n"agent_processes" = ["claude", "openclaude", "codex"]\n' > "$T/conf/config.toml"
+run >"$T/out"
+absent "does not list openclaude" "$T/out"
+grep -q "does not list opencode" "$T/out"
+# Two adapters on the variable of OpenCode leave its calls no session.
+printf '[[agents]]\nname = "opencode"\nidentity_env = "OPENCODE_SESSION_ID"\ndelivery = "client-wait"\n\n[[agents]]\nname = "opencode2"\nidentity_env = "OPENCODE_SESSION_ID"\ndelivery = "client-wait"\n' > "$T/conf/config.toml"
+run >"$T/out"
+grep -q 'has 2 adapters with identity_env = "OPENCODE_SESSION_ID"' "$T/out"
+absent "has no adapter for OpenCode" "$T/out"
+# A config aq cannot read is said on stderr, and the install goes on: the daemon
+# refuses such a config, not the installer.
+printf '[stats]\nagent_process = ["claude"]\n' > "$T/conf/config.toml"
+run >"$T/out" 2>"$T/err"
+grep -q "warning: config .*config.toml: unknown keys: stats.agent_process" "$T/err"
+grep -q "the daemon will not start with this config" "$T/err"
+absent "does not list" "$T/out"
+absent "$adapter_hint" "$T/out"
 recipe=uninstall
 run
 test ! -e "$T/s1/aq"

@@ -72,31 +72,11 @@ install: build (check-idle "restarting")
         chmod 0644 "{{ unitdir }}/aq.service"
     fi
     test -e "{{ confdir }}/config.toml" || install -m 0600 deploy/config.example.toml "{{ confdir }}/config.toml"
-    # An existing config keeps its own list of agent processes. A hint, not a TOML
-    # parser: comments are cut first, the key may be written stats.agent_processes,
-    # and a name counts only as a whole string, as aq matches process names.
-    agents=$(awk '/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)*agent_processes[[:space:]]*=/{f=1} f{sub(/#.*/, ""); printf "%s ", $0} f && index($0, "]"){exit}' "{{ confdir }}/config.toml" 2>/dev/null || true)
-    for missing in openclaude opencode; do
-        if [ -n "$agents" ] && ! grep -q -e "\"$missing\"" -e "'$missing'" <<< "$agents"; then
-            echo "hint: agent_processes in {{ confdir }}/config.toml does not list $missing."
-            case "$missing" in
-            openclaude) echo "      add it, or OpenClaude's sessions are not counted and its commands belong to cli or to the session of an agent it was started from." ;;
-            opencode) echo "      add it, or OpenCode's processes are not counted and its commands are identified by the environment alone: an inherited variable of another agent can file them under that agent's session." ;;
-            esac
-        fi
-    done
-    # A config that names its own adapters needs the OpenCode one too. A hint again,
-    # not a TOML parser: comments are cut first, so a commented-out adapter line
-    # counts as absent. The adapter counts only as an assignment of the variable in quotes:
-    # aq looks for OPENCODE_SESSION_ID itself, and a longer name such as
-    # OPENCODE_SESSION_ID_OLD leaves OpenCode without an adapter. The installer never edits
-    # the config.
-    effective=$(sed 's/#.*//' "{{ confdir }}/config.toml" 2>/dev/null || true)
-    re="identity_env[[:space:]]*=[[:space:]]*[\"']OPENCODE_SESSION_ID[\"']"
-    if grep -qE '^[[:space:]]*(\[\[[[:space:]]*agents[[:space:]]*\]\]|agents[[:space:]]*=)' <<< "$effective" && ! grep -qE "$re" <<< "$effective"; then
-        echo "hint: [[agents]] in {{ confdir }}/config.toml has no adapter for OpenCode."
-        echo "      add one with identity_env = \"OPENCODE_SESSION_ID\" and delivery = \"client-wait\", or OpenCode's commands belong to cli and its MCP submissions are rejected with \"session identity unknown\"."
-    fi
+    # What an existing config lacks for OpenClaude and OpenCode is said by the
+    # binary just built, which reads the config as the daemon will: an existing
+    # config keeps its own list of agent processes, and a non-empty list of
+    # adapters replaces the defaults. The installer never edits the config.
+    bin/aq install-hints --config "{{ confdir }}/config.toml"
     # A symlink whose target is gone is still an entry: -e alone says it is not.
     present() { test -e "$1" || test -L "$1"; }
     for target in "claude:{{ claude_skills }}" "codex:{{ codex_skills }}" "claude:{{ openclaude_skills }}" "opencode:{{ opencode_skills }}"; do

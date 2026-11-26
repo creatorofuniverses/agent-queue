@@ -50,16 +50,18 @@ just install
   `opencode`, OpenCode's processes are not counted and its commands are
   identified by the environment alone, so an inherited variable of another
   agent can file them under that agent's session;
-- prints a hint when an existing config lists its own `[[agents]]` without an
-  adapter for OpenCode: until there is one (`identity_env =
+- prints a hint when the config has no adapter for OpenCode, as a list of its
+  own `[[agents]]` does without one: until there is one (`identity_env =
   "OPENCODE_SESSION_ID"`, `delivery = "client-wait"`), OpenCode's commands
   belong to `cli` (with the `opencode` name in the list; without it the
   environment decides, as above) and its MCP submissions are rejected with
-  `session identity unknown`;
-- both hints read the config as text (comments cut), not as TOML, so in unusual
-  forms they can be wrong: `agents = []` keeps the default adapters but gets
-  the hint, a quoted header like `[["agents"]]` is not noticed, and a string
-  that merely contains the assignment counts as the adapter.
+  `session identity unknown`. Two adapters on that variable leave an OpenCode
+  call no session either, and get a hint to keep one;
+- both hints come from the config as the freshly built `aq` reads it, so they
+  hold in any form of TOML: a commented-out entry counts as absent, `agents =
+  []` keeps the default adapters and gets no hint, and a string that merely
+  contains the assignment is not the adapter. A config `aq` cannot read gets a
+  warning in place of the hints: the daemon will not start with it.
 - runs `systemctl --user daemon-reload`, enables `aq.service` and
   (re)starts it, so running `just install` again updates the running daemon;
 - copies the `aq` skill separately for each agent: `deploy/skills/claude/aq` to

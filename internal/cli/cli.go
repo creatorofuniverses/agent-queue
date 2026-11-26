@@ -74,6 +74,8 @@ func init() {
 		"doctor":    cmdDoctor,
 		"version":   cmdVersion,
 		"help":      cmdHelpCommand,
+		// install-hints is for `just install` and is not in the help.
+		"install-hints": cmdInstallHints,
 	}
 }
 
